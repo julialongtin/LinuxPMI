@@ -1,0 +1,577 @@
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:50.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:53.000000000 +0100
+@@ -45,7 +45,7 @@
+  * Description:
+  * format the type of a packet in a human readable
+  * format
+- * @buffer the buffer to write to (need at least 44 chars)
++ * @buffer the buffer to write to (need at least 50 chars)
+  **/
+ 
+ void om_format_type(int type, char* buffer)
+@@ -57,7 +57,8 @@
+ 			     , "nack"
+ 			     };
+     char *mig_mask_names[] = {
+-			       "ping     "
++			       "uninited!"
++			     , "ping     "
+ 			     , "init     "
+ 			     , "mm       "
+ 			     , "vma      "
+@@ -71,7 +72,8 @@
+ 			     , "syscall  "
+ 			     };
+     char *sys_mask_names[] = {
+-			       "copy_from_user   "
++			       " <not a syscall> "
++			     , "copy_from_user   "
+ 			     , "copy_to_user     "
+ 			     , "strncpy_from_user"
+ 			     , "strnlen_user     "
+@@ -84,8 +86,10 @@
+     char *dep_flg[] = { "dep", "DEP" };
+     char *mig_flg[] = { "mig", "MIG" };
+     char *rem_flg[] = { "rem", "REM" };
++    char *rly_flg[] = { "rly", "RLY" };
+ 
+-    sprintf(buffer, "%s%s%s %s %s %s"
++    sprintf(buffer, "%s.%s.%s.%s %s %s %s"
++	   , rly_flg[ (type & REPLY)   >> 15 ]
+ 	   , rem_flg[ (type & REM_FLG) >> 14 ]
+ 	   , mig_flg[ (type & MIG_FLG) >> 13 ]
+ 	   , dep_flg[ (type & DEP_FLG) >> 12 ]
+@@ -172,10 +176,10 @@
+ 
+     om_format_type(pkt->type, buffer);
+ 
++    printk(KERN_DEBUG"[OM] pktdump type=0x%x: %s\n", (unsigned) pkt->type, buffer);
+     printk(KERN_DEBUG"[OM] pktdump hpid: %5d rpid: %5d len: %d\n"
+ 	  , pkt->hpid, pkt->rpid, pkt->len);
+ 
+-    printk(KERN_DEBUG"[OM] pktdump %s\n", buffer);
+     printk(KERN_DEBUG"[OM] pktdump addr: 0x%p msgid: %d\n"
+ 	  , (void *) pkt->addr, pkt->msgid);
+ 
+@@ -228,6 +232,49 @@
+ 
+ 
+ #endif
++
++
++/**
++ * kcom_add_packet
++ *
++ * Description
++ * Adds the packet to the list of packets to send ...
++ * @param tsk : the task sending the packet
++ * @param pkt : the packet to add
++ **/
++
++int kcom_add_packet(struct kcom_task *tsk, struct kcom_pkt *pkt)
++{
++    if (!tsk) {
++	OMBUG("Can't add packet to a NULL task\n");
++	return -ENODEV;
++    }
++
++    if (!pkt) {
++	OMBUG("Can't add a NULL packet\n");
++	return -ENODEV;
++    }
++
++
++    OMDEBUG_PROTOCOL(2, "Adding packet to tsk pid=%d hpid=%d type=0x%x len=%d\n"
++		     , tsk->hpid, tsk->rpid
++		     , (unsigned) pkt->type, pkt->len);
++    OMDEBUG_PROTOCOL_DO(3, om_dump_packet(pkt));
++
++    write_lock(&tsk->out_packs_lock);
++    list_add_tail(&pkt->list, &tsk->out_packs);
++    write_unlock(&tsk->out_packs_lock);
++
++    if (kcomd_task) {
++	    send_sig(SIGHUP, kcomd_task, 0);
++    } else {
++	    OMBUG("Unable to signal kcomd\n");
++	    return -ENOMEM;
++    }
++
++    return 0;
++}
++
+ /**
+  * pkt_data_read
+  *
+@@ -433,7 +480,8 @@
+ {
+ 	struct kcom_pkt *pkt;
+ 
+-	OMDEBUG_PROTOCOL(3, "KCOMD: creating packet (len %d type %d ack %d)... \n", len, type, ack);
++	OMDEBUG_PROTOCOL(3, "KCOMD: creating packet (len %d type 0x%x ack %d)... \n"
++			, len, (unsigned)type, ack);
+ 	pkt=kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
+ 	if (pkt) {
+ 		pkt->len = len;
+@@ -536,14 +584,6 @@
+ 	node->sock=sock;
+ 	node->fd = 0; // kcomd will see this and assign a fd properly.
+ 
+-	/*
+-	if (!sock->ops || !sock->ops->getname)
+-		goto err;
+-
+-	ret = sock->ops->getname
+-	check if it's already in node list.
+-	*/
+-
+ 	write_lock(&kcom_nodes_lock);
+ 	list_add_tail(&node->list, &kcom_nodes);
+ 	write_unlock(&kcom_nodes_lock);
+@@ -796,7 +836,11 @@
+ 
+ 	// Can't delete task until all pkts are sent.
+ 	tsk=kcom_task_find(pid);
+-	// FIXME:  SMP safety
++	if (!tsk) {
++	    OMBUG("NULL task ! for pid %d\n", pid);
++	    return -ENODEV;
++	}
++
+ 	while (!list_empty(&tsk->out_packs))
+ 			schedule_timeout(HZ/1000);
+ 
+@@ -974,17 +1018,20 @@
+ int kcom_task_send(struct kcom_task *tsk, int type, int datasize, char *data, char *resp, unsigned long addr)
+ {
+ 	struct kcom_pkt *pkt;
++	int ret;
+ 
+ 	if (!tsk)
+ 		return -ENODEV;
+ 
+-	OMDEBUG_PROTOCOL(2, "sending task packet (type=%d, datasize=%d)"
+-			,type, datasize);
++	OMDEBUG_PROTOCOL(2, "sending task packet (type=0x%x, datasize=%d)"
++			,(unsigned)type, datasize);
+ 
+ 	/* put pkt in kcom_task */
+ 	pkt = kcom_pkt_create(datasize, type, PKT_NEW_MSG, data);
+-	if (!pkt)
+-		return -1;
++	if (!pkt) {
++		OMBUG("Can't create a packet!\n");
++		return -ENOMEM;
++	}
+ 
+ 	if (!resp)
+ 		pkt->resp=data;
+@@ -995,12 +1042,9 @@
+ 	pkt->rpid=tsk->rpid;
+ 	pkt->addr=addr; // used by vma_pages
+ 
+-	OMDEBUG_PROTOCOL(3, "Adding packet to out_packs\n");
+-	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(pkt));
+-
+-	write_lock(&tsk->out_packs_lock);
+-	list_add_tail(&pkt->list, &tsk->out_packs);
+-	write_unlock(&tsk->out_packs_lock);
++	if (0 != (ret=kcom_add_packet(tsk,pkt))) {
++	    return ret;
++	}
+ 
+ 	return pkt->msgid;
+ }
+@@ -1023,8 +1067,8 @@
+ 	task_t *p = current;
+ 	unsigned int msgid;
+ 
+-	OMDEBUG_PROTOCOL(1, "protocol: send packet (type=%d datasize=%d)\n"
+-			,type, datasize);
++	OMDEBUG_PROTOCOL(1, "protocol: send packet (type=0x%x datasize=%d)\n"
++			,(unsigned)type, datasize);
+ 
+ 	node=kcom_node_find((struct sockaddr *)saddr);
+ 	if (node==NULL) {
+@@ -1044,9 +1088,6 @@
+ 
+ 	msgid=kcom_task_send(tsk, type, datasize, data, NULL, addr);
+ 
+-	if (kcomd_task != NULL)
+-		send_sig(SIGHUP,kcomd_task,0);
+-
+ 	return 0;
+ }
+ /**
+@@ -1067,7 +1108,7 @@
+ 	OMDEBUG_PROTOCOL(1, "protocol: sending NACK packet\n");
+ 
+ 	if (!p) {
+-	    OMBUG("null task!");
++	    OMBUG("null task!\n");
+ 	    return -ENODEV;
+ 	}
+ 
+@@ -1099,19 +1140,7 @@
+ 	send_pkt->rpid=recv_pkt->rpid;
+ 	send_pkt->resp=recv_pkt->resp;
+ 
+-	OMDEBUG_PROTOCOL(3, "Adding packet to out_packs\n");
+-	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(send_pkt));
+-
+-	write_lock(&send_tsk->out_packs_lock);
+-	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+-	write_unlock(&send_tsk->out_packs_lock);
+-
+-	if (kcomd_task)
+-		send_sig(SIGHUP,kcomd_task,0);
+-	else {
+-		OMBUG("Unable to signal kcomd\n");
+-		return -1;
+-	}
++	return kcom_add_packet(send_tsk, send_pkt);
+ 
+ 	return 0;
+ 
+@@ -1137,7 +1166,7 @@
+ 	OMDEBUG_PROTOCOL(1, "protocol: sending ACK packet\n");
+ 
+ 	if (!p) {
+-	    OMBUG("null task!");
++	    OMBUG("null task!\n");
+ 	    return -ENODEV;
+ 	}
+ 
+@@ -1166,21 +1195,9 @@
+ 	send_pkt->rpid=recv_pkt->rpid;
+ 	send_pkt->resp=recv_pkt->resp;
+ 
+-	OMDEBUG_PROTOCOL(3, "Adding packet to out_packs\n");
+-	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(send_pkt));
+ 
+-	write_lock(&send_tsk->out_packs_lock);
+-	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+-	write_unlock(&send_tsk->out_packs_lock);
++ 	return kcom_add_packet(send_tsk, send_pkt);
+ 
+-	if (kcomd_task)
+-		send_sig(SIGHUP,kcomd_task,0);
+-	else {
+-		OMBUG("Unable to signal kcomd\n");
+-		return -1;
+-	}
+-
+-	return 0;
+ }
+ EXPORT_SYMBOL(kcom_send_ack);
+ 
+@@ -1235,20 +1252,7 @@
+ 	send_pkt->rpid=send_tsk->rpid;
+ 	send_pkt->resp=recv_pkt->resp;
+ 
+-	OMDEBUG_PROTOCOL(3, "Adding packet to out_packs\n");
+-	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(send_pkt));
+-
+-	write_lock(&send_tsk->out_packs_lock);
+-	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+-	write_unlock(&send_tsk->out_packs_lock);
+-
+-	if (kcomd_task) {
+-		send_sig(SIGHUP, kcomd_task, 0);
+-	} else {
+-		OMBUG("Unable to signal kcomd\n");
+-		return -1;
+-	}
+-	return 0;
++	return kcom_add_packet(send_tsk, send_pkt);
+ 
+ }
+ EXPORT_SYMBOL(kcom_send_resp);
+@@ -1360,8 +1364,8 @@
+ 	unsigned int msgid;
+ 	int ack;
+ 
+-	OMDEBUG_PROTOCOL(2, "sending packet with ack (type=%d, datasize=%d)\n"
+-			,type, datasize);
++	OMDEBUG_PROTOCOL(2, "sending packet with ack (type=0x%x, datasize=%d)\n"
++			,(unsigned)type, datasize);
+ 
+ 	node=kcom_node_find((struct sockaddr *)saddr);
+ 
+@@ -1426,8 +1430,8 @@
+ 	unsigned int msgid;
+ 	int i=-1;
+ 
+-	OMDEBUG_PROTOCOL(1, "Sending packet with response (type=%d, datasize=%d)"
+-			,type, datasize);
++	OMDEBUG_PROTOCOL(1, "Sending packet with response (type=0x%x, datasize=%d)"
++			,(unsigned)type, datasize);
+ 
+ 	node=kcom_node_find((struct sockaddr *)saddr);
+ 	if (node==NULL) {
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-13 16:01:48.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-13 16:01:53.000000000 +0100
+@@ -86,6 +86,7 @@
+ 	struct kcom_task *recv_tsk;
+ 	struct kcom_pkt *send_pkt;
+ 	task_t *sltsk;
++	int ret;
+ 
+ 
+ 	OMDEBUG_MIG(2, "receiving program home (home sweat home) ^^\n");
+@@ -104,14 +105,13 @@
+ 		send_pkt->hpid=recv_kcom_pkt->hpid;
+ 		send_pkt->rpid=recv_kcom_pkt->rpid;;
+ 		send_pkt->resp=recv_kcom_pkt->resp;
+-		/* spin_lock(&recv_tsk->spinlock);*/
+-		list_add_tail(&send_pkt->list, &recv_tsk->out_packs);
+-		/* spin_unlock(&recv_tsk->spinlock);*/
++
++		if (0 != (ret =kcom_add_packet(recv_tsk,send_pkt))) {
++		    return ret;
++		}
+ 
+ 		/* Ok, tell task migration is coming*/
+-		/* read_lock(&tasklist_lock);*/
+ 		sltsk=find_task_by_pid(recv_kcom_pkt->hpid); /* only home node will receive MIG_GO_HOME NEW_MSG*/
+-		/* read_unlock(&tasklist_lock);*/
+ 		if (sltsk) {
+ 			task_register_migration(sltsk);
+ 		} else {
+@@ -172,12 +172,17 @@
+ 			send_tsk->hpid=recv_kcom_pkt->hpid;
+ 		}
+ 		/* Delete init packet before starting new process.*/
+-		/* spin_lock(&send_tsk->spinlock);*/
++		/*
++		 * fdy: FIXME since pkt_read does not add INIT packets, is this really usefull
++		 */
++
++		write_lock(&send_tsk->in_packs_lock);
+ 		list_del(&recv_kcom_pkt->list);
+-		/* spin_unlock(&send_tsk->spinlock);*/
++		write_unlock(&send_tsk->in_packs_lock);
+ 
+ 		/* send_pkt->rpid=0; // set this to 0 or if same process migrates second time here, it'll keep old rpid*/
+ 		user_thread(mig_handle_migration, &rpid, 0);
++
+ 		while (rpid==0) {
+ 			schedule_timeout_interruptible(HZ/1000);
+ 		}
+@@ -186,19 +191,14 @@
+ 			printk(KERN_ERR "Error creating new process.\n");
+ 			send_pkt->type=MIG_INIT | PKT_NACK | REM_FLG;
+ 
+-			/* spin_lock(&send_tsk->spinlock);*/
+-			list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+-			/* spin_unlock(&send_tsk->spinlock);*/
+-			return -1;
++			kcom_add_packet(send_tsk, send_pkt);
++			return -ENOMEM;
++
+ 		}
+ 
+ 		send_pkt->rpid=rpid;
+ 
+-		/* spin_lock(&send_tsk->spinlock);*/
+-		list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+-		/* spin_unlock(&send_tsk->spinlock);*/
+-
+-		send_tsk->rpid=rpid;
++		kcom_add_packet(send_tsk, send_pkt);
+ 
+ 	}
+ 	return 0;
+@@ -486,6 +486,10 @@
+ 	int ret = 0;
+ 	int waiting_time = 0;
+ 
++	if (!p) {
++	    OMBUG("Null task !\n");
++	    return -ENODEV;
++	}
+ 
+ 	OMDEBUG_MIG(2, "pid %d receiving process ??\n", p->pid);
+ 
+@@ -497,7 +501,11 @@
+ 		waiting_time++;
+ 		schedule_timeout_interruptible(HZ/1000);
+ 		mytsk=kcom_task_find(p->pid);
+- 		OMDEBUG_MIG(3, "pid %d waiting kcomd to do his work ! %d HZ\n", p->pid, waiting_time);
++		#ifdef OPENMOSIX_DEBUG
++		if (0 == (waiting_time%1000)) {
++		    OMDEBUG_MIG(3, "pid %d waiting kcomd to do his work ! %d HZ\n", p->pid, waiting_time);
++		}
++		#endif
+ 		/* Preventing infinite loops */
+ 		if (60000 < waiting_time) {
+  			OMBUG("kcomd task creation timeout exceeded, dying ... \n");
+@@ -523,7 +531,7 @@
+ 		list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+ 
+ 			ret = 0;
+-
++			OMDEBUG_PROTOCOL(2, "receving packet type=0x%d\n", pkt->type);
+ 			switch (pkt->type & MIG_MASK) {
+ 
+ 				case MIG_MM:
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-11-13 16:00:19.000000000 +0100
++++ linux/hpc/copyuser.c	2006-11-13 16:01:53.000000000 +0100
+@@ -390,12 +390,7 @@
+ 					send_pkt->rpid=task->rpid;
+ 					send_pkt->resp=pkt->resp;
+ 
+-					list_add_tail(&send_pkt->list, &task->out_packs);
+-
+-					if (kcomd_task) {
+-						send_sig(SIGHUP, kcomd_task, 0);
+-					} else
+-						printk(KERN_WARNING "Unable to signal kcomd\n");
++					kcom_add_packet(task, send_pkt);
+ 
+ 					ret=pkt->addr;  /* the return value is stored in the addr field */
+ 					list_del(&pkt->list);
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-13 16:00:19.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-13 16:01:53.000000000 +0100
+@@ -49,7 +49,6 @@
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+ 	struct kcom_task *send_tsk;
+ 	struct kcom_pkt *send_pkt;
+-	// task_t *kcomd_task;
+ 
+ 	// Send MIG_SYSCALL ack
+ 	send_tsk=kcom_task_find(p->pid);
+@@ -61,15 +60,13 @@
+ 	send_pkt->rpid=pkt->rpid;
+ 	send_pkt->resp=pkt->resp;
+ 
+-	// spin_lock(&send_tsk->spinlock);
+-	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+-	// spin_unlock(&send_tsk->spinlock);
++	kcom_add_packet(send_tsk, send_pkt);
+ 
+ 	if (kcomd_task != NULL)
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 
+ 	if (sizeof(struct omp_syscall_req) != pkt->len)
+-		printk(KERN_ERR "ERROR in deputy_do_syscall.  data size of %d does not match expected %lu\n", pkt->len, sizeof(struct omp_syscall_req));
++		OMBUG("data size of %d does not match expected %lu\n", pkt->len, sizeof(struct omp_syscall_req));
+ 	memcpy(&s, pkt->data, pkt->len);
+ 	
+ 	OMDEBUG_SYS(1, "[deputy] receive syscall %d\n", s.n);
+Index: linux/hpc/remote.c
+===================================================================
+--- linux.orig/hpc/remote.c	2006-11-13 16:00:19.000000000 +0100
++++ linux/hpc/remote.c	2006-11-13 16:01:53.000000000 +0100
+@@ -176,19 +176,7 @@
+ 	send_pkt->rpid=send_tsk->rpid;
+ 	send_pkt->resp=pkt->resp;
+ 
+-	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+-
+-	#if 0
+-	read_lock(&tasklist_lock);
+-	kcomd_task=find_task_by_pid(kcom_pid);
+-	read_unlock(&tasklist_lock);
+-	#endif
+-
+-	if (kcomd_task) {
+-		send_sig(SIGHUP, kcomd_task, 0);
+-	} else
+-		printk(KERN_ERR "Unable to signal kcomd\n");
+-	return 0;
++	return kcom_add_packet(send_tsk, send_pkt);
+ }
+ 
+ /**
+Index: linux/include/hpc/debug.h
+===================================================================
+--- linux.orig/include/hpc/debug.h	2006-11-13 16:01:50.000000000 +0100
++++ linux/include/hpc/debug.h	2006-11-13 16:01:53.000000000 +0100
+@@ -36,11 +36,12 @@
+ 
+ 
+ /* for packets */
+-void om_dump_packet(struct kcom_pkt* pkt);
+-void om_dump_packet_hdr(struct kcom_pkt* pkt);
+-void om_dump_packet_data(struct kcom_pkt* pkt);
+-extern int om_debug_do_switch;
++extern void om_format_type(int type, char* buffer);
++extern void om_dump_packet(struct kcom_pkt* pkt);
++extern void om_dump_packet_hdr(struct kcom_pkt* pkt);
++extern void om_dump_packet_data(struct kcom_pkt* pkt);
+ 
++extern int om_debug_do_switch;
+ 
+ void om_debug_regs(struct pt_regs *);
+ void debug_mlink(struct socket *);
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:52.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:53.000000000 +0100
+@@ -355,6 +355,8 @@
+ 		}
+ 	}
+ 
++	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(recv_kcom_pkt));
++
+ 
+ 	if ((recv_kcom_pkt->type & MSG_MASK) == PKT_NEW_MSG) {
+ 		switch (recv_kcom_pkt->type & MIG_MASK) {
+@@ -382,14 +384,14 @@
+ 				append_in_packs(recv_kcom_pkt);
+ 				break;
+ 		}
+-	} else { // PKT_ACK and PKT_RESP go straight to in_packs
++	} else { /* PKT_ACK and PKT_RESP go straight to in_packs */
+ 		append_in_packs(recv_kcom_pkt);
+ 	}
+ 
+ 	return 0;
+ 
+ error_recv:
+-	sys_close(node->fd);
++	/*sys_close(node->fd); */
+ 	sock_release(node->sock);
+ 
+ 	write_lock(kcom_nodes_lock);
+@@ -423,8 +425,8 @@
+ 		write_lock(&task->out_packs_lock);
+ 		list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
+ 
+-			OMDEBUG_KCOMD(3, "KCOMD: send packet type=%d len=%d\n"
+-				     ,pkt->type, pkt->len);
++			OMDEBUG_KCOMD(3, "KCOMD: send packet type=0x%x len=%d\n"
++				     ,(unsigned)pkt->type, pkt->len);
+ 
+ 			OMDEBUG_KCOMD_DO(4, om_dump_packet(pkt));
+ 			data_send(node->sock, (void *)pkt, pkt->len);
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-11-13 16:01:38.000000000 +0100
++++ linux/hpc/task.c	2006-11-13 16:01:53.000000000 +0100
+@@ -162,7 +162,7 @@
+ 	p->om.whereto = kmalloc(sizeof(struct sockaddr), GFP_KERNEL);
+ 
+ 	if (!p->om.whereto) {
+-		printk(KERN_ERR "OM: Can't allocate the whereto sockaddr structure for pid %d\n", p->pid);
++		OMBUG(KERN_ERR "OM: Can't allocate the whereto sockaddr structure for pid %d\n", p->pid);
+ 		return -EFAULT;
+ 	}
+ 
+@@ -191,7 +191,6 @@
+ 	if (!task_test_dflags(p, DDEPUTY | DREMOTE))
+ 		return 0;
+ 
+-	dump_stack();
+ 	kcom_task_delete(p->pid);
+ 	task_heldfiles_clear(p);
+ 	kfree(p->om.whereto);

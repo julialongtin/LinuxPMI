@@ -1,0 +1,21 @@
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-02 22:51:58.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-02 22:52:08.000000000 +0100
+@@ -447,7 +447,6 @@
+ 	int n = -1;
+ 	siginfo_t info; /* matt*/
+ 	int sig;
+-	int outpkt_cnt, inpkt_cnt, tsk_cnt;
+ 	int err;
+ 	struct timeval start,stop;
+ 
+@@ -574,7 +573,7 @@
+ 
+ 		/* for each nodes { test bit, in, out and do stuff } */
+ 		/* spin_lock(&kcom_nodes_lock);*/
+-restart:
++/*restart:*/
+ 		list_for_each_entry_safe(node, node_next, &kcom_nodes, list) {
+ 			/*
+ 			if (test_bit(node->fd, sockets_fds.res_ex)) {

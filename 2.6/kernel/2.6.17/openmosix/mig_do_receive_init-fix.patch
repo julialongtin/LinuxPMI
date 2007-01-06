@@ -1,0 +1,168 @@
+Subject: [patch @num@/@total@] mig_do_receive fix, packet delete fix
+
+This patch fix the way packets are deleted, and fix mig_do_receive as well
+
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:53.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:55.000000000 +0100
+@@ -415,7 +415,7 @@
+ 
+ exit_error:
+ 
+- 	kmem_cache_free(kcom_pkt_cachep, recv_kcom_pkt);
++ 	kcom_pkt_delete(recv_kcom_pkt);
+  	set_fs(oldfs);
+  	return NULL;
+ }
+@@ -423,6 +423,31 @@
+ 
+ 
+ /**
++ * kcom_pkt_delete
++ *
++ * Description:
++ * destroy the packet and remove it from the list, this function does not
++ * lock any lock, so be sure to lock any needed lock before calling
++ *
++ * @pkt : the packet to delete
++ **/
++
++void kcom_pkt_delete(struct kcom_pkt *pkt)
++{
++    if (!pkt) {
++	OMBUG("Can not delete Null packet\n");
++	return;
++    }
++
++    if (!list_empty(&pkt->list)) {
++	list_del(&pkt->list);
++    }
++
++    kmem_cache_free(kcom_pkt_cachep, pkt);
++}
++EXPORT_SYMBOL_GPL(kcom_pkt_delete);
++
++/**
+  * alloc_fd_bitmap
+  *
+  * Description:
+@@ -1271,7 +1296,9 @@
+ 	int ret = -1;
+ 
+ 
+-	if (!task || list_empty(&task->in_packs)) goto not_found;
++	if (!task || list_empty(&task->in_packs))  {
++		return -1;
++	}
+ 
+  	write_lock(&task->in_packs_lock);
+ 
+@@ -1282,13 +1309,18 @@
+ 			int type = (pkt->type & MSG_MASK);
+ 
+ 
+-			// FIXME:  this doesn't belong here.
+-			// init packet has rpid
+-			if (MIG_INIT == type)
++			/*
++			 * TODO, this is not really clean, when a response
++			 * to the MIG_INIT is done, the rpid is set here ...
++			 * should be some place else -- Florian
++			 */
++			if (MIG_INIT == (pkt->type & MIG_MASK)) {
+ 				task->rpid = pkt->rpid;
++				OMDEBUG_PROTOCOL(2, "Setting rpid to %d for pid %d\n"
++					        , task->rpid, task->hpid);
++			}
+ 
+-			list_del(&pkt->list);
+-			kmem_cache_free(kcom_pkt_cachep, pkt);
++			kcom_pkt_delete(pkt);
+ 
+ 			if (PKT_ACK == type) {
+ 				ret = 0;
+@@ -1299,13 +1331,10 @@
+ 			} else continue;
+ 
+ 
+-		}  // FIXME:  what about nacks?
++		}
+ 
+ 	}
+ 
+-not_found:
+-	ret = -1;
+-
+ return_value_unlock:
+ 
+  	write_unlock(&task->in_packs_lock);
+@@ -1327,7 +1356,9 @@
+ 	int ret = -1;
+ 
+ 	/* Sanity check */
+-	if (!task || list_empty(&task->in_packs)) goto not_found;
++	if (!task || list_empty(&task->in_packs)) {
++	    return -1;
++	}
+ 
+ 
+  	write_lock(&task->in_packs_lock);
+@@ -1335,15 +1366,11 @@
+ 		/* FIXME:  check for resp or ack, too. */
+ 		if (msgid == pkt->msgid) {
+ 			ret = pkt->len;
+-			list_del(&pkt->list);
+-			kmem_cache_free(kcom_pkt_cachep, pkt);
++			kcom_pkt_delete(pkt);
+ 			goto return_value_unlock;
+ 		}
+ 	}
+ 
+-not_found:
+-	ret = -1;
+-
+ return_value_unlock:
+  	write_unlock(&task->in_packs_lock);
+ 	return ret;
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-13 16:01:53.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-13 16:01:55.000000000 +0100
+@@ -171,14 +171,8 @@
+ 			}
+ 			send_tsk->hpid=recv_kcom_pkt->hpid;
+ 		}
+-		/* Delete init packet before starting new process.*/
+-		/*
+-		 * fdy: FIXME since pkt_read does not add INIT packets, is this really usefull
+-		 */
+-
+-		write_lock(&send_tsk->in_packs_lock);
+-		list_del(&recv_kcom_pkt->list);
+-		write_unlock(&send_tsk->in_packs_lock);
++
++		kcom_pkt_delete(recv_kcom_pkt);
+ 
+ 		/* send_pkt->rpid=0; // set this to 0 or if same process migrates second time here, it'll keep old rpid*/
+ 		user_thread(mig_handle_migration, &rpid, 0);
+@@ -197,6 +191,7 @@
+ 		}
+ 
+ 		send_pkt->rpid=rpid;
++		send_tsk->rpid=rpid;
+ 
+ 		kcom_add_packet(send_tsk, send_pkt);
+ 
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- linux.orig/include/hpc/prototype.h	2006-11-13 16:01:48.000000000 +0100
++++ linux/include/hpc/prototype.h	2006-11-13 16:01:55.000000000 +0100
+@@ -95,6 +95,7 @@
+ int alloc_fd_bitmap(int);
+ 
+ struct kcom_pkt *kcom_pkt_create(int, int, int, char *);
++void kcom_pkt_delete(struct kcom_pkt *pkt);
+ 
+ int kcom_add_packet(struct kcom_task *tsk, struct kcom_pkt *pkt);
+ int kcom_send(int, int, char *, unsigned long, struct sockaddr_in *);

@@ -1,0 +1,44 @@
+Subject: [patch @num@/@total@] @name@
+
+As suggested by Carl Radford, signal_pending should be spin_locked.
+And so it is now ...
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-23 16:44:28.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-23 16:45:15.000000000 +0100
+@@ -898,14 +898,17 @@
+ 		timeout = -1;
+ 		OMDEBUG_KCOMD( 3, "KCOMD: Waiting for events ...\n");
+ 		ret = do_select(maxfds + 1, &sockets_fds, &timeout);
++		spin_lock(&current->sighand->siglock);
+ 		if (0 == ret && !signal_pending(current)) {
+ 		    OMBUG( "KCOMD: do_select returned 0 but no signal pending !\n" );
++		    spin_unlock(&current->sighand->siglock);
+ 		    continue;
+ 		} else {
+ 		    /* SIGHUP is sent by kcom_send to wake up kcomd so it can send the packet*/
+ 		    sig = dequeue_signal (current, &current->blocked, &info);
+ 		    OMDEBUG_KCOMD( 3, "KCOMD: got signal %d\n", sig);
+ 		}
++		spin_unlock(&current->sighand->siglock);
+ 
+ 		disallow_signal (SIGHUP);
+ 
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-23 16:45:41.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-23 16:46:46.000000000 +0100
+@@ -443,9 +443,11 @@
+ 	if (task_dreqs_pending(p))
+ 		task_do_request();
+ 
+-	if (test_tsk_thread_flag(p, TIF_SIGPENDING)) {
++	spin_lock(&p->sighand->siglock);
++	if (signal_pending(p)) {
+ 		deputy_do_sigpending(p);
+ 	}
++	spin_unlock(&p->sighand->siglock);
+ }
+ 
+ #if 0

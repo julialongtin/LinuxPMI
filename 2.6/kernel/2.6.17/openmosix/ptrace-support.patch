@@ -1,0 +1,300 @@
+Subject: [patch @num@/@total@] @name@ Add remote ptrace support
+
+This patch is intended to add the ability to trace a remote process
+from the deputy.
+
+Mostly adding L1 commands ... 
+---
+ hpc/kcomd.c            |   26 ++++++++++++++
+ hpc/migsend.c          |    3 +
+ hpc/ptrace.c           |   91 +++++++++++++++++++++++++++++++++++++++++++++++++
+ include/hpc/omtask.h   |    3 +
+ include/hpc/protocol.h |   22 +++++++++++
+ kernel/ptrace.c        |   26 ++++++++++++++
+ kernel/signal.c        |    5 ++
+ 7 files changed, 176 insertions(+)
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2007-01-05 14:54:00.000000000 +0100
++++ linux/hpc/kcomd.c	2007-01-05 23:36:41.000000000 +0100
+@@ -335,6 +335,25 @@
+                 .recv_size = sizeof(struct omp_signal),
+ 		.name = "Signal"},
+ 
++	/************************************/
++	/*         Ptrace commands          */
++	/************************************/
++
++        /* Attach a remote process */
++	[KCOM_L1_CMD_INDEX(KCOM_L1_PTRACE_ATTACH)] = {
++		.handle_pkt = remote_ptrace_attach,
++		.cmd_flags = KCOM_TSK_SYNC,
++                .recv_size = sizeof(int),
++		.name = "Deputy Ptrace Attach"},
++
++        /* Attach a remote process */
++	[KCOM_L1_CMD_INDEX(KCOM_L1_PTRACE_CALL)] = {
++		.handle_pkt = remote_ptrace_call,
++		.cmd_flags = KCOM_TSK_ANSWERED,
++                .recv_size = sizeof(omp_ptrace_call),
++                .answer_size = KCOM_NO_SIZE_CHECK,
++		.name = "Deputy Ptrace Call"},
++
+ };
+ EXPORT_SYMBOL_GPL(kcomd_l1_handlers);
+ 
+@@ -805,6 +824,13 @@
+                 .recv_size =sizeof(struct omp_usercopy_req),
+                 .answer_size = sizeof(long),
+ 		.name = "Remote strlen_user"},
++
++	/* ptrace things : */
++	[KCOM_L1_CMD_INDEX(KCOM_L2_PTRACE_STOP)] = {
++		.handle_pkt = deputy_ptrace_stop,
++		.cmd_flags = KCOM_ASYNC_SIMPLE,
++                .recv_size = sizeof(omp_ptrace_stop),
++		.name = "Remote Ptrace Stop"},
+ };
+ 
+ 
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2007-01-05 22:47:42.000000000 +0100
++++ linux/hpc/migsend.c	2007-01-05 22:48:18.000000000 +0100
+@@ -55,6 +55,9 @@
+ 
+ 	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 
++	/* save for may_attach usage */
++	current->om->old_dumpable = current->mm->dumpable;
++
+ 	return kcom_send_command(KCOM_L2_MIG_MM, sizeof(struct omp_mig_mm)
+ 				,(char *)&p->mm->start_code, 0, dest_ptr, NULL);
+ }
+Index: linux/hpc/ptrace.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/ptrace.c	2007-01-05 23:36:37.000000000 +0100
+@@ -0,0 +1,91 @@
++/*
++ *	Copyright (C) 2006-2007 Florian Delizy <fdy@e8dev.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++
++/**
++ * deputy_may_attach - check if the deputy can be attached (send a
++ * request to the remote to check some fields)
++ **/
++
++
++void deputy_ptrace_attach(struct task_struct *task)
++{
++	struct kcom_task *task = kcom_task_find( task->pid );
++	int capable = capable(CAP_SYS_PTRACE);
++
++	if (!task)
++		return;
++
++	__kcom_send_command(task, KCOM_L1_PTRACE_ATTACH, sizeof(int), &capable, NULL, NULL);
++}
++
++
++int remote_ptrace_attach(struct kcom_node *node, const struct kcom_pkt * const pkt)
++{
++	int *capable = (int *) pkt->data;
++	struct kcom_task *task;
++
++	task = __find_task_for_packet(node, task, NULL);
++
++	if (!task)
++		return -ESRCH;
++
++repeat:
++	/* (from kernel/ptrace.c) :
++	 * Nasty, nasty.
++	 *
++	 * We want to hold both the task-lock and the
++	 * tasklist_lock for writing at the same time.
++	 * But that's against the rules (tasklist_lock
++	 * is taken for reading by interrupts on other
++	 * cpu's that may have task_lock).
++	 */
++	task_lock(task);
++	local_irq_disable();
++	if (!write_trylock(&tasklist_lock)) {
++		local_irq_enable();
++		task_unlock(task);
++		do {
++			cpu_relax();
++		} while (!write_can_lock(&tasklist_lock));
++		goto repeat;
++	}
++
++	task->task->ptrace |= PT_PTRACED | PT_ATTACHED;
++	if (*capable)
++		task->task->ptrace |= PT_PTRACE_CAP;
++
++	force_sig_specific(SIGSTOP, task->task);
++
++	write_unlock_irq(&tasklist_lock);
++	task_unlock(task->task);
++}
++
++
++void remote_ptrace_stop(int exit_code, siginfo_t *siginfo)
++{
++	struct omp_ptrace_stop s;
++
++	s.exit_code = exit_code;
++	memcpy( &s.siginfo, siginfo, sizeof(siginfo_t));
++
++	kcom_send_command(KCOM_L2_PTRACE_STOP, sizeof(s), &s, 0, NULL);
++}
++
++int deputy_ptrace_stop(struct kcom_task* tsk, const struct kcom_pkt * const pkt)
++{
++	read_lock(&tasklist_lock);
++	do_notify_parent_cldstop(current, CLD_TRAPPED);
++	read_unlock(&tasklist_lock);
++}
+Index: linux/include/hpc/omtask.h
+===================================================================
+--- linux.orig/include/hpc/omtask.h	2007-01-05 22:43:35.000000000 +0100
++++ linux/include/hpc/omtask.h	2007-01-05 23:36:24.000000000 +0100
+@@ -34,6 +34,9 @@
+ 
+ 	wait_queue_head_t wait_dist;	/* misc. wait for process */
+ 
++
++	unsigned old_dumpable;		/* old mm->dumpable */
++
+ 	struct list_head rfiles;	/* deputy held files */
+ 
+ 	/* the following variables are only use on remote */
+Index: linux/include/hpc/protocol.h
+===================================================================
+--- linux.orig/include/hpc/protocol.h	2007-01-05 14:54:20.000000000 +0100
++++ linux/include/hpc/protocol.h	2007-01-05 23:23:29.000000000 +0100
+@@ -110,6 +110,12 @@
+ 	KCOM_L1_MIG_INIT,	       /* Send to initiate the migration */
+ 	KCOM_L1_MIG_COME_HOME,	       /* Ask the task to go home        */
+ 	KCOM_L1_DEP_SIGNAL,            /* Deputy send a signal to remote */
++
++	/* ptrace support                                                */
++
++	KCOM_L1_PTRACE_ATTACH,	       /* Notify the remote its attached */
++	KCOM_L1_PTRACE_CALL,	       /* execute ptrace on deputy       */
++
+ 	KCOM_L1_CMD_MAX,
+ 
+ 	/* Commands executed in the process context                      */
+@@ -144,6 +150,9 @@
+ 	KCOM_L2_REQ_MMAP,
+ 	KCOM_L2_REQ_DO_EXECVE,
+ 
++
++	KCOM_L2_PTRACE_STOP,	       /* Notify deputy of the break     */
++
+ 	KCOM_L2_CMD_MAX,
+ 
+         /* FIXME not handled yet : */
+@@ -299,4 +308,17 @@
+ 	siginfo_t siginfo;
+ };
+ 
++struct omp_ptrace_call
++{
++	unsigned long request;
++	void * addr;
++	void * data;
++};
++
++struct omp_ptrace_stop
++{
++	int exit_code;
++	siginfo_t siginfo;
++};
++
+ #endif /*  _HPC_PROTOCOL_H */
+Index: linux/kernel/ptrace.c
+===================================================================
+--- linux.orig/kernel/ptrace.c	2007-01-05 14:54:04.000000000 +0100
++++ linux/kernel/ptrace.c	2007-01-05 23:36:17.000000000 +0100
+@@ -120,8 +120,16 @@
+ 
+ static int may_attach(struct task_struct *task)
+ {
++#ifndef CONFIG_OPENMOSIX
+ 	if (!task->mm)
+ 		return -EPERM;
++#else
++	int isdeputy = task_test_dflags(task, DDEPUTY);
++
++	if (!task->mm && !isdeputy)
++		return -EPERM;
++#endif /* CONFIG_OPENMOSIX */
++
+ 	if (((current->uid != task->euid) ||
+ 	     (current->uid != task->suid) ||
+ 	     (current->uid != task->uid) ||
+@@ -130,8 +138,19 @@
+ 	     (current->gid != task->gid)) && !capable(CAP_SYS_PTRACE))
+ 		return -EPERM;
+ 	smp_rmb();
++
++#ifndef CONFIG_OPENMOSIX
+ 	if (!task->mm->dumpable && !capable(CAP_SYS_PTRACE))
+ 		return -EPERM;
++#else
++
++	if (!isdeputy && !task->mm->dumpable && !capable(CAP_SYS_PTRACE))
++		return -EPERM;
++
++	if (isdeputy && !task->om->old_dumpable && !capable(CAP_SYS_PTRACE))
++		return -EPERM;
++
++#endif
+ 
+ 	return security_ptrace(current, task);
+ }
+@@ -184,6 +203,13 @@
+ 		goto bad;
+ 
+ 	/* Go */
++#ifdef CONFIG_OPENMOSIX
++	if (task_test_dflags(task, DDEPUTY)) {
++		deputy_ptrace_attach(task);
++		__ptrace_link(task, current);
++		goto bad;
++	}
++#endif
+ 	task->ptrace |= PT_PTRACED | ((task->real_parent != current)
+ 				      ? PT_ATTACHED : 0);
+ 	if (capable(CAP_SYS_PTRACE))
+Index: linux/kernel/signal.c
+===================================================================
+--- linux.orig/kernel/signal.c	2007-01-05 23:19:58.000000000 +0100
++++ linux/kernel/signal.c	2007-01-05 23:21:48.000000000 +0100
+@@ -1548,6 +1548,11 @@
+ 	 * If there is a group stop in progress,
+ 	 * we must participate in the bookkeeping.
+ 	 */
++
++#ifdef CONFIG_OPENMOSIX
++	remote_ptrace_stop(exit_code, info);
++#endif /*CONFIG_OPENMOSIX*/
++
+ 	if (current->signal->group_stop_count > 0)
+ 		--current->signal->group_stop_count;
+ 

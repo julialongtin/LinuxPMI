@@ -1,0 +1,96 @@
+Signed off by: Milind Dumbare <milind@linsyssoft.com>
+
+ include/linux/kgdb.h |    1 +
+ kernel/kgdb.c        |    5 +++++
+ kernel/softlockup.c  |    4 ++++
+ kernel/timer.c       |    5 +++++
+ 4 files changed, 15 insertions(+)
+
+Index: linux/kernel/kgdb.c
+===================================================================
+--- linux.orig/kernel/kgdb.c	2006-11-13 16:02:36.000000000 +0100
++++ linux/kernel/kgdb.c	2006-11-13 16:02:41.000000000 +0100
+@@ -122,6 +122,8 @@
+ /* to keep track of the CPU which is doing the single stepping*/
+ atomic_t cpu_doing_single_step = ATOMIC_INIT(-1);
+ 
++atomic_t  kgdb_sync_softlockup[NR_CPUS] = {ATOMIC_INIT(0)};
++
+ /* reboot notifier block */
+ static struct notifier_block kgdb_reboot_notifier = {
+ 	.notifier_call  = kgdb_notify_reboot,
+@@ -742,6 +744,7 @@
+ 	kgdb_info[processor].debuggerinfo = regs;
+ 	kgdb_info[processor].task = current;
+ 	atomic_set(&procindebug[processor], 1);
++	atomic_set(&kgdb_sync_softlockup[smp_processor_id()], 1);
+ 
+ 	/* Wait till master processor goes completely into the debugger.
+ 	 * FIXME: this looks racy */
+@@ -1045,6 +1048,8 @@
+ 			udelay(1);
+ 	}
+ 
++	atomic_set(&kgdb_sync_softlockup[smp_processor_id()], 1);
++
+ 	/*
+ 	 * Don't enter if the last instance of the exception handler wanted to
+ 	 * come into the debugger again.
+Index: linux/kernel/softlockup.c
+===================================================================
+--- linux.orig/kernel/softlockup.c	2006-11-13 15:59:57.000000000 +0100
++++ linux/kernel/softlockup.c	2006-11-13 16:02:42.000000000 +0100
+@@ -13,6 +13,7 @@
+ #include <linux/kthread.h>
+ #include <linux/notifier.h>
+ #include <linux/module.h>
++#include <linux/kgdb.h>
+ 
+ static DEFINE_SPINLOCK(print_lock);
+ 
+@@ -37,6 +38,9 @@
+ void touch_softlockup_watchdog(void)
+ {
+ 	per_cpu(touch_timestamp, raw_smp_processor_id()) = jiffies;
++#ifdef CONFIG_KGDB
++	atomic_set(&kgdb_sync_softlockup[raw_smp_processor_id()], 0);
++#endif
+ }
+ EXPORT_SYMBOL(touch_softlockup_watchdog);
+ 
+Index: linux/kernel/timer.c
+===================================================================
+--- linux.orig/kernel/timer.c	2006-11-13 15:59:57.000000000 +0100
++++ linux/kernel/timer.c	2006-11-13 16:02:42.000000000 +0100
+@@ -34,6 +34,7 @@
+ #include <linux/cpu.h>
+ #include <linux/syscalls.h>
+ #include <linux/delay.h>
++#include <linux/kgdb.h>
+ 
+ #include <asm/uaccess.h>
+ #include <asm/unistd.h>
+@@ -906,7 +907,11 @@
+  */
+ void run_local_timers(void)
+ {
++	int this_cpu = smp_processor_id();
+ 	raise_softirq(TIMER_SOFTIRQ);
++#ifdef CONFIG_KGDB
++	if(!atomic_read(&kgdb_sync_softlockup[this_cpu]))
++#endif
+ 	softlockup_tick();
+ }
+ 
+Index: linux/include/linux/kgdb.h
+===================================================================
+--- linux.orig/include/linux/kgdb.h	2006-11-13 16:02:36.000000000 +0100
++++ linux/include/linux/kgdb.h	2006-11-13 16:02:42.000000000 +0100
+@@ -45,6 +45,7 @@
+ 
+ extern atomic_t kgdb_setting_breakpoint;
+ extern atomic_t cpu_doing_single_step;
++extern atomic_t kgdb_sync_softlockup[NR_CPUS];
+ 
+ extern struct task_struct *kgdb_usethread, *kgdb_contthread;
+ 

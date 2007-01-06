@@ -1,0 +1,21 @@
+It is possible that when SysRq-G is triggered via the keyboard that we will
+miss the "up" event and once KGDB lets the kernel go another SysRq will be
+required to clear this, without this change.
+
+Signed-off-by: Tom Rini <trini@kernel.crashing.org>
+
+ drivers/char/keyboard.c |    1 +
+ 1 file changed, 1 insertion(+)
+
+Index: linux/drivers/char/keyboard.c
+===================================================================
+--- linux.orig/drivers/char/keyboard.c	2006-11-13 15:59:57.000000000 +0100
++++ linux/drivers/char/keyboard.c	2006-11-13 16:02:39.000000000 +0100
+@@ -1167,6 +1167,7 @@
+ 	}
+ 	if (sysrq_down && down && !rep) {
+ 		handle_sysrq(kbd_sysrq_xlate[keycode], regs, tty);
++		sysrq_down = 0;		/* In case we miss the 'up' event. */
+ 		return;
+ 	}
+ #endif

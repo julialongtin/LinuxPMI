@@ -1,0 +1,97 @@
+Subject: [patch @num@/@total@] @name@
+
+This patch adds a end marker to the kcom_pkt struct so that useless fields are
+not anymore sent to the network. That way, the kcom_pkt struct can be extended
+to offer precious fields without cost.
+
+---
+ hpc/kcom.c         |    8 +++++---
+ hpc/kcomd.c        |    2 +-
+ include/hpc/kcom.h |   26 +++++++++++++++-----------
+ 3 files changed, 21 insertions(+), 15 deletions(-)
+
+Index: linux/include/hpc/kcom.h
+===================================================================
+--- linux.orig/include/hpc/kcom.h	2006-12-19 16:59:13.000000000 +0100
++++ linux/include/hpc/kcom.h	2006-12-22 23:43:19.000000000 +0100
+@@ -100,18 +100,22 @@
+ 
+ struct kcom_pkt
+ {
+-	pid_t hpid;     /* home pid of the this process */
+-	pid_t rpid;     /* remote pid of 'that' other node process */
+-	int len;      /* len of data */
+-	int type;     /* type of data */
+-	// int ack;      /* new msg, ack or response */
+-	unsigned long addr; /* used by mm pages */
+-	unsigned int msgid;
+-	struct list_head list;
+-	char *data;   /* ptr of data */
+-	char *resp;   /* ptr of response */
+-};
++	pid_t hpid;     		/* home pid of the this process */
++	pid_t rpid;     		/* remote pid of 'that' other node process */
++	int len;      			/* len of data */
++	int type;     			/* type of data */
++	unsigned long addr; 		/* used by mm pages */
++	unsigned int msgid;		/* each message exchange share the same msgid */
++
++	/* Fields after that point are not sent neither received */
+ 
++	struct list_head list;		/* This field both marks the end of the "rsendable  */
++					/* And is used for registering the packet in a list */
++
++	char *data;   			/* ptr of data */
++	char *resp;   			/* ptr of response */
++};
++#define KCOM_PKT_NET_SIZE		((size_t)(&((struct kcom_pkt*)0)->list))
+ 
+ struct kcom_node
+ {
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-12-19 17:00:22.000000000 +0100
++++ linux/hpc/kcom.c	2006-12-22 23:43:19.000000000 +0100
+@@ -184,7 +184,7 @@
+ 	  , (void *) pkt->addr, pkt->msgid);
+ 
+     printk(KERN_DEBUG"[OM] pktdump RAW header dump ----------------------------------------\n");
+-    hexdump((char*)pkt, (int) &(((struct kcom_pkt*) 0)->data));
++    hexdump((char*)pkt, KCOM_PKT_NET_SIZE);
+     printk(KERN_DEBUG"[OM] pktdump RAW header dump ----------------------------------------\n");
+ 
+ }
+@@ -382,8 +382,10 @@
+  		return -ENOMEM;
+  	}
+ 
++ 	memset(recv_pkt, 0, sizeof(struct kcom_pkt));
++
+ 	iov.iov_base = recv_pkt;
+- 	iov.iov_len = sizeof(struct kcom_pkt);
++ 	iov.iov_len = KCOM_PKT_NET_SIZE;
+ 
+  	OMDEBUG_PROTOCOL(2, "KCOMD: reading headers ... \n");
+ 	oldfs = get_fs();
+@@ -394,7 +396,7 @@
+ 
+  	i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
+  	if ((i == -ENOSPC) || (i == -EAGAIN)) {
+- 		if (first_loop && iov.iov_len == sizeof(struct kcom_pkt))
++ 		if (first_loop && iov.iov_len == KCOM_PKT_NET_SIZE)
+  			return i;
+ 
+  		/* prevent infinite loop */
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-12-19 17:00:22.000000000 +0100
++++ linux/hpc/kcomd.c	2006-12-22 23:43:19.000000000 +0100
+@@ -195,7 +195,7 @@
+ 
+ 
+ 	packet[0].iov_base = pkt;
+-	packet[0].iov_len = sizeof(struct kcom_pkt);
++	packet[0].iov_len = KCOM_PKT_NET_SIZE;
+ 
+ 	if (pkt->len) {
+ 		if(!pkt->data) {

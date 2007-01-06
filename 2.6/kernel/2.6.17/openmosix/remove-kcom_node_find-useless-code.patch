@@ -1,0 +1,24 @@
+Subject: [patch @num@/@total@] @name@
+
+This removes some useless code in kcom_node_find .. 
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-23 12:19:02.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-23 18:37:51.000000000 +0100
+@@ -615,15 +615,7 @@
+  **/
+ struct kcom_node *kcom_node_find(struct sockaddr *saddr)
+ {
+-	task_t *p=current;
+-	struct kcom_node *node;
+-	struct sockaddr_in *addr_tmp;
+-	unsigned int addr;
+-
+-	addr_tmp=(struct sockaddr_in *)p->om.whereto;
+-	addr=addr_tmp->sin_addr.s_addr;
+-	node = __kcom_node_find(saddr);
+-	return node;
++	return __kcom_node_find(saddr);
+ }
+ EXPORT_SYMBOL_GPL(kcom_node_find);
+ 

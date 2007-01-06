@@ -1,0 +1,60 @@
+Subject: [patch @num@/@total@] Fixed the comment style 
+
+Fixed comment style from // to /* */ (C does not normally allow // comment style)
+
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-02 22:51:55.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-02 22:51:57.000000000 +0100
+@@ -587,8 +587,10 @@
+ 		// printk("FUNCTION: kcom_task_find\n");
+ 		list_for_each_entry(tmp, &kcom_nodes, list)
+ 			list_for_each_entry(tmp2, &tmp->tasks, list)
+-				// One remote node, we're interested in rpid
+-				// One home node, we're interested in hpid
++				/*
++				 * One remote node, we're interested in rpid
++				 * One home node, we're interested in hpid
++				 */
+ 				if (task_test_dflags(p, DREMOTE)) {
+ 					// printk("kcom_task_find: dremote\n");
+ 					if (tmp2->rpid == pid)
+@@ -598,12 +600,12 @@
+ 					if (tmp2->hpid == pid)
+ 						return tmp2;
+ 				}
+-	} else if (where == 1) { // home
++	} else if (where == 1) { /* home */
+ 		list_for_each_entry(tmp, &kcom_nodes, list)
+ 			list_for_each_entry(tmp2, &tmp->tasks, list)
+ 				if (tmp2->hpid == pid)
+ 					return tmp2;
+-	} else if (where == 2) { // remote
++	} else if (where == 2) { /* remote */
+ 		list_for_each_entry(tmp, &kcom_nodes, list)
+ 			list_for_each_entry(tmp2, &tmp->tasks, list)
+ 				if (tmp2->rpid == pid)
+@@ -772,12 +774,12 @@
+ 		node_flag = DEP_FLG;
+ 	send_pkt=kcom_pkt_create(0, mig_flag | syscall_flag | PKT_NACK | node_flag, PKT_NACK, NULL);
+ 
+-	send_pkt->msgid=recv_pkt->msgid; // responses have same msg id as pkt they are responding to.
++	send_pkt->msgid=recv_pkt->msgid; /* responses have same msg id as pkt they are responding to. */
+ 	send_pkt->hpid=recv_pkt->hpid;
+ 	send_pkt->rpid=recv_pkt->rpid;
+ 	send_pkt->resp=recv_pkt->resp;
+ 
+-	// spin_lock(&send_tsk->spinlock); // done outside this function
++	// spin_lock(&send_tsk->spinlock); /* done outside this function */
+ 	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+ 	// spin_unlock(&send_tsk->spinlock);
+ 
+@@ -939,7 +941,7 @@
+ 
+ 	printk(KERN_DEBUG "wait_for_response...for msgid %u\n", msgid);
+ 	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list)
+-		// FIXME:  check for resp or ack, too.
++		/* FIXME:  check for resp or ack, too. */
+ 		if (msgid==pkt->msgid) {
+ 			i=pkt->len;
+ 			list_del(&pkt->list);

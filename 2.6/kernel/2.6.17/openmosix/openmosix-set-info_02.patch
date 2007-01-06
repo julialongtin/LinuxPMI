@@ -1,0 +1,39 @@
+Instead of calling sys_* functions to set uid,gid,guid,ruid on the
+migrated process,... just set them directly.  This was how it was
+originally and I changed it trying to fix other bugs.  This is tha back
+out.
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:52:00.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:52:01.000000000 +0100
+@@ -434,12 +434,14 @@
+ 	p->om.tgid = m->tgid;
+ 
+ 	/* copy credentials */
+-	sys_setuid(m->uid);
+-	sys_setresuid(m->uid,m->euid,m->suid);
+-	sys_setfsuid(m->fsuid);
+-	sys_setgid(m->gid);
+-	sys_setresgid(m->gid, m->egid, m->sgid);
+-	sys_setfsgid(m->fsgid);
++ 	p->uid = m->uid;
++ 	p->euid = m->euid;
++ 	p->suid = m->suid;
++ 	p->fsuid = m->fsuid;
++ 	p->gid = m->gid;
++ 	p->egid = m->egid;
++ 	p->sgid = m->sgid;
++ 	p->fsgid = m->fsgid;
+ 
+ 	/* signals stuffs */
+ 	p->blocked = m->blocked;
+@@ -452,8 +454,7 @@
+   	/* FIXME we don't trust the other node anyway so copy rlimit from node[nr] */
+ 
+   	memcpy(p->comm, m->comm, sizeof(m->comm));
+-	/* p->personality = m->personality;*/
+-	set_personality(m->personality);
++ 	p->personality = m->personality;
+ 	arch_pick_mmap_layout(p->mm);
+ 
+ 	kcom_send_ack(p, pkt);

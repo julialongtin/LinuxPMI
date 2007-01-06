@@ -1,0 +1,19 @@
+Subject: [patch @num@/@total@] Fix kernel panic in migration
+
+This patch fix an array out of bound copy
+
+(This patch should be already in the git tree)
+
+Index: linux/hpc/arch-x86_64.c
+===================================================================
+--- linux.orig/hpc/arch-x86_64.c	2006-11-02 22:50:41.000000000 +0100
++++ linux/hpc/arch-x86_64.c	2006-11-02 22:52:20.000000000 +0100
+@@ -103,7 +103,7 @@
+ 
+ 	memcpy(&m->regs, regs, sizeof(struct pt_regs));
+ 
+-	for (i = 0; i < TLS_SIZE; i++)
++	for (i = 0; i < GDT_ENTRY_TLS_ENTRIES; i++)
+ 		m->arch.tls_array[i] = p->thread.tls_array[i];
+ 
+ 	m->arch.ds = p->thread.ds;

@@ -1,0 +1,99 @@
+Subject: [patch @num@/@total@] @name@
+
+This patch rewrites deputy_main_loop to use write_lock on the incoming packet
+list. Moreover since syscall may schedule, sleep or want to hold locks, this
+function can not hold lock while calling syscalls ... Hence, the process is now
+split into two separate times :
+
+lock()
+1. Build the list of packets to process
+unlock()
+
+2. Process packets without holding locks
+
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-23 15:11:09.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-23 18:42:26.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -501,29 +502,59 @@
+ 	struct kcom_task *mytsk;
+ 	int error=0;
+ 	struct kcom_pkt *pkt, *pkt_next;
+-	
+-	mytsk=kcom_task_find(p->pid);
+-	while (task_test_dflags(current, DDEPUTY))
+-	{
+-		set_current_state(TASK_INTERRUPTIBLE);
++	struct list_head syscall_packet_list;
++
++	INIT_LIST_HEAD(&syscall_packet_list);
+ 
+-		if (!list_empty(&mytsk->in_packs)) {
++	mytsk=kcom_home_task_find(p->pid);
+ 
+-			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
++	if (unlikely(!mytsk)) {
++		OMBUG("I am a taskless deputy O_o\n");
++		return;
++	}
+ 
+-				if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
++loop_again:
+ 
++	set_current_state(TASK_INTERRUPTIBLE);
+ 
+-					error = deputy_do_syscall(p, pkt);
+-					kcom_pkt_delete(pkt);
+-				}
+-			}
++	if (unlikely(list_empty(&mytsk->in_packs)))
++		goto no_packets;
+ 
++	/* Process incoming packets from remote task (add them to process_list*/
++	write_lock(&mytsk->in_packs_lock);
++	list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
++
++		if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
++			/* syscalls may schedule or do many spinlocked forbidden things*/
++			list_move_tail(&pkt->list, &syscall_packet_list);
++		} else {
++			/* Deputy should only have syscall packets ... */
++			printk(KERN_ERR"[OM] Deputy %d received non syscall packet ?\n", current->pid);
++			kcom_pkt_delete(pkt);
+ 		}
+ 
+-		deputy_process_misc(current);
+-		schedule();
++		/* everything else is an error => discarding */
++
+ 	}
++	write_unlock(&mytsk->in_packs_lock);
++
++	if ((unlikely(list_empty(&syscall_packet_list))))
++		goto no_packets;
++
++	/* We can now process all syscalls without holding locks ...*/
++	list_for_each_entry_safe(pkt, pkt_next, &syscall_packet_list, list) {
++		OMDEBUG_SYS(3, "Deputy recevied syscall packet to execute ...\n");
++		error = deputy_do_syscall(p, pkt);
++		kcom_pkt_delete(pkt);
++	}
++
++no_packets:
++
++	deputy_process_misc(current);
++	schedule();
++
++	if(likely(task_test_dflags(current, DDEPUTY)))
++		goto loop_again;
+ }
+ 
+ void exit_mm(task_t *);

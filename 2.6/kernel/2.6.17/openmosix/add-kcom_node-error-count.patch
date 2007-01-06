@@ -1,0 +1,114 @@
+Subject: [patch @num@/@total@] @name@ 
+
+This patch add node error counts, in case something get wrong:
+
+Two error counts :
+- a consecutive error count
+- a total error count (only used for stats)
+
+The increment/clear process is as follow:
+
+- an error count is maintained on socket reads (and soon on socket write)
+- when an operation fail, both error counts are incremented
+- when an operation succeed, only the consecutive error count is cleared
+
+- if the consecutive error count reach a critical level, something should
+  be done about the node ... (this is not yet done, and will be done on the
+  same time than the FIXME in kcomd_exit)
+
+Index: linux/include/hpc/kcom.h
+===================================================================
+--- linux.orig/include/hpc/kcom.h	2006-11-21 18:50:31.000000000 +0100
++++ linux/include/hpc/kcom.h	2006-11-23 18:42:43.000000000 +0100
+@@ -121,7 +121,9 @@
+ 	struct list_head tasks; 	/* list of task */
+ 	struct list_head list; 		/* list of nodes */
+ 	struct list_head process_list;  /* list used internally by kcomd */
+-
++	/* Socket read/write error counts */
++	int error_count;		/* Consecutive error count on this node */
++	int error_total;		/* Total error count from the struct creation (stats only)*/
+ };
+ 
+ struct kcom_task
+@@ -144,4 +146,8 @@
+ extern void kcom_node_sock_release(struct kcom_node *node);
+ extern struct kcom_node *__create_connection(struct sockaddr *saddr
+ 				            ,struct kcom_node *node);
++
++
++extern int kcom_node_increment_error(struct kcom_node *node);
++extern void kcom_node_clear_error(struct kcom_node *node);
+ #endif /* _HPC_KCOM_H */
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-21 18:51:05.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-23 18:42:43.000000000 +0100
+@@ -1586,3 +1586,49 @@
+ 
+ 	return i;
+ }
++
++/**
++ * kcom_node_increment_error
++ *
++ * Description:
++ *    Increment both permanent and consecutive error count,
++ *    if the error count reach a critical level, delete all
++ *    tasks and delete the node ...
++ *
++ *    Returns the new consecutive error count
++ *
++ *    FIXME: the node deletion is not yet done, but should be!!
++ **/
++
++int kcom_node_increment_error(struct kcom_node *node)
++{
++	if (!node)
++		return -ENODEV;
++
++	node->error_count++;
++	node->error_total++;
++
++	if (60 > node->error_count) {
++		/*FIXME This should expel all tasks, and delete the node ... should be ...*/
++		OMBUG( "FIXME: A node had reached a critical error count level,"
++		       "but we don't delete it yet :(\n");
++	}
++	return node->error_count;
++}
++
++/**
++ * kcom_node_clear_error
++ *
++ * Description:
++ *    Clear the consecutive error count, but not the total error count
++ *
++ *    Consecutive error count should be cleared every time a socket write success
++ **/
++
++void kcom_node_clear_error(struct kcom_node *node)
++{
++	if (!node)
++		return;
++
++	node->error_count = 0;
++}
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-21 19:01:42.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-23 18:42:43.000000000 +0100
+@@ -657,8 +657,12 @@
+ 		INIT_LIST_HEAD(&node->process_list);
+ 
+ 		/* If we got an error that far ... we must kill the offending connection */
+-		if (err < 0)
++		if (err < 0) {
++			kcom_node_increment_error(node);
+ 			kcom_node_sock_release(node);
++		}
++
++		kcom_node_clear_error(node);
+ 
+ 	}
+ 	if (!list_empty(&process_list)) {

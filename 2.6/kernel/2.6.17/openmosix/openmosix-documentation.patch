@@ -1,0 +1,234 @@
+[patch @num@/@total@] Documentation for openmosix
+
+Improves the openmosix internal documentation (using kdoc)
+
+This version of the patch takes last comments form Vincent Hanquez
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-11-02 12:25:18.000000000 +0100
++++ linux/hpc/copyuser.c	2006-11-02 22:34:49.000000000 +0100
+@@ -22,6 +22,9 @@
+ 
+ /**
+  * deputy_copy_from_user - Copy from remote when running on deputy
++ * @to:     kernelspace address to copy to
++ * @from:   userspace address to copy from
++ * @n:      size of data to copy
+  **/
+ unsigned long deputy_copy_from_user(void *to, const void __user *from, unsigned long n)
+ {
+@@ -53,6 +56,9 @@
+ 
+ /**
+  * deputy_strncpy_from_user - strncpy on remote when running on deputy
++ * @dst:     kernelspace address to copy to
++ * @src:   userspace address to copy from
++ * @count:      size of data to copy
+  **/
+ unsigned long deputy_strncpy_from_user(char *dst, const char __user *src,
+ 							long count)
+@@ -80,6 +86,9 @@
+ 
+ /**
+  * deputy_copy_to_user - copy to remote when running on deputy
++ * @to:     userspace address to copy to
++ * @from:   kernelspace address to copy from
++ * @count:      size of data to copy
+  **/
+ unsigned long deputy_copy_to_user(void __user *to, const void *from, unsigned long n)
+ {
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-02 12:25:18.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-02 22:41:10.000000000 +0100
+@@ -21,11 +21,14 @@
+ #include <net/sock.h>
+ #include <net/tcp.h>
+ 
++/**
++ * socket_listen - Creates the network socket and maps it to a file descriptor
++ **/
+ static int socket_listen(struct sockaddr *saddr, struct socket **res)
+ {
+ 	struct socket *sock;
+ 	int ret, fd;
+-	
++
+ 	ret = sock_create(saddr->sa_family, SOCK_STREAM, IPPROTO_TCP, &sock);
+ 	if (ret < 0)
+ 		return -1;
+@@ -96,7 +99,7 @@
+ 	pid_t pid;              /* pid of the process owning this struct */
+ 	struct kcom_node *node; /* node of the process to send/recv */
+ 	struct list_head list;  /* list of process using some node */
+-	
++
+ 	struct list_head out_packs;
+ 	struct kcom_pkt in_packs;
+ };
+@@ -193,7 +196,7 @@
+ 	ret = sock->ops->getname
+ 	check if it's already in node list.
+ 	*/
+-	
++
+ 	spin_lock(&kcom_nodes_lock);
+ 	list_add(&node->list, &kcom_nodes);
+ 	spin_unlock(&kcom_nodes_lock);
+@@ -229,6 +232,16 @@
+ int comm_iovec(void);
+ int comm_iovec_ack(void);
+ 
++/**
++ * accept_connection
++ *
++ * Description:
++ *    Once kcomd's sockets receive a new connection attempt,
++ *    the connection is accepted and accept_connection called, 
++ *    accept_connection then retreives the remote IP address,
++ *    maps the file descriptor and create the
++ *    kcom node with those information.
++ **/
+ static int accept_connection(struct socket *lsock)
+ {
+ 	struct socket *sock;
+@@ -269,6 +282,14 @@
+ 	return 0;
+ }
+ 
++/**
++ * data_write
++ *
++ * Description:
++ *    Loops through all tasks that have processes on the node that
++ *    has data to send, and sends the pkts.
++ *    Once the pkt has been sent, its memory is freed.
++ **/
+ int data_write(struct kcom_node *node)
+ {
+ 	return 0;
+@@ -288,7 +309,7 @@
+ 		kctask->pid = pid;
+ 		kctask->node = node;
+ 		INIT_LIST_HEAD(&kctask->list);
+-		
++
+ 		list_add(&kctask->list, &node->tasks);
+ 	}
+ 	return kctask;
+@@ -337,7 +358,7 @@
+ 	tsk = kcom_task_find(pid);
+ 	if (!tsk)
+ 		return -ENODEV;
+-	
++
+ 	/* put pkt in kcom_task */
+ 	pkt = kcom_pkt_create(0, 0, NULL);
+ 	if (!pkt)
+@@ -346,11 +367,24 @@
+ 
+ 	/* go to sleep */
+ 	/* wait reply */
+-	
++
+ 	return 0;
+ }
+ 
+ 
++/**
++ * kcomd_thread
++ *
++ * Description:
++ *    kcomd - kernel thread that handles the communications.
++ *    Creates the memory slabs.
++ *    Once the pkt has been sent, its memory is freed.
++ *    Maps new connections to file descriptors.
++ *    Waits for incoming data, signals from processes
++ *    or any data that is ready to be sent.
++ *    Also cleans up memory and any open sockets and
++ *    file descriptors on exit.
++ **/
+ static int kcomd_thread(void *nothing)
+ {
+ 	int ret;
+@@ -381,7 +415,7 @@
+ 		zero_fd_set(n, sockets_fds.in);
+ 		zero_fd_set(n, sockets_fds.out);
+ 		zero_fd_set(n, sockets_fds.ex);
+-	
++
+ 		/* add listening sockets to the set */
+ 		set_bit(fd4, sockets_fds.in);
+ 		set_bit(fd6, sockets_fds.in);
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2006-11-02 12:25:18.000000000 +0100
++++ linux/hpc/migsend.c	2006-11-02 22:34:51.000000000 +0100
+@@ -80,6 +80,13 @@
+ }
+ 
+ 
++/**
++ * mig_send_mm
++ *
++ * Description:
++ *    Sends the process memory map information to the other node.
++ *    Wait for an acknowledgement
++ **/
+ static int mig_send_mm(task_t *p)
+ {
+ 	struct omp_mig_mm s;
+@@ -108,6 +115,14 @@
+ 	}
+ }
+ 
++/**
++ * mig_send_vmas
++ *
++ * Description:
++ *    loops through and sends all process vmas to the other node.
++ *    vma's are the virtual memory structs.  They hold the lists of
++ *    mapped pages and page permissions.
++ **/
+ static int mig_send_vmas(task_t *p)
+ {
+ 	struct vm_area_struct *vma;
+@@ -135,6 +150,13 @@
+ }
+ 
+ 
++/**
++ * mig_send_pages
++ *
++ * Description:
++ *    loops through and sends all process pages to the other node.
++ *    All the process's memory space is sent, one page at a time.
++ **/
+ static int mig_send_pages(task_t *p)
+ {
+ 	struct vm_area_struct * vma;
+@@ -165,6 +187,10 @@
+ }
+ 
+ 
++/**
++ * mig_send_proc_context - Sends the 'important' part of the process context.
++ *
++ **/
+ static int mig_send_proc_context(task_t *p)
+ {
+ 	struct omp_mig_task m;
+@@ -220,6 +246,13 @@
+ 	return -1;
+ }
+ 
++/**
++ * mig_do_send
++ *
++ * Description:
++ *    Main loop for sending the process to the other node.
++ *
++ **/
+ int mig_do_send(task_t *p)
+ {
+ 	arch_mig_send_pre(p);

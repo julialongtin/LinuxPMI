@@ -1,0 +1,525 @@
+Index: linux/hpc/arch-i386.c
+===================================================================
+--- linux.orig/hpc/arch-i386.c	2006-09-20 18:04:32.000000000 +0200
++++ linux/hpc/arch-i386.c	2006-09-20 18:04:59.000000000 +0200
+@@ -245,10 +245,12 @@
+ 	syscall_func_t fct;
+ 	extern void * sys_call_table[];
+ 
+-	OMDEBUG_SYS(4, "exec_sys[%d](%lx, %lx, %lx, %lx, %lx, %lx)\n", n,
++	/* OMDEBUG_SYS(4, "exec_sys[%d](%lx, %lx, %lx, %lx, %lx, %lx)\n", n,*/
++	printk("exec_sys[%d](%lx, %lx, %lx, %lx, %lx, %lx)\n", n,
+ 			args->arg[0], args->arg[1], args->arg[2],
+ 			args->arg[3], args->arg[4], args->arg[5]);
+ 	fct = (syscall_func_t) sys_call_table[n];
++	printk("arch_exec_syscall: debug1\n");
+ 	return fct(*((syscall_parameter_t *) args));
+ }
+ 
+Index: linux/hpc/comm.c
+===================================================================
+--- linux.orig/hpc/comm.c	2006-09-20 18:04:32.000000000 +0200
++++ linux/hpc/comm.c	2006-09-20 18:04:59.000000000 +0200
+@@ -42,6 +42,7 @@
+  **/
+ static void comm_shutdown(struct socket *sock)
+ {
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	if (sock && sock->ops)
+ 		sock->ops->shutdown(sock, SEND_SHUTDOWN);
+ }
+@@ -56,6 +57,7 @@
+ {
+ 	int val, ret;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	val = sizeof(struct sockaddr);
+ 	if (!sock->ops || !sock->ops->getname)
+ 		return -1;
+@@ -72,6 +74,7 @@
+  **/
+ void comm_data_ready(struct sock *sk, int len)
+ {
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	wake_up_interruptible(sk->sk_sleep);
+ }
+ 
+@@ -82,6 +85,7 @@
+ 	int error;
+ 	mm_segment_t oldfs;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	oldfs = get_fs();
+ 	set_fs(KERNEL_DS);
+ 
+@@ -129,6 +133,7 @@
+ 	int error;
+ 	struct socket *sock;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	error = sock_create(family, type, proto, &sock);
+ 	if (error < 0)
+ 		return NULL;
+@@ -140,6 +145,7 @@
+ {
+ 	int error;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	error = sock->ops->bind(sock, saddr, sizeof(*saddr));
+ 	if (error == -EADDRINUSE)
+ 		printk("comm_bind() Already in use\n");
+@@ -151,6 +157,7 @@
+ {
+ 	int error;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	error = sock->ops->listen(sock, SOMAXCONN);
+ 
+ 	return error;
+@@ -162,6 +169,7 @@
+ 	int error;
+ 	DECLARE_WAITQUEUE(wait, current);
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	if (!timo)
+ 		timo = MAX_SCHEDULE_TIMEOUT;
+ 
+@@ -207,6 +215,7 @@
+ {
+ 	BUG_ON(!sock);
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	sock_release(sock);
+ }
+ 
+@@ -217,6 +226,7 @@
+ {
+ 	int mask;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	mask = sock->ops->poll(NULL, sock, NULL);
+ 	return (mask & POLLIN_SET) ? 1 : 0;
+ }
+@@ -238,6 +248,7 @@
+ 	static struct file sighfile = {.f_count = ATOMIC_INIT(1)};
+ 	DECLARE_WAITQUEUE(wait, current);
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	/*
+ 	 * sighfile: we are required to supply a file to "hold" while we poll.
+ 	 * a bit ridiculous in this context, but nobody will notice because
+@@ -262,6 +273,7 @@
+ 	remove_wait_queue(sock->sk->sk_sleep, &wait);
+ 	set_current_state(TASK_RUNNING);
+ 
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return (pollmask & mask) ? 1 : 0;
+ }
+ 
+@@ -293,6 +305,7 @@
+ 
+ 	*mlp = NULL;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	sock = sock_alloc();
+ 	if (!sock)
+ 		return error;
+@@ -315,6 +328,7 @@
+ 		goto failed;
+ 
+ 	*mlp = sock;
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return error;
+ 
+ failed:
+@@ -338,6 +352,7 @@
+ 	int n = 0;
+ 	int left = len;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	do {
+ 		n = sock_recvmsg(sock, msg, left, msg->msg_flags);
+ 		if (n <= 0) {
+@@ -367,6 +382,7 @@
+ 			}
+ 		}
+ 	} while (left);
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return len;
+ }
+ 
+@@ -387,6 +403,7 @@
+ 	BUG_ON(len > PAGE_SIZE);
+ 	BUG_ON(!mlink);
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	iov.iov_base = data;
+ 	iov.iov_len = len;
+ 
+@@ -403,6 +420,7 @@
+ 
+ 	set_fs(oldfs);
+ 
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return error;
+ }
+ 
+@@ -421,6 +439,7 @@
+ 	mm_segment_t oldfs;
+ 	int error;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	BUG_ON(!mlink);
+ 
+ 	iov.iov_base = data;
+@@ -435,6 +454,7 @@
+ 
+ 	set_fs(oldfs);
+ 
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return error;
+ }
+ 
+@@ -465,6 +485,7 @@
+ 	struct socket *link;
+ 	int error;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	link = comm_socket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP);
+ 	if (!link)
+ 		return NULL;
+@@ -477,6 +498,7 @@
+ 	if (error < 0)
+ 		goto fail;
+ 
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return link;
+ 
+ fail:
+@@ -488,6 +510,7 @@
+ {
+ 	struct socket *link;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	link = comm_socket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP);
+ 	if (!link)
+ 		return NULL;
+@@ -495,6 +518,7 @@
+ 	if (comm_connect(link, sa, timo))
+ 		goto fail;
+ 
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return link;
+ 
+ fail:
+@@ -507,6 +531,7 @@
+ 	struct omp_req req;
+ 	int error;
+ 
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	req.type = type;
+ 	req.dlen = dlen;
+ 
+@@ -518,6 +543,7 @@
+ 	if (error < 0)
+ 		return -1;
+ 
++	printk("ERROR: COMM FUNCTION %s leaving\n", __FUNCTION__);
+ 	return 0;
+ }
+ 
+@@ -526,5 +552,6 @@
+ {
+ 	struct omp_req req;
+ 	req.type = type;
++	printk("ERROR: COMM FUNCTION %s\n", __FUNCTION__);
+ 	return comm_send(link, &req, sizeof(req));
+ }
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-09-20 18:04:59.000000000 +0200
++++ linux/hpc/copyuser.c	2006-09-20 18:04:59.000000000 +0200
+@@ -177,6 +177,7 @@
+ long deputy_put_user(long value, const void *addr, size_t size)
+ {
+ 	BUG_ON(size > sizeof(long));
++	printk(KERN_DEBUG "FUNCTION: deputy_put_user\n");
+ 	return deputy_put_userX((s64) value, addr, size);
+ }
+ EXPORT_SYMBOL(deputy_put_user);
+@@ -193,6 +194,7 @@
+  **/
+ long deputy_put_user64(s64 value, const void *addr)
+ {
++	printk(KERN_DEBUG "FUNCTION: deputy_put_user64\n");
+ 	return deputy_put_userX(value, addr, 8);
+ }
+ EXPORT_SYMBOL(deputy_put_user64);
+@@ -226,6 +228,7 @@
+ long deputy_get_user(long *value, const void *addr, size_t size)
+ {
+ 	BUG_ON(size > sizeof(long));
++	printk(KERN_DEBUG "FUNCTION: deputy_get_user\n");
+ 	return deputy_get_userX((u64 *) value, addr, size);
+ }
+ EXPORT_SYMBOL(deputy_get_user);
+@@ -236,6 +239,7 @@
+  **/
+ long deputy_get_user64(s64 *value, const void *addr)
+ {
++	printk(KERN_DEBUG "FUNCTION: deputy_get_user64\n");
+ 	return deputy_get_userX(value, addr, 8);
+ }
+ EXPORT_SYMBOL(deputy_get_user64);
+@@ -308,7 +312,7 @@
+ /**
+  * remote_strnlen_from_user - strnlen from user for deputy
+  **/
+-static int remote_strnlen_user(task_t *p, struct kcom_pkt *pkt)
++/*static*/ int remote_strnlen_user(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_usercopy_req u;
+ 	long *ret_ptr;
+@@ -360,6 +364,7 @@
+ 	memcpy(&u, pkt->data, sizeof(struct omp_usercopy_req));
+ 	ret=kzalloc(sizeof(*ret), GFP_KERNEL);
+ 
++	printk("KERN_DEBUG remote_get_user; addr=%lu, len=%lu\n", u.addr, u.len);
+ 
+ 	switch (u.len) {
+ 	case 1: get_user(*ret, (u8 *) u.addr); break;
+@@ -390,6 +395,9 @@
+ 		set_current_state(TASK_INTERRUPTIBLE);
+ 		list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+ 
++			printk(KERN_DEBUG "openMosix %s Checking pkt list for pid %u, type:0x%x\n"
++			      , __FUNCTION__, p->pid, pkt->type);
++
+ 			switch ( pkt->type & SYSCALL_MASK ) {
+ 
+ 				case DEP_STRNCPY_FROM_USER :
+@@ -422,6 +430,7 @@
+ 					list_add_tail(&send_pkt->list, &task->out_packs);
+ 
+ 					if (kcomd_task) {
++						printk(KERN_DEBUG "Signaling kcomd\n");
+ 						send_sig(SIGHUP, kcomd_task, 0);
+ 					} else
+ 						printk("Unable to signal kcomd\n");
+@@ -431,6 +440,7 @@
+ 					kmem_cache_free(kcom_pkt_cachep, pkt);
+ 					set_current_state(TASK_RUNNING);
+ 					schedule();
++					printk(KERN_DEBUG "leaving FUNCTION: remote_handle_user\n");
+ 					return ret;
+ 					break;
+ 
+@@ -441,12 +451,14 @@
+ 		}
+ 
+ 		if (list_empty(&task->in_packs)) {
++			printk(KERN_DEBUG "remote_handle_user, sleeping\n");
+ 			schedule();
++			printk(KERN_DEBUG "remote_handle_user, waking\n");
+ 		}
+ 
+ 	}
+ 
+-	printk( KERN_ERR "openMosix: %s is not supposed to end that way ! (%s:%n)\n"
++	printk( KERN_ERR "openMosix: %s is not supposed to end that way ! (%s:%d)\n"
+ 	      , __FUNCTION__, __FILE__, __LINE__);
+ 
+ 	return -1;
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-09-20 18:04:59.000000000 +0200
++++ linux/hpc/deputy.c	2006-09-20 18:04:59.000000000 +0200
+@@ -69,7 +69,7 @@
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 
+ 	if (sizeof(struct omp_syscall_req) != pkt->len)
+-		printk("ERROR in deputy_do_syscall.  data size of %d does not match expected %d\n", pkt->len, sizeof(struct omp_syscall_req));
++		printk("ERROR in deputy_do_syscall.  data size of %d does not match expected %lu\n", pkt->len, sizeof(struct omp_syscall_req));
+ 	memcpy(&s, pkt->data, pkt->len);
+ 	
+ 	OMDEBUG_SYS(1, "[deputy] receive syscall %d\n", s.n);
+@@ -79,6 +79,7 @@
+ 	
+ 	kcom_send_with_ack(MIG_SYSCALL | PKT_NEW_MSG | SYSCALL_DONE | DEP_FLG, 0, NULL, r.ret, dest_ptr);
+ 
++	printk(KERN_DEBUG "[deputy] replied to syscall %d with %ld\n", s.n, r.ret);
+ 
+ 	return 0;
+ }
+@@ -94,6 +95,8 @@
+ 	task_t *child;
+ 	struct socket *childsock;
+ 
++	printk(KERN_DEBUG "openmosix %s\n", __FUNCTION__);
++
+ 	error = comm_recv(p->om.contact, &m, sizeof(m));
+ 	if (error < 0)
+ 		return -1;
+@@ -356,6 +359,7 @@
+ 	int sz;
+ 	char *data = NULL;
+ 
++	printk(KERN_DEBUG "openmosix %s\n", __FUNCTION__);
+ 	error = comm_recv(p->om.contact, &m, sizeof(m));
+ 	if (error < 0)
+ 		goto error;
+@@ -508,8 +512,11 @@
+ 
+ 			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+ 
++				printk(KERN_DEBUG "packet found.\n");
++
+ 				if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
+ 
++					printk(KERN_DEBUG "SYSCALL pkt found.\n");
+ 
+ 					error = deputy_do_syscall(p, pkt);
+ 					list_del(&pkt->list);
+@@ -521,6 +528,9 @@
+ 		deputy_process_misc(current);
+ 		schedule();
+ 	}
++
++	printk(KERN_DEBUG "leaving FUNCTION: deputy_main_loop\n");
++	printk(KERN_DEBUG "Process %u has fully migrated home.\n", p->pid);
+ }
+ 
+ void exit_mm(task_t *);
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-09-20 18:04:49.000000000 +0200
++++ linux/hpc/kcomd.c	2006-09-20 18:06:15.000000000 +0200
+@@ -243,6 +243,17 @@
+  	}
+ 	set_fs(oldfs);
+ 	do_gettimeofday(&stop);
++	if (stop.tv_sec==start.tv_sec)
++		printk(KERN_DEBUG"openMosix data_send: time %lu usecs\n", stop.tv_usec-start.tv_usec);
++	else
++		printk(KERN_DEBUG"openMosix data_send: time %lu usecs\n", ((stop.tv_sec*USEC_PER_SEC)+stop.tv_usec)-((start.tv_sec*USEC_PER_SEC)+start.tv_usec));
++
++	if ((send_pkt->type & MSG_MASK) ==PKT_NEW_MSG)
++		printk(KERN_DEBUG"FUNCTION: data_send: sent NEW msgid:%u type:0x%x len:%d\n", send_pkt->msgid, send_pkt->type, send_pkt->len);
++	else if ((send_pkt->type & MSG_MASK) ==PKT_ACK)
++		printk(KERN_DEBUG"FUNCTION: data_send: sent ACK msgid:%u type:0x%x len:%d\n", send_pkt->msgid, send_pkt->type, send_pkt->len);
++	else if ((send_pkt->type & MSG_MASK) ==PKT_RESP)
++		printk(KERN_DEBUG"FUNCTION: data_send: sent RESP msgid:%u type:0x%x len:%d\n", send_pkt->msgid, send_pkt->type, send_pkt->len);
+ 	return i;
+ 
+ }
+@@ -291,6 +302,7 @@
+ 			/* spin_lock(&tsk->spinlock); */
+ 			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
+ 			/* spin_unlock(&tsk->spinlock); */
++ 			printk("pkt (msgid: %u) added to remote pid %u in_packs list.\n", recv_kcom_pkt->msgid, tsk->rpid);
+ 		} else {
+ 			printk(KERN_ERR "unable to find remote pid %u\n", recv_kcom_pkt->rpid);
+ 			return -1;
+@@ -300,6 +312,7 @@
+ 		sltsk=find_task_by_pid(recv_kcom_pkt->rpid);
+ 		/* read_unlock(&tasklist_lock); */
+ 		if (sltsk) {
++ 			printk("Waking up process %u\n", sltsk->pid);
+ 			wake_up_process(sltsk);
+ 		} else {
+ 			printk(KERN_ERR "Unable to find remote pid %u to wake up\n", recv_kcom_pkt->rpid);
+@@ -312,6 +325,7 @@
+ 			/* spin_lock(&tsk->spinlock); */
+ 			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
+ 			/* spin_unlock(&tsk->spinlock); */
++			printk(KERN_DEBUG "pkt (msgid: %u) adding to home pid %u in_packs list.\n", recv_kcom_pkt->msgid, tsk->hpid);
+ 		} else {
+ 			printk(KERN_ERR "unable to find home pid %u\n", recv_kcom_pkt->hpid);
+ 			return -1;
+@@ -320,6 +334,7 @@
+ 		sltsk=find_task_by_pid(recv_kcom_pkt->hpid);
+ 		/* read_unlock(&tasklist_lock); */
+ 		if (sltsk) {
++			printk(KERN_DEBUG "Waking up process %u\n", sltsk->pid);
+ 			wake_up_process(sltsk);
+ 		} else {
+ 			printk(KERN_ERR "Unable to find home pid %u to wake up\n", recv_kcom_pkt->hpid);
+@@ -366,16 +381,25 @@
+ 		}
+ 	}
+ 
++ 	if ((recv_kcom_pkt->type & MSG_MASK) ==PKT_NEW_MSG)
++ 		printk("FUNCTION: pkt_read: received NEW msgid:%u type:0x%x len:%d rpid:%u hpid:%u\n", recv_kcom_pkt->msgid, recv_kcom_pkt->type, recv_kcom_pkt->len, recv_kcom_pkt->rpid, recv_kcom_pkt->hpid);
++ 	else if ((recv_kcom_pkt->type & MSG_MASK) ==PKT_ACK)
++ 		printk("FUNCTION: pkt_read: received ACK msgid:%u type:0x%x len:%d rpid:%u hpid:%u\n", recv_kcom_pkt->msgid, recv_kcom_pkt->type, recv_kcom_pkt->len, recv_kcom_pkt->rpid, recv_kcom_pkt->hpid);
++ 	else if ((recv_kcom_pkt->type & MSG_MASK) ==PKT_RESP)
++ 		printk("FUNCTION: pkt_read: received RESP msgid:%u type:0x%x len:%d rpid:%u hpid:%u\n", recv_kcom_pkt->msgid, recv_kcom_pkt->type, recv_kcom_pkt->len, recv_kcom_pkt->rpid, recv_kcom_pkt->hpid);
+ 
+ 	if ((recv_kcom_pkt->type & MSG_MASK) == PKT_NEW_MSG) {
+ 		switch (recv_kcom_pkt->type & MIG_MASK) {
+ 			case MIG_INIT:
++ 				printk("case MIG_INIT\n");
+ 				mig_do_receive_init(node, recv_kcom_pkt);
+ 				break;
+ 			case MIG_GO_HOME:
++ 				printk("case MIG_GO_HOME\n");
+ 				mig_do_receive_home(node, recv_kcom_pkt);
+ 				break;
+ 			case MIG_COME_HOME:
++ 				printk("case MIG_COME_HOME\n");
+ 				sltsk=find_task_by_pid(recv_kcom_pkt->rpid);
+ 				task_register_migration(sltsk);
+ 				break;
+Index: linux/hpc/syscalls.c
+===================================================================
+--- linux.orig/hpc/syscalls.c	2006-09-20 18:04:32.000000000 +0200
++++ linux/hpc/syscalls.c	2006-09-20 18:04:59.000000000 +0200
+@@ -27,12 +27,15 @@
+ #include <hpc/syscalls.h>
+ #include <hpc/debug.h>
+ #include <hpc/hpc.h>
++#include <hpc/kcom.h>
++#include <hpc/prototype.h>
+ 
+ /* generic multiplexer */
+ asmlinkage long om_sys_local(struct pt_regs regs)
+ {
+ 	long ret;
+ 
++	printk("[remote] local syscall %d\n", SYSNB());
+ 	OMDEBUG_SYS(1, "[remote] local syscall %d\n", SYSNB());
+ 
+ 	ret = arch_exec_syscall(SYSNB(), (syscall_parameter_t *) &regs);
+@@ -41,17 +44,20 @@
+ 
+ asmlinkage long om_sys_remote(struct pt_regs regs)
+ {
++	printk("om_sys_gettid syscall\n");
+ 	return remote_do_syscall(SYSNB(), &regs);
+ }
+ 
+ /* specific remote syscalls */
+ asmlinkage int om_sys_gettid(struct pt_regs regs)
+ {
++	printk("om_sys_getpid syscall\n");
+ 	return current->om.pid;
+ }
+ 
+ asmlinkage int om_sys_getpid(struct pt_regs regs)
+ {
++	printk("om_sys_execve syscall\n");
+ 	return current->om.tgid;
+ }
+ 
+Index: linux/hpc/migctrl.c
+===================================================================
+--- linux.orig/hpc/migctrl.c	2006-09-20 18:04:58.000000000 +0200
++++ linux/hpc/migctrl.c	2006-09-20 18:04:59.000000000 +0200
+@@ -129,6 +129,7 @@
+ 	set_current_state(TASK_RUNNING);
+ 	schedule();
+ 
++	printk("leaving FUNCTION: task_local_bring\n");
+ 	return 0;
+ failed:
+ 	OMBUG("failed\n");

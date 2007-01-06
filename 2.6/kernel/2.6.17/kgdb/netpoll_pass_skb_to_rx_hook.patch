@@ -1,0 +1,35 @@
+This is from Jason Wessel <jason.wessel@windriver.com> and will allow
+kgdboe for example to determine the MAC of the GDB host.  This has been
+queued up by the Netpoll maintainer.
+
+ include/linux/netpoll.h |    2 +-
+ net/core/netpoll.c      |    3 ++-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+Index: linux/include/linux/netpoll.h
+===================================================================
+--- linux.orig/include/linux/netpoll.h	2006-11-13 16:00:12.000000000 +0100
++++ linux/include/linux/netpoll.h	2006-11-13 16:02:09.000000000 +0100
+@@ -17,7 +17,7 @@
+ struct netpoll {
+ 	struct net_device *dev;
+ 	char dev_name[16], *name;
+-	void (*rx_hook)(struct netpoll *, int, char *, int);
++	void (*rx_hook)(struct netpoll *, int, char *, int, struct sk_buff *);
+ 	void (*drop)(struct sk_buff *skb);
+ 	u32 local_ip, remote_ip;
+ 	u16 local_port, remote_port;
+Index: linux/net/core/netpoll.c
+===================================================================
+--- linux.orig/net/core/netpoll.c	2006-11-13 16:00:13.000000000 +0100
++++ linux/net/core/netpoll.c	2006-11-13 16:02:10.000000000 +0100
+@@ -505,7 +505,8 @@
+ 
+ 	np->rx_hook(np, ntohs(uh->source),
+ 		    (char *)(uh+1),
+-		    ulen - sizeof(struct udphdr));
++		    ulen - sizeof(struct udphdr),
++		    skb);
+ 
+ 	kfree_skb(skb);
+ 	return 1;

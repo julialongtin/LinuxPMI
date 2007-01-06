@@ -1,0 +1,16 @@
+---
+ kernel/hrtimer.c |    1 +
+ 1 file changed, 1 insertion(+)
+
+Index: linux/kernel/hrtimer.c
+===================================================================
+--- linux.orig/kernel/hrtimer.c	2007-01-04 18:57:08.000000000 +0100
++++ linux/kernel/hrtimer.c	2007-01-04 18:58:48.000000000 +0100
+@@ -780,6 +780,7 @@
+ 	if (!timespec_valid(&tu))
+ 		return -EINVAL;
+ 
++	printk( KERN_DEBUG "nanosleep [%d] for %d s %d ns\n", current->pid, tu.tv_sec, tu.nsec);
+ 	return hrtimer_nanosleep(&tu, rmtp, HRTIMER_REL, CLOCK_MONOTONIC);
+ }
+ 

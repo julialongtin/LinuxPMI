@@ -1,0 +1,266 @@
+Subject: [patch @num@/@total@] data send and packet allocation/free fix
+
+This patch fix the data_send function, sending header and data at once
+it also fixes the pkt_create function to copy data always in a safe place
+before sending it ... 
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:53.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:58.000000000 +0100
+@@ -160,79 +160,89 @@
+  * Description:
+  *    Sends the kcom pkt header and the data, if any.
+  **/
+-int data_send(struct socket *sock, void *data, int len)
++
++int data_send(struct socket *sock, struct kcom_pkt* pkt)
+ {
+-	struct iovec iov;
+-	int i=-1;
+-	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
+-	mm_segment_t oldfs;
+-	struct kcom_pkt *send_pkt;
+-	char buf[32];
+-	struct timeval start,stop;
+-
+-	do_gettimeofday(&start);
+-	send_pkt=data;
+-
+-
+-   	/* Send kcom_pkt header */
+-	iov.iov_base = send_pkt;
+-	iov.iov_len = sizeof(*send_pkt);
+-
+-	oldfs = get_fs();
+-	set_fs(KERNEL_DS);
+-
+-	while (iov.iov_len > 0) {
+-		i = sock_sendmsg(sock, &msg, iov.iov_len);
+-		if ((i == -ENOSPC) || (i == -EAGAIN)) {
+-			OMBUG("Retrying hdr...error %d\n", i);
+-			schedule_timeout(HZ/1000);
+-			continue;
+-		}
+-		if (i == -EFAULT) {
+-			OMBUG("Error %d sending data. Unable to access data.\n", i);
+-			OMBUG("Data may need to be copied into a temporary buffer to be sent.\n");
+-		}
+ 
+-		if (i < 0) {
+-			set_fs(oldfs);
+-			return -1;
++	struct msghdr msg;
++	struct kvec packet[2] = {{0}};
++	int nvec = 1;
++	int total_data = 0;
++	int first_vec = 0;
++	int sent = 0;
++	int i;
++
++	/* Sanity check */
++
++	if (!pkt) {
++	    OMBUG("Can not send null packet\n");
++	    return -EFAULT;
++	}
++
++	/* Prepare packets */
++
++	msg.msg_flags = MSG_WAITALL | MSG_NOSIGNAL;
++
++
++	packet[0].iov_base = pkt;
++	packet[0].iov_len = sizeof(struct kcom_pkt);
++
++	if (pkt->len) {
++		if(!pkt->data) {
++			OMBUG("Paket has data, but no data pointer");
++			return -EFAULT;
+ 		}
+-		iov.iov_base += i;
+-		iov.iov_len -= i;
+- 	}
+-	set_fs(oldfs);
+-
+-	/* Sending too small a data packet, delays.  */
+-	if ((send_pkt->len > 0) && (send_pkt->len < 32)) {
+-		memset(&buf, 0, 32);
+-		memcpy(&buf, send_pkt->data, send_pkt->len);
+-		iov.iov_base = &buf;
+-		iov.iov_len = 32;
+-	} else {
+-		iov.iov_base = send_pkt->data;
+-		iov.iov_len = send_pkt->len;
++		packet[1].iov_base = pkt->data;
++		packet[1].iov_len = pkt->len;
++		nvec++;
++
+ 	}
+-	oldfs = get_fs();
+-	set_fs(KERNEL_DS);
+-	while (iov.iov_len > 0) {
+-		i = sock_sendmsg(sock, &msg, iov.iov_len);
+ 
+-		if ((i == -ENOSPC) || (i == -EAGAIN)) {
++	total_data = packet[0].iov_len + packet[1].iov_len;
++
++	while (total_data > 0) {
+ 
++		sent = kernel_sendmsg(sock, &msg, &packet[first_vec], 2 - first_vec, total_data);
++
++		/* kernel_sendmsg can fail if no space left on skbuff, or interrupted ... */
++		if (-ENOSPC == sent || -EAGAIN == sent || 0 == sent) {
++			OMBUG("Can not send packet for now, retrying\n");
+ 			schedule_timeout(HZ/1000);
+ 			continue;
+ 		}
+-		if (i < 0) {
+-			OMBUG("openMosix: ERROR %d sending data\n", i);
+-			set_fs(oldfs);
+-			return -1;
++
++		/* if something wrong happened :*/
++		if (0 > sent) {
++			OMBUG("Can not send data : error %d\n", sent);
++			return sent;
++		}
++
++		/* check all is sent and retry to send in case not */
++
++		total_data -= sent;
++
++		if (!total_data) break;
++		/* Thanks to fs/cifs/transport.c !*/
++
++		for (i = first_vec; i < 2; i++) {
++
++			if (!packet[i].iov_len) continue;
++
++			if (sent > packet[i].iov_len) {
++				sent -= packet[i].iov_len;
++				packet[i].iov_len = 0;
++			} else {
++				packet[i].iov_base += sent;
++				packet[i].iov_len  -= sent;
++				first_vec = i;
++				break;
++			}
++
+ 		}
+-		iov.iov_base += i;
+-		iov.iov_len -= i;
+- 	}
+-	set_fs(oldfs);
+-	do_gettimeofday(&stop);
+-	return i;
++
++	}
++
++	return pkt->len;
+ 
+ }
+ 
+@@ -429,12 +439,9 @@
+ 				     ,(unsigned)pkt->type, pkt->len);
+ 
+ 			OMDEBUG_KCOMD_DO(4, om_dump_packet(pkt));
+-			data_send(node->sock, (void *)pkt, pkt->len);
++			data_send(node->sock, pkt);
+ 
+-			list_del(&pkt->list);
+-			if (((pkt->type|PKT_ACK)==PKT_ACK) && (pkt->len > 0))
+-				kmem_cache_free(kcom_data_cachep, pkt->data);
+-			kmem_cache_free(kcom_pkt_cachep, pkt);
++			kcom_pkt_delete(pkt);
+ 		}
+ 		write_unlock(&task->out_packs_lock);
+ 	}
+@@ -453,7 +460,6 @@
+ 
+ static void kcomd_thread_initialize(void)
+ {
+-	kcom_data_cachep=kmem_cache_create("kcom_data_cache", 1024, 0, 0, NULL, NULL); /* for now help chase down memory leaks*/
+ 	kcom_pkt_cachep =kmem_cache_create("kcom_pkt_cache", sizeof(struct kcom_pkt), 0, 0, NULL, NULL);
+ 	kcom_task_cachep=kmem_cache_create("kcom_task_cache", sizeof(struct kcom_task), 0, 0, NULL, NULL);
+ 	kcom_node_cachep=kmem_cache_create("kcom_node_cache", sizeof(struct kcom_node), 0, 0, NULL, NULL);
+@@ -748,7 +754,6 @@
+ 	/* spin_unlock(&kcom_nodes_lock);*/
+ 	kfree(sockets_fds_bitmap);
+ 
+-	kmem_cache_destroy(kcom_data_cachep);
+ 	kmem_cache_destroy(kcom_pkt_cachep);
+ 	kmem_cache_destroy(kcom_task_cachep);
+ 	kmem_cache_destroy(kcom_node_cachep);
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:56.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:58.000000000 +0100
+@@ -434,16 +434,18 @@
+ 
+ void kcom_pkt_delete(struct kcom_pkt *pkt)
+ {
+-    if (!pkt) {
+-	OMBUG("Can not delete Null packet\n");
+-	return;
+-    }
+-
+-    if (!list_empty(&pkt->list)) {
+-	list_del(&pkt->list);
+-    }
++	if (!pkt) {
++		OMBUG("Can not delete Null packet\n");
++		return;
++	}
++
++	if (!list_empty(&pkt->list)) {
++		list_del(&pkt->list);
++	}
++
++	if (pkt->data) kfree(pkt->data);
+ 
+-    kmem_cache_free(kcom_pkt_cachep, pkt);
++	kmem_cache_free(kcom_pkt_cachep, pkt);
+ }
+ EXPORT_SYMBOL_GPL(kcom_pkt_delete);
+ 
+@@ -509,17 +511,34 @@
+ 			, len, (unsigned)type, ack);
+ 	pkt=kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
+ 	if (pkt) {
+-		pkt->len = len;
++		pkt->len = 0;
+ 		pkt->type = type;
++		pkt->data = NULL;
+ 
+-		if (len > 0) pkt->data=data;
+-		else pkt->data=NULL;
++		if (len > 0) {
++			pkt->data = kmalloc(len, GFP_KERNEL);
++			if (! pkt->data)
++			{
++				OMBUG("Can't allocate temp space for storing packet !!\n");
++				kcom_pkt_delete(pkt);
++			}
++			pkt->len = len;
++
++			memcpy(pkt->data, data, len);
++		}
+ 
+ 
+ 		INIT_LIST_HEAD(&pkt->list);
+ 
+-		// acks and responses don't get new a msgid
+-		// FIXME:  is this inc SMP safe?
++
++		/*
++		 * SMP FIXME
++		 * Florian Delizy:
++		 * This is *NOT* the correct way to handle this in SMP !!
++		 * we need to have a distinct msgid list or multiple processors
++		 * may send packets with equal id => messup the stack
++		 * SMP FIXME
++		 */
+ 		if ((type & MSG_MASK) == PKT_NEW_MSG)
+ 			pkt->msgid = kcom_msgid++;
+ 

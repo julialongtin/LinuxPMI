@@ -1,0 +1,14 @@
+---
+ arch/x86_64/kernel/entry.S |    2 ++
+ 1 file changed, 2 insertions(+)
+
+Index: linux/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux.orig/arch/x86_64/kernel/entry.S	2007-01-03 17:49:39.000000000 +0100
++++ linux/arch/x86_64/kernel/entry.S	2007-01-03 17:50:52.000000000 +0100
+@@ -1199,3 +1199,5 @@
+ 	decl %gs:pda_irqcount
+ 	ret
+ 	CFI_ENDPROC
++
++#! vim:set syntax=asmx86_64:

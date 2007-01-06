@@ -1,0 +1,100 @@
+Subject: [patch @num@/@total@] Packet deletion fix
+
+This patch fix the packet deletion, (which caused some memory leaks )
+
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-11-13 16:01:53.000000000 +0100
++++ linux/hpc/copyuser.c	2006-11-13 16:02:00.000000000 +0100
+@@ -393,17 +393,13 @@
+ 					kcom_add_packet(task, send_pkt);
+ 
+ 					ret=pkt->addr;  /* the return value is stored in the addr field */
+-					list_del(&pkt->list);
+-					kmem_cache_free(kcom_pkt_cachep, pkt);
+-					set_current_state(TASK_RUNNING);
++					kcom_pkt_delete(pkt);
+ 					schedule();
+ 					return ret;
+ 					break;
+ 
+ 			}
+-
+-			list_del(&pkt->list);
+-			kmem_cache_free(kcom_pkt_cachep, pkt);
++			kcom_pkt_delete(pkt);
+ 		}
+ 
+ 		if (list_empty(&task->in_packs)) {
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-13 16:01:53.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-13 16:02:00.000000000 +0100
+@@ -515,7 +515,7 @@
+ 
+ 
+ 					error = deputy_do_syscall(p, pkt);
+-					list_del(&pkt->list);
++					kcom_pkt_delete(pkt);
+ 				}
+ 			}
+ 
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:58.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:02:00.000000000 +0100
+@@ -732,13 +732,11 @@
+ 			list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
+ 				if ((pkt->len) > 0)
+ 					kfree(pkt->data);
+-				kmem_cache_free(kcom_pkt_cachep, pkt);
+-				list_del(&pkt->list);
++				kcom_pkt_delete(pkt);
+ 			}
+  			write_unlock(&task->out_packs_lock);
+ 
+-			list_del(&task->list);
+-			kmem_cache_free(kcom_task_cachep, task);
++				kcom_pkt_delete(pkt);
+ 		}
+ 		write_unlock(&node->tasks_lock);
+ 
+Index: linux/hpc/kernel.c
+===================================================================
+--- linux.orig/hpc/kernel.c	2006-11-13 16:00:16.000000000 +0100
++++ linux/hpc/kernel.c	2006-11-13 16:02:00.000000000 +0100
+@@ -171,8 +171,7 @@
+ 			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+ 				if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
+ 					if ((pkt->type & SYSCALL_MASK) == DEP_SIGNAL) {
+-						remote_do_signal(p, pkt);
+-						list_del(&pkt->list);
++						kcom_pkt_delete(pkt);
+ 					}
+ 				}
+ 			}
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-13 16:01:55.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-13 16:02:00.000000000 +0100
+@@ -553,9 +553,7 @@
+ 
+ 					task_clear_dflags(p, DINCOMING);
+ 					flush_tlb_mm(p->mm); /* for all the new pages */
+-
+-					list_del(&pkt->list);
+-					kmem_cache_free(kcom_pkt_cachep, pkt);
++					kcom_pkt_delete(pkt);
+ 
+ 					if (!ret) set_current_state(TASK_RUNNING);
+ 
+@@ -570,8 +568,7 @@
+ 					break;
+ 
+ 			}
+-			list_del(&pkt->list);
+-			kmem_cache_free(kcom_pkt_cachep, pkt);
++			kcom_pkt_delete(pkt);
+ 			if (ret)
+ 				goto protocol_exit;
+ 

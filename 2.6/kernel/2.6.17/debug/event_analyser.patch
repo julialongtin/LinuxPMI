@@ -1,0 +1,286 @@
+---
+ arch/x86_64/kernel/entry.S    |   21 +++++++++++
+ arch/x86_64/mm/fault.c        |    5 ++
+ include/linux/eventanalyser.h |   35 ++++++++++++++++++
+ kernel/Makefile               |    1 
+ kernel/events.c               |   80 ++++++++++++++++++++++++++++++++++++++++++
+ kernel/sched.c                |    8 ++++
+ kernel/signal.c               |    7 +++
+ lib/Kconfig.debug             |   21 +++++++++++
+ 8 files changed, 178 insertions(+)
+
+Index: linux/include/linux/eventanalyser.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/linux/eventanalyser.h	2006-12-18 17:40:30.000000000 +0100
+@@ -0,0 +1,35 @@
++#ifndef __EVENT_ANALYSER_H__
++#define __EVENT_ANALYSER_H__
++/*
++ * This code is GPL
++ *
++ * Copyright Florian Delizy <fdy@e8dev.com>
++ */
++
++#include <linux/sched.h>
++
++
++enum event_enum {
++	EA_SYSCALL  		= 0,
++	EA_KERNEL_ENTER		= 1,
++	EA_USER_ENTER		= 2,
++	EA_TASK_START,
++	EA_TASK_END,
++	EA_PAGEFAULT,
++	EA_SIGNAL,
++	EA_EXCEPTION,
++	EA_OM_ASK_MIGRATION,
++	EA_OM_MIGRATE_START,
++	EA_OM_MIGRATE_END,
++	EA_DO_EXIT,
++};
++
++
++
++
++void ea_activate(int activate);
++extern asmlinkage void ea_append_event( const struct task_struct * const task
++		        , enum event_enum event, long param, long param2);
++
++
++#endif /*__EVENT_ANALYSER_H__*/
+Index: linux/kernel/events.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/kernel/events.c	2006-12-18 17:46:20.000000000 +0100
+@@ -0,0 +1,80 @@
++#include <linux/eventanalyser.h>
++#include <linux/config.h>
++
++struct task_short_desc {
++	pid_t pid;
++	char name[TASK_COMM_LEN];
++};
++
++
++struct event_entry {
++	long jiffies;
++	pid_t pid;
++	enum event_enum event;
++	long param;
++	long param2;
++};
++
++struct log_space {
++	struct event_entry events[CONFIG_EA_MAX_EVENTS];
++	struct task_short_desc tasks[CONFIG_EA_MAX_TASKS];
++
++	long event_entry_nb;
++	long task_count;
++};
++struct log_space ea_data = {0, 0, 0, 0};
++int event_analyser_activation = 0;
++
++void ea_activate(int activate)
++{
++	event_analyser_activation = activate;
++}
++
++void add_task_desc(const struct task_struct * const task)
++{
++	long i;
++
++	for (i = 0; i < ea_data.task_count; i++) {
++		if (ea_data.tasks[i].pid == task->pid)
++			return;
++	}
++
++	if (ea_data.task_count >= CONFIG_EA_MAX_TASKS)
++		return;
++
++	i = ea_data.task_count;
++	ea_data.task_count++;
++
++	ea_data.tasks[i].pid = task->pid;
++	strncpy(ea_data.tasks[i].name, task->comm, TASK_COMM_LEN);
++}
++
++pid_t tracked_pid;
++
++asmlinkage void ea_append_event( const struct task_struct * const taskq
++		 , enum event_enum event, long param, long param2)
++{
++	long index = 0;
++	struct task_struct * task = (struct task_struct *) taskq;
++
++	if (!event_analyser_activation)
++		return;
++
++	if (!task)
++		task = current;
++
++	if (tracked_pid == task->pid) {
++		__asm__ __volatile__ ("nop; nop; nop; nop; nop");
++	}
++
++	index = ea_data.event_entry_nb%CONFIG_EA_MAX_EVENTS;
++	ea_data.event_entry_nb = (index + 1 % CONFIG_EA_MAX_EVENTS);
++
++	add_task_desc(task);
++
++	ea_data.events[index].jiffies = jiffies;
++	ea_data.events[index].pid = task->pid;
++	ea_data.events[index].event = event;
++	ea_data.events[index].param = param;
++	ea_data.events[index].param2 = param2;
++}
+Index: linux/kernel/Makefile
+===================================================================
+--- linux.orig/kernel/Makefile	2006-12-18 17:35:37.000000000 +0100
++++ linux/kernel/Makefile	2006-12-18 17:40:30.000000000 +0100
+@@ -10,6 +10,7 @@
+ 	    kthread.o wait.o kfifo.o sys_ni.o posix-cpu-timers.o mutex.o \
+ 	    hrtimer.o
+ 
++obj-$(CONFIG_EVENT_ANALYSER) += events.o
+ obj-$(CONFIG_DEBUG_MUTEXES) += mutex-debug.o
+ obj-$(CONFIG_FUTEX) += futex.o
+ ifeq ($(CONFIG_COMPAT),y)
+Index: linux/lib/Kconfig.debug
+===================================================================
+--- linux.orig/lib/Kconfig.debug	2006-12-18 17:35:37.000000000 +0100
++++ linux/lib/Kconfig.debug	2006-12-18 17:40:30.000000000 +0100
+@@ -29,6 +29,27 @@
+ 	  Say Y here if you are developing drivers or trying to debug and
+ 	  identify kernel problems.
+ 
++config EVENT_ANALYSER
++	bool "Kernel event analyser"
++	depends DEBUG_KERNEL
++	help
++	  This eallow the kernel to log internal scheduling events and allow
++	  user to dump it using /proc/kmem interface ... see kernel/events.c
++
++config EA_MAX_EVENTS
++	int "+  Maximum events logged"
++	depends EVENT_ANALYSER
++	default 10000
++	help
++	  Maximum amount of event logged (this is circular buffer)
++
++config EA_MAX_TASKS
++	int "+ Maximum tasks desc stored"
++	depends EVENT_ANALYSER
++	default 1000
++	help
++	  Maximum number of task description stored
++
+ config LOG_BUF_SHIFT
+ 	int "Kernel log buffer size (16 => 64KB, 17 => 128KB)" if DEBUG_KERNEL
+ 	range 12 21
+Index: linux/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux.orig/arch/x86_64/kernel/entry.S	2006-12-18 17:35:37.000000000 +0100
++++ linux/arch/x86_64/kernel/entry.S	2006-12-18 17:40:30.000000000 +0100
+@@ -218,6 +218,27 @@
+ 	jnz tracesys
+ 	cmpq $__NR_syscall_max,%rax
+ 	ja badsys
++
++#ifdef CONFIG_EVENT_ANALYSER
++	SAVE_REST
++	pushq %rax
++	pushq %rdi
++	pushq %rsi
++	pushq %rcx
++	pushq %rdx
++	movq %rdi, %rcx
++	movq  $0, %rdi
++	movq  $0, %rsi		# EA_SYSCALL
++	movq  %rax, %rdx
++	call ea_append_event
++	popq %rdx
++	popq %rcx
++	popq %rsi
++	popq %rdi
++	popq %rax
++	RESTORE_REST
++#endif
++
+ #ifdef CONFIG_OPENMOSIX
+ remote_or_local_syscall:
+ 	movq threadinfo_task(%rcx), %rcx
+Index: linux/arch/x86_64/mm/fault.c
+===================================================================
+--- linux.orig/arch/x86_64/mm/fault.c	2006-12-18 17:35:37.000000000 +0100
++++ linux/arch/x86_64/mm/fault.c	2006-12-18 17:40:31.000000000 +0100
+@@ -34,6 +34,8 @@
+ #include <asm/kdebug.h>
+ #include <asm-generic/sections.h>
+ 
++#include <linux/eventanalyser.h>
++
+ /* Page fault error code bits */
+ #define PF_PROT	(1<<0)		/* or no page found */
+ #define PF_WRITE	(1<<1)
+@@ -482,6 +484,9 @@
+ 		    (address >> 32))
+ 			return;
+ 
++#ifdef CONFIG_EVENT_ANALYSER
++		ea_append_event(current, EA_PAGEFAULT, regs->rip, address);
++#endif
+ 		if (exception_trace && unhandled_signal(tsk, SIGSEGV)) {
+ 			printk(
+ 		       "%s%s[%d]: segfault at %016lx rip %016lx rsp %016lx error %lx\n",
+Index: linux/kernel/sched.c
+===================================================================
+--- linux.orig/kernel/sched.c	2006-12-18 17:35:37.000000000 +0100
++++ linux/kernel/sched.c	2006-12-18 17:40:31.000000000 +0100
+@@ -55,6 +55,8 @@
+ 
+ #include <asm/unistd.h>
+ 
++#include <linux/eventanalyser.h>
++
+ /*
+  * Convert user-nice values [ -20 ... 0 ... 19 ]
+  * to static priority [ MAX_RT_PRIO..MAX_PRIO-1 ],
+@@ -3048,6 +3050,12 @@
+ 
+ 	sched_info_switch(prev, next);
+ 	if (likely(prev != next)) {
++
++#ifdef CONFIG_EVENT_ANALYSER
++		ea_append_event(prev, EA_TASK_END, 0, 0);
++		ea_append_event(next, EA_TASK_START, 0, 0);
++#endif
++
+ 		next->timestamp = now;
+ 		rq->nr_switches++;
+ 		rq->curr = next;
+Index: linux/kernel/signal.c
+===================================================================
+--- linux.orig/kernel/signal.c	2006-12-18 17:35:37.000000000 +0100
++++ linux/kernel/signal.c	2006-12-18 17:40:31.000000000 +0100
+@@ -30,6 +30,8 @@
+ #include <asm/unistd.h>
+ #include <asm/siginfo.h>
+ 
++#include <linux/eventanalyser.h>
++
+ /*
+  * SLAB caches for signal bits.
+  */
+@@ -707,6 +709,11 @@
+ 	struct sigqueue * q = NULL;
+ 	int ret = 0;
+ 
++
++#ifdef CONFIG_EVENT_ANALYSER
++		ea_append_event(t, EA_SIGNAL, sig, current->pid);
++#endif
++
+ 	/*
+ 	 * fast-pathed signals for kernel-internal things like SIGSTOP
+ 	 * or SIGKILL.

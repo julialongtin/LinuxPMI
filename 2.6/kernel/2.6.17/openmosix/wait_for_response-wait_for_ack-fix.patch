@@ -1,0 +1,187 @@
+Subject: [patch @num@/@total@] kcom.c wait_for_ack/wait_for_response fix
+
+This patch fixes the wait_for_ack and wait_for_response functions, 
+
+wait_for_ack is used in the macintosh port and so should not be used (the name 
+I mean), moreover, the function should also check for NACK return, and act
+consequently
+
+
+
+
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:28.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:33.000000000 +0100
+@@ -916,34 +916,53 @@
+  * Description:
+  *    This actually checks the task's incoming pkt list for the matching msgid.
+  *    If the matching pkt is found, it is removed from the list and the function
+- *    returns success, else returns failure.
++ *    returns success, else returns -1 if nothing, and -2 if NACK.
+  **/
+-int wait_for_ack(struct kcom_task *task, unsigned int msgid)
++int kcomd_wait_for_ack(struct kcom_task *task, unsigned int msgid)
+ {
+ 	struct kcom_pkt *pkt, *pkt_next;
++	int ret = -1;
+ 
+-	// spin_lock(&task->spinlock);
+-	if (!list_empty(&task->in_packs)) {
+-		list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+-			if ((msgid==pkt->msgid) && ((pkt->type & MSG_MASK) == PKT_ACK)) {
+-				list_del(&pkt->list);
+-				kmem_cache_free(kcom_pkt_cachep, pkt);
+-
+-				// FIXME:  this doesn't belong here.
+-				// init packet has rpid
+-				if ((pkt->type & MIG_MASK) == MIG_INIT)
+-					task->rpid=pkt->rpid;
+ 
+-				// spin_unlock(&task->spinlock);
++	if (!task || list_empty(&task->in_packs)) goto not_found;
+ 
+-				return 0;
+-			}  // FIXME:  what about nacks?
++	write_lock(&task->spinlock);
++
++	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
++
++		if ((msgid==pkt->msgid)) {
++
++			int type = (pkt->type & MSG_MASK);
++
++
++			// FIXME:  this doesn't belong here.
++			// init packet has rpid
++			if (MIG_INIT == type)
++				task->rpid = pkt->rpid;
++
++			list_del(&pkt->list);
++			kmem_cache_free(kcom_pkt_cachep, pkt);
++
++			if (PKT_ACK == type) {
++				ret = 0;
++				goto return_value_unlock;
++			} else if (PKT_NACK == type) {
++				ret = -2;
++				goto return_value_unlock;
++			} else continue;
++
++
++		}  // FIXME:  what about nacks?
+ 
+-		}
+ 	}
+ 
+-	// spin_unlock(&task->spinlock);
+-	return -1;
++not_found:
++	ret = -1;
++
++return_value_unlock:
++
++	write_unlock(&task->spinlock);
++	return ret;
+ 
+ }
+ 
+@@ -954,21 +973,33 @@
+  *    This actually checks the task's incoming pkt list for the matching msgid.
+  *    If the matching pkt is found, it is removed from the list and the function
+  *    returns success, else returns failure.
+- *    FIXME: very similar to wait_for_ack,  merge??
+  **/
+ int wait_for_response(struct kcom_task *task, unsigned int msgid)
+ {
+ 	struct kcom_pkt *pkt, *pkt_next;
+-	int i=-1;
++	int ret = -1;
+ 
+-	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list)
++	/* Sanity check */
++	if (!task || list_empty(&task->in_packs)) goto not_found;
++
++
++	write_lock(&task->spinlock);
++	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+ 		/* FIXME:  check for resp or ack, too. */
+-		if (msgid==pkt->msgid) {
+-			i=pkt->len;
++		if (msgid == pkt->msgid) {
++			ret = pkt->len;
+ 			list_del(&pkt->list);
+ 			kmem_cache_free(kcom_pkt_cachep, pkt);
++			goto return_value_unlock;
+ 		}
+-	return i;
++	}
++
++not_found:
++	ret = -1;
++
++return_value_unlock:
++	write_unlock(&task->spinlock);
++	return ret;
+ 
+ }
+ 
+@@ -984,13 +1015,16 @@
+ 	struct kcom_task *tsk;
+ 	task_t *p = current;
+ 	unsigned int msgid;
++	int ack;
+ 
+ 	node=kcom_node_find((struct sockaddr *)saddr);
++
+ 	if (node==NULL) {
++
+ 		node=create_connection((struct sockaddr *)saddr);
+ 		if (!node) {
+ 			printk(KERN_ERR "ERROR: Unable to create new connection.\n");
+-			return -1;
++			goto return_error;
+ 		}
+ 	}
+ 
+@@ -999,29 +1033,35 @@
+ 		tsk=kcom_task_create(node, p->pid);
+ 		if (!tsk) {
+ 			printk(KERN_ERR "ERROR: Unable to create task.\n");
+-			return -1;
++			goto return_error;
+ 		}
+ 	}
+ 
+ 	// FIXME:  what if tsk is deleted between kcom_task_send and wait_for_ack ?
+-	msgid=kcom_task_send(tsk, type, datasize, data, NULL, addr);
++	msgid = kcom_task_send(tsk, type, datasize, data, NULL, addr);
+ 
+ 	if (kcomd_task)
+-		send_sig(SIGHUP,kcomd_task,0);
++		send_sig(SIGHUP, kcomd_task, 0);
+ 	else {
+ 		printk(KERN_ERR "Unable to find kcomd daemon.\n");
+-		return -1;
++		goto return_error;
+ 	}
+ 
+ 	set_current_state(TASK_INTERRUPTIBLE);
+-	while (wait_for_ack(tsk, msgid)!=0) {
++
++	while (-1 == (ack =  kcomd_wait_for_ack(tsk, msgid))) {
+ 		schedule();
+ 		set_current_state(TASK_INTERRUPTIBLE);
+ 	}
++
+ 	set_current_state(TASK_RUNNING);
+ 
++	if (ack == -2) goto return_error;
+ 
+ 	return 0;
++
++return_error:
++	return -1;
+ }
+ 
+ /**

@@ -1,0 +1,207 @@
+Subject: [patch @num@/@total@] @name@
+
+This patch clean up the code of kcom_send_* functions that were heavily similar. 
+Now using a tool function
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-24 21:00:55.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-24 21:02:11.000000000 +0100
+@@ -1222,35 +1222,45 @@
+ 
+ 	return 0;
+ }
++
+ /**
+- * kcom_send_nack
++ * __kcom_send_answer
+  *
+- * Description:
+- *    Send an ack to the other node.  This is the matching function for kcom_send_with_ack.
+- *    An ack is the acknowledgement that the kcom pkt was received correctly.
++ * Description
++ *    Send an answer corresponding to the packet and adding the flag
++ *
++ *    @flags_type: must be PKT_ACK or PKT_NACK
+  **/
+-int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt)
+-{
++
++int __kcom_send_answer(task_t *p, const struct kcom_pkt *const recv_pkt
++		      ,int flags_type, int len, char *buf) {
++
+ 	int mig_flag;
+ 	int syscall_flag;
+ 	int node_flag;
+ 	struct kcom_pkt *send_pkt;
+ 	struct kcom_task *send_tsk;
+ 
+-	OMDEBUG_PROTOCOL(1, "protocol: sending NACK packet\n");
++	OMDEBUG_PROTOCOL(2, "protocol: send answering packet (len=%d)\n"
++			, len);
+ 
+-	if (!p) {
+-	    OMBUG("null task!\n");
+-	    return -ENODEV;
++	if(!p) {
++	    	OMBUG("Null task!\n");
++	    	return -ENODEV;
++	}
++
++	if(len && !buf) {
++		OMBUG("Null data, but not 0 len...\n");
++		return -EFAULT;
+ 	}
+ 
+ 	mig_flag=recv_pkt->type & MIG_MASK;
+ 	syscall_flag=recv_pkt->type & SYSCALL_MASK;
+ 
+-	send_tsk = kcom_task_find(p->pid);
++	send_tsk=kcom_task_find(p->pid);
+ 
+ 	if (!send_tsk) {
+-	    OMBUG("can't find kcomd task for pid %d\n", p->pid);
++	    OMBUG("Can't locate task for %d\n", p->pid);
+ 	    return -ENODEV;
+ 	}
+ 
+@@ -1259,23 +1269,33 @@
+ 	else
+ 		node_flag = DEP_FLG;
+ 
+-	send_pkt=kcom_pkt_create(0, mig_flag | syscall_flag | PKT_NACK | node_flag, PKT_NACK, NULL);
++	send_pkt=kcom_pkt_create(len, mig_flag | syscall_flag | node_flag | flags_type
++			        , flags_type, buf);
+ 
+ 	if (!send_pkt) {
+ 	    OMBUG("Can't create packet\n");
+ 	    return -ENODEV;
+ 	}
+ 
+-	/* responses have same msg id as pkt they are responding to. */
+ 	send_pkt->msgid=recv_pkt->msgid;
+-	send_pkt->hpid=recv_pkt->hpid;
+-	send_pkt->rpid=recv_pkt->rpid;
++	send_pkt->hpid=send_tsk->hpid;
++	send_pkt->rpid=send_tsk->rpid;
+ 	send_pkt->resp=recv_pkt->resp;
+ 
+ 	return kcom_add_packet(send_tsk, send_pkt);
+ 
+-	return 0;
+-
++}
++/**
++ * kcom_send_nack
++ *
++ * Description:
++ *    Send an ack to the other node.  This is the matching function for kcom_send_with_ack.
++ *    An ack is the acknowledgement that the kcom pkt was received correctly.
++ **/
++int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt)
++{
++	OMDEBUG_PROTOCOL(1, "protocol: sending NACK packet\n");
++	return __kcom_send_answer(p, recv_pkt, PKT_NACK, 0, NULL);
+ }
+ EXPORT_SYMBOL(kcom_send_nack);
+ 
+@@ -1289,47 +1309,8 @@
+  **/
+ int kcom_send_ack(task_t *p, struct kcom_pkt *recv_pkt)
+ {
+-	int mig_flag;
+-	int syscall_flag;
+-	int node_flag;
+-	struct kcom_pkt *send_pkt;
+-	struct kcom_task *send_tsk;
+-
+ 	OMDEBUG_PROTOCOL(1, "protocol: sending ACK packet\n");
+-
+-	if (!p) {
+-	    OMBUG("null task!\n");
+-	    return -ENODEV;
+-	}
+-
+-	mig_flag=recv_pkt->type & MIG_MASK;
+-	syscall_flag=recv_pkt->type & SYSCALL_MASK;
+-
+-	send_tsk=kcom_task_find(p->pid);
+-
+-	if (!send_tsk) {
+-	    OMBUG("can't find kcomd task for pid %d\n", p->pid);
+-	    return -ENODEV;
+-	}
+-	if (task_test_dflags(p, DREMOTE))
+-		node_flag = REM_FLG;
+-	else
+-		node_flag = DEP_FLG;
+-	send_pkt=kcom_pkt_create(0, mig_flag | syscall_flag | PKT_ACK | node_flag, PKT_ACK, NULL);
+-
+-	if (!send_pkt) {
+-	    OMBUG("Can't create packet\n");
+-	    return -ENODEV;
+-	}
+-
+-	send_pkt->msgid=recv_pkt->msgid; // responses have same msg id as pkt they are responding to.
+-	send_pkt->hpid=recv_pkt->hpid;
+-	send_pkt->rpid=recv_pkt->rpid;
+-	send_pkt->resp=recv_pkt->resp;
+-
+-
+- 	return kcom_add_packet(send_tsk, send_pkt);
+-
++	return __kcom_send_answer(p, recv_pkt, PKT_ACK, 0, NULL);
+ }
+ EXPORT_SYMBOL(kcom_send_ack);
+ 
+@@ -1343,49 +1324,8 @@
+  **/
+ int kcom_send_resp(task_t *p, int len, char *buf, struct kcom_pkt *recv_pkt)
+ {
+-	int mig_flag;
+-	int syscall_flag;
+-	int node_flag;
+-	struct kcom_pkt *send_pkt;
+-	struct kcom_task *send_tsk;
+-
+-	OMDEBUG_PROTOCOL(1, "protocol: send response (len=%d)\n"
+-			, len);
+-
+-	if(!p) {
+-	    OMBUG("Null task!\n");
+-	    return -ENODEV;
+-	}
+-
+-	mig_flag=recv_pkt->type & MIG_MASK;
+-	syscall_flag=recv_pkt->type & SYSCALL_MASK;
+-
+-	send_tsk=kcom_task_find(p->pid);
+-
+-	if (!send_tsk) {
+-	    OMBUG("Can't locate task for %d\n", p->pid);
+-	    return -ENODEV;
+-	}
+-
+-	if (task_test_dflags(p, DREMOTE))
+-		node_flag = REM_FLG;
+-	else
+-		node_flag = DEP_FLG;
+-
+-	send_pkt=kcom_pkt_create(len, mig_flag | syscall_flag | PKT_ACK | node_flag, PKT_ACK, buf);
+-
+-	if (!send_pkt) {
+-	    OMBUG("Can't create packet\n");
+-	    return -ENODEV;
+-	}
+-
+-	send_pkt->msgid=recv_pkt->msgid;
+-	send_pkt->hpid=send_tsk->hpid;
+-	send_pkt->rpid=send_tsk->rpid;
+-	send_pkt->resp=recv_pkt->resp;
+-
+-	return kcom_add_packet(send_tsk, send_pkt);
+-
++	OMDEBUG_PROTOCOL(1, "protocol: send response (len=%d)\n", len);
++	return __kcom_send_answer(p, recv_pkt, PKT_ACK, len, buf);
+ }
+ EXPORT_SYMBOL(kcom_send_resp);
+ 

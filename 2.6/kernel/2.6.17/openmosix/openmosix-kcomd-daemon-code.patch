@@ -1,0 +1,1211 @@
+Index: linux/hpc/kcom.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/kcom.c	2006-11-02 22:51:51.000000000 +0100
+@@ -0,0 +1,1061 @@
++/*
++ *	Copyright (C) 2006 Matt Dew <matt@osource.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/socket.h>
++#include <linux/in.h>
++#include <linux/in6.h>
++#include <linux/net.h>
++#include <linux/syscalls.h>
++#include <net/sock.h>
++#include <net/tcp.h>
++#define _HPC_KCOMC_H 1
++#include <hpc/kcom.h>
++#include <hpc/prototype.h>
++
++
++/**
++ * pkt_data_read
++ *
++ * Description:
++ * 	read the data that was send following the pkt header.
++ * 	wait until all data has been read.
++ * 	The ->len field = size of the data in bytes.
++ **/
++int pkt_data_read(struct kcom_node *node, struct kcom_pkt *pkt, int len, char *data)
++{
++	struct socket *sock=node->sock;
++	struct iovec iov;
++	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
++	mm_segment_t oldfs;
++	int i;
++	char buf[32];
++
++	iov.iov_base = data;
++	iov.iov_len = len;
++
++	// Too small of a packet gets delayed before being sent. Even with TCP_NODELAY
++	if (len < 32) {
++		iov.iov_base = &buf;
++		iov.iov_len = 32;
++	}
++
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++
++	while (iov.iov_len > 0) {
++		i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
++		if ((i == -ENOSPC) || (i == -EAGAIN)) {
++			schedule_timeout(HZ/1000);
++			continue;
++		}
++		if (i < 0) {
++			printk("ERROR %d receiving data.\n", i);
++			set_fs(oldfs);
++			return -1;
++		}
++		iov.iov_base += i;
++ 	}
++
++	set_fs(oldfs);
++
++	if (len < 32) {
++		memcpy(data, buf, len);
++	}
++
++	return len;
++}
++EXPORT_SYMBOL_GPL(pkt_data_read);
++
++/**
++ * pkt_hdr_read
++ *
++ * Description:
++ * 	read the pkt header of the data transmission.
++ * 	The hdr indicates the type and size of the data.
++ * 	All packet headers are the same size.
++ **/
++struct kcom_pkt* pkt_hdr_read(struct kcom_node *node)
++{
++	struct iovec iov;
++	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
++	struct kcom_pkt *recv_kcom_pkt;
++	mm_segment_t oldfs;
++	struct socket *sock=node->sock;
++	int i;
++
++	recv_kcom_pkt=kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
++	iov.iov_base = recv_kcom_pkt;
++	iov.iov_len = sizeof(*recv_kcom_pkt);
++
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++	while (iov.iov_len > 0) {
++		i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
++		if ((i == -ENOSPC) || (i == -EAGAIN)) {
++			schedule_timeout(HZ/1000);
++			continue;
++		}
++		if (i < 0) {
++			printk("ERROR %d receiving header.\n", i);
++			set_fs(oldfs);
++			return NULL;
++		}
++		iov.iov_base += i;
++ 	}
++	set_fs(oldfs);
++
++	if (iov.iov_len==0) // all expected data received.
++		return recv_kcom_pkt;
++	else
++		return NULL;
++}
++EXPORT_SYMBOL_GPL(pkt_hdr_read);
++
++
++/**
++ * alloc_fd_bitmap
++ *
++ * Description:
++ * 	Allocate a large enough file descriptor bitmap
++ * 	for the do_select function to operate correctly
++ * 	on all open sockets.
++ *    If more space needs to be allocated, it will be
++ **/
++int alloc_fd_bitmap(int fd)
++{
++	struct kcom_node *node;
++	int size;
++	int n=fd;
++
++	if (fd <= maxfds)
++		return 0;
++
++	n = max(fd,max(fd4, fd6));
++	// spin_lock(&kcom_nodes_lock);
++	list_for_each_entry(node, &kcom_nodes, list)
++		n = max(node->fd, n);
++	// spin_unlock(&kcom_nodes_lock);
++
++
++	maxfds = n;
++
++	kfree(sockets_fds_bitmap);
++
++	size = FDS_BYTES(n);
++	sockets_fds_bitmap = kmalloc(6 * size, GFP_KERNEL);
++	if (!sockets_fds_bitmap)
++		return ENOMEM;
++
++	sockets_fds.in      = (unsigned long *)  sockets_fds_bitmap;
++	sockets_fds.out     = (unsigned long *) (sockets_fds_bitmap +   size);
++	sockets_fds.ex      = (unsigned long *) (sockets_fds_bitmap + 2*size);
++	sockets_fds.res_in  = (unsigned long *) (sockets_fds_bitmap + 3*size);
++	sockets_fds.res_out = (unsigned long *) (sockets_fds_bitmap + 4*size);
++	sockets_fds.res_ex  = (unsigned long *) (sockets_fds_bitmap + 5*size);
++
++	return 0;
++
++}
++EXPORT_SYMBOL_GPL(alloc_fd_bitmap);
++
++/**
++ * kcom_pkt_create
++ *
++ * Description:
++ * 	Allocate a kcom pkt from the slab.
++ * 	Initialize the pkt len,type and data ptr.
++ *    If this is a new packet, increment the global msgid counter.
++ **/
++struct kcom_pkt *kcom_pkt_create(int len, int type, int ack, char *data)
++{
++	struct kcom_pkt *pkt;
++
++	pkt=kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
++	if (pkt) {
++		pkt->len = len;
++		pkt->type = type;
++
++		if (len > 0)
++			pkt->data=data;
++		else
++			pkt->data=NULL;
++
++		// acks and responses don't get new a msgid
++		// FIXME:  is this inc SMP safe?
++		if ((type & MSG_MASK) == PKT_NEW_MSG)
++			pkt->msgid = kcom_msgid++;
++
++		return pkt;
++	}
++
++	return NULL;
++}
++EXPORT_SYMBOL_GPL(kcom_pkt_create);
++
++/**
++ * __kcom_node_find
++ *
++ * Description:
++ * 	Does the actual work of finding, if it exists,
++ * 	an existing node connection.
++ *    The IP address is the determiner.
++ **/
++struct kcom_node *__kcom_node_find(struct sockaddr *saddr)
++{
++	struct kcom_node *tmp;
++	struct sockaddr_in *saddr_tmp;
++	struct sockaddr_in *saddr_in=(struct sockaddr_in *)saddr;
++	unsigned long int node_addr, find_addr;
++
++	find_addr=saddr_in->sin_addr.s_addr;
++
++	list_for_each_entry(tmp, &kcom_nodes, list) {
++		saddr_tmp=(struct sockaddr_in *)&tmp->addr;
++		node_addr=saddr_tmp->sin_addr.s_addr;
++
++		if ((saddr_in->sin_family == saddr_tmp->sin_family) &&
++			(find_addr == node_addr))
++			return tmp;
++	}
++	return NULL;
++}
++
++
++/**
++ * kcom_node_find
++ *
++ * Description:
++ * 	calls __kcom_node_find
++ *    ,  which searches for a node
++ **/
++struct kcom_node *kcom_node_find(struct sockaddr *saddr)
++{
++	task_t *p=current;
++	struct kcom_node *node;
++	struct sockaddr_in *addr_tmp;
++	unsigned int addr;
++
++	addr_tmp=(struct sockaddr_in *)p->om.whereto;
++	addr=addr_tmp->sin_addr.s_addr;
++	// spin_lock(&kcom_nodes_lock);
++	node = __kcom_node_find(saddr);
++	// spin_unlock(&kcom_nodes_lock);
++	return node;
++}
++EXPORT_SYMBOL_GPL(kcom_node_find);
++
++/**
++ * kcom_node_add
++ *
++ * Description:
++ * 	adds a new node connection.
++ *    signals kcomd that it needs to watch this node's socket.
++ *    the file descriptor belonging to this socket is mapped in
++ *    kcomd, but the function sock_map_fd. Due to a kernel security
++ *    check file descriptors are not shared between kernel threads.
++ **/
++struct kcom_node *kcom_node_add(struct socket *sock)
++{
++	struct kcom_node *node;
++
++	node=kmem_cache_alloc(kcom_node_cachep, SLAB_KERNEL);
++	if (!node) {
++		printk("Unable to allocate node space.\n");
++		return NULL; //-ENOMEM;
++	}
++	INIT_LIST_HEAD(&node->list);
++	INIT_LIST_HEAD(&node->tasks);
++	node->sock=sock;
++	node->fd = 0; // kcomd will see this and assign a fd properly.
++
++	/*
++	if (!sock->ops || !sock->ops->getname)
++		goto err;
++
++	ret = sock->ops->getname
++	check if it's already in node list.
++	*/
++
++	spin_lock(&kcom_nodes_lock);
++	list_add_tail(&node->list, &kcom_nodes);
++	spin_unlock(&kcom_nodes_lock);
++
++	if (kcomd_task)
++		send_sig(SIGHUP,kcomd_task,0);
++	else {
++		printk("Unable to find kcomd daemon.\n");
++		return NULL;
++	}
++	printk("leaving kcom_node_add\n");
++	return node;
++
++}
++EXPORT_SYMBOL_GPL(kcom_node_add);
++
++/**
++ * kcom_node_del
++ *
++ * Description:
++ * 	removes this node from the list of connected nodes.
++ *    releases the corresponding socket and file descriptor.
++ **/
++int kcom_node_del(struct sockaddr *addr)
++{
++	struct kcom_node *node;
++
++	/* remove the node from the list */
++	spin_lock(&kcom_nodes_lock);
++	node = __kcom_node_find(addr);
++	if (!node) {
++		spin_unlock(&kcom_nodes_lock);
++		return -ENOENT;
++	}
++	list_del(&node->list);
++	spin_unlock(&kcom_nodes_lock);
++
++	/* release and free structure */
++	sys_close(node->fd);
++	sock_release(node->sock);
++	kfree(node);
++	return 0;
++}
++
++/**
++ * set_sockopts
++ *
++ * Description:
++ * 	sets the socket options.  TCP_NODELAY (send tcp packet immediately),
++ *    keepalive intervals, retries, etc.
++ **/
++int set_sockopts(struct socket *sock)
++{
++	int val;
++	int ret;
++	char __user *pval;
++	mm_segment_t oldfs;
++
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++
++	pval = (char __user *) &val;
++
++	val = 1;
++	ret = sock_setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
++		pval, sizeof(val));
++	if (ret) {
++		printk("unable to setsock SO_KEEPALIVE ERROR %d\n", ret);
++		return -1;
++	}
++
++	/* FIXME: check on these, old COMM_MIGD */
++	val = OPENMOSIX_CONNECTION_KEEPALIVE_INTERVAL;
++	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL,
++		pval, sizeof(val));
++	if (ret) {
++		printk("Unable to setsock TCP_KEEPINTVL ERROR %d\n", ret);
++		return -1;
++	}
++
++	val = OPENMOSIX_CONNECTION_KEEPALIVE_MAXTRIES;
++	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,
++		pval, sizeof(val));
++	if (ret) {
++		printk("unable to setsock TCP_KEEPCNT ERROR %d\n", ret);
++		return -1;
++	}
++
++	val = OPENMOSIX_CONNECTION_KEEPALIVE_TOTAL;
++	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE,
++		pval, sizeof(val));
++	if (ret) {
++		printk("unable to setsock TCP_KEEPIDLE ERROR %d\n", ret);
++		return -1;
++	}
++
++	val=1;
++	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, pval, sizeof(val));
++	if (ret < 0) {
++		printk("Unable to setsockopt ERROR: %d\n", ret);
++		return -1;
++	}
++	set_fs(oldfs);
++	return 0;
++
++}
++
++/**
++ * create_connection
++ *
++ * Description:
++ * 	creates the network connection to other nodes and creates
++ *    a node that holds this connection. Stores the corresponding
++ *    IP address in the node as well.
++ **/
++struct kcom_node *create_connection(struct sockaddr *saddr)
++{
++
++	struct socket *sock;
++	// int fd;
++	int ret;
++	int error;
++	DECLARE_WAITQUEUE(wait, current);
++	unsigned long timo=MAX_SCHEDULE_TIMEOUT;
++
++	struct kcom_node *node;
++
++	ret = sock_create(saddr->sa_family, SOCK_STREAM, IPPROTO_TCP, &sock);
++	if (ret < 0) {
++		printk("Unable to sock_create. ret=%d\n", ret);
++		return NULL;
++	}
++
++	error = sock->ops->connect(sock, saddr, sizeof(struct sockaddr_in), O_NONBLOCK);
++	add_wait_queue(sock->sk->sk_sleep, &wait);
++	while (sock->state != SS_CONNECTED) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		error = sock->ops->connect(sock, saddr, sizeof(struct sockaddr_in), O_NONBLOCK);
++		if (error != -EALREADY || (error = sock_error(sock->sk)))
++			break;
++		timo = schedule_timeout(timo);
++		if (timo <= 0) {
++			error = -EAGAIN;
++			break;
++		}
++	}
++	remove_wait_queue(sock->sk->sk_sleep, &wait);
++	set_current_state(TASK_RUNNING);
++
++	if (error < 0) {
++		printk("Unable to create connection. Err %d\n", error);
++		return NULL;
++	}
++
++	node = kcom_node_find(saddr);
++	if (!node) {
++		node = kcom_node_add(sock);
++		if (!node) {
++			printk("Unable to add node\n");
++			return NULL;
++		}
++		memcpy(&node->addr, saddr, sizeof(*saddr));
++		ret=set_sockopts(node->sock);
++		if (ret) {
++			printk("Unable to set socket options.\n");
++			return NULL;
++		}
++	} else
++		printk("Connection already exists. Not creating new node.\n");
++
++	return node;
++
++}
++EXPORT_SYMBOL_GPL(create_connection);
++
++/**
++ * kcom_task_create
++ *
++ * Description:
++ * 	creates the kcom task related to this process.
++ *    initializes the linked lists for incoming and outgoing
++ *    pkts.  Also links this task to the corresponding node
++ *    since only migrated(ing) processes need kcom tasks.
++ **/
++struct kcom_task *kcom_task_create(struct kcom_node *node, int pid)
++{
++	struct kcom_task *kctask;
++	task_t *p;
++
++	kctask=kmem_cache_alloc(kcom_task_cachep, SLAB_KERNEL);
++
++	if (kctask) {
++		if (pid==0) { // this only occurs when remote node is creating new proc.
++				kctask->rpid = 0;
++				kctask->hpid = pid;
++		} else {
++			// read_lock(&tasklist_lock);
++			p = find_task_by_pid(pid);
++			// read_unlock(&tasklist_lock);
++			if (p) {
++				if (task_test_dflags(p, DREMOTE)) {
++					kctask->rpid = pid;
++					kctask->hpid = 0;
++				} else {
++					kctask->hpid = pid;
++					kctask->rpid = 0;
++				}
++			} else {
++				printk("ERROR creating kcom task.\n");
++				return NULL;
++			}
++		}
++
++		kctask->node = node;
++		INIT_LIST_HEAD(&kctask->list);
++		INIT_LIST_HEAD(&kctask->out_packs);
++		INIT_LIST_HEAD(&kctask->in_packs);
++		spin_lock_init(&kctask->spinlock);
++
++		list_add_tail(&kctask->list, &node->tasks);
++	} else
++		return NULL;
++	return kctask;
++}
++EXPORT_SYMBOL_GPL(kcom_task_create);
++
++/**
++ * kcom_task_delete
++ *
++ * Description:
++ * 	deletes the kcom task and frees the memory.
++ *    Lookins that dflags to see if this is a process is a
++ *    remote process corresponding to a migrated process or
++ *    if its a 'home' process.
++ *    This is needed since both process ID's are kept in the
++ *    kcom task.
++ **/
++int kcom_task_delete(pid_t pid)
++{
++	struct kcom_node *tmp;
++	struct kcom_task *tmp2;
++	struct kcom_task *tsk;
++
++	// Can't delete task until all pkts are sent.
++	tsk=kcom_task_find(pid);
++	// FIXME:  SMP safety
++	while (!list_empty(&tsk->out_packs))
++			schedule_timeout(HZ/1000);
++
++
++	list_for_each_entry(tmp, &kcom_nodes, list)
++		list_for_each_entry(tmp2, &tmp->tasks, list)
++			if (task_test_dflags(current, DREMOTE)) {
++				if (tmp2->rpid == pid) {
++					printk("Deleting remote kcom task %u.\n", pid);
++					list_del(&tmp2->list);
++					kfree(tmp2);
++					break;
++				}
++			 } else {
++				if (tmp2->hpid == pid) {
++					printk("Deleting home kcom task %u.\n", pid);
++					list_del(&tmp2->list);
++					kfree(tmp2);
++					break;
++				}
++			}
++	return 0;
++}
++
++/**
++ * __kcom_task_find
++ *
++ * Description:
++ * 	Searches all nodes for a specific task, by pid.
++ *    Lookins that dflags to see if this is a process is a
++ *    remote process corresponding to a migrated process or
++ *    if its a 'home' process.
++ *    This is needed since both process ID's are kept in the
++ *    kcom task.
++ **/
++struct kcom_task *__kcom_task_find(pid_t pid, int where)
++{
++	struct kcom_node *tmp;
++	struct kcom_task *tmp2;
++	task_t *p;
++
++	// read_lock(&tasklist_lock);
++	p = find_task_by_pid(pid);
++	// read_unlock(&tasklist_lock);
++	if (!p) {
++		printk("Unable to find pid %u\n", pid);
++		return NULL;
++	}
++
++	if (where == 0) {
++		// printk("FUNCTION: kcom_task_find\n");
++		list_for_each_entry(tmp, &kcom_nodes, list)
++			list_for_each_entry(tmp2, &tmp->tasks, list)
++				// One remote node, we're interested in rpid
++				// One home node, we're interested in hpid
++				if (task_test_dflags(p, DREMOTE)) {
++					// printk("kcom_task_find: dremote\n");
++					if (tmp2->rpid == pid)
++						return tmp2;
++				} else {
++					// printk("kcom_task_find: ddeputy\n");
++					if (tmp2->hpid == pid)
++						return tmp2;
++				}
++	} else if (where == 1) { // home
++		list_for_each_entry(tmp, &kcom_nodes, list)
++			list_for_each_entry(tmp2, &tmp->tasks, list)
++				if (tmp2->hpid == pid)
++					return tmp2;
++	} else if (where == 2) { // remote
++		list_for_each_entry(tmp, &kcom_nodes, list)
++			list_for_each_entry(tmp2, &tmp->tasks, list)
++				if (tmp2->rpid == pid)
++					return tmp2;
++
++	}
++	// printk("leaving FUNCTION: kcom_task_find\n");
++	return NULL;
++}
++
++/**
++ * kcom_task_find
++ *
++ * Description:
++ * 	calls __kcom_task_find, specifically looking
++ *    for a home pid.
++ **/
++struct kcom_task *kcom_home_task_find(pid_t pid)
++{
++	struct kcom_task *tmp;
++
++	tmp = __kcom_task_find(pid, 1);
++	return tmp;
++
++}
++EXPORT_SYMBOL_GPL(kcom_home_task_find);
++
++/**
++ * kcom_remote_task_find
++ *
++ * Description:
++ * 	calls __kcom_task_find, specifically looking
++ *    for a remote pid.
++ **/
++struct kcom_task *kcom_remote_task_find(pid_t pid)
++{
++	struct kcom_task *tmp;
++
++	tmp = __kcom_task_find(pid, 2);
++	return tmp;
++
++}
++EXPORT_SYMBOL_GPL(kcom_remote_task_find);
++
++
++/**
++ * kcom_task_find
++ *
++ * Description:
++ * 	calls __kcom_task_find,  which looks
++ *    at dflags to determine for itself if this is
++ *    a home or remote pid.
++ **/
++struct kcom_task *kcom_task_find(pid_t pid)
++{
++	struct kcom_task *tmp;
++
++	tmp = __kcom_task_find(pid, 0);
++	return tmp;
++}
++EXPORT_SYMBOL_GPL(kcom_task_find);
++
++/**
++ * kcom_task_send
++ *
++ * Description:
++ * 	Creates a packet to send and adds it to the task's outbound list.
++ *    No acknowledgement or reply is expected.
++ **/
++int kcom_task_send(struct kcom_task *tsk, int type, int datasize, char *data, char *resp, unsigned long addr)
++{
++	// struct kcom_task *tsk;
++	struct kcom_pkt *pkt;
++
++	// printk("kcom_task_send:\n");
++	// tsk = kcom_task_find(pid);
++	if (!tsk)
++		return -ENODEV;
++
++	/* put pkt in kcom_task */
++	pkt = kcom_pkt_create(datasize, type, PKT_NEW_MSG, data);
++	if (!pkt)
++		return -1;
++
++	if (!resp)
++		pkt->resp=data;
++	else
++		pkt->resp=resp;
++
++	pkt->hpid=tsk->hpid;
++	pkt->rpid=tsk->rpid;
++	pkt->addr=addr; // used by vma_pages
++
++	// spin_lock(&tsk->spinlock);
++	list_add_tail(&pkt->list, &tsk->out_packs);
++	// spin_unlock(&tsk->spinlock);
++
++	return pkt->msgid;
++}
++
++/**
++ * kcom_send
++ *
++ * Description:
++ *    Tell this function what type of pkt, the data and where to send it and
++ *    it finds the corresponding node, creating a new connection if necessary
++ *    Finds the corresponding tsk, creating it if necessary.
++ * 	creates a packet to send and adds it to the task's outbound list.
++ *    No acknowledgement or reply is expected.
++ **/
++int kcom_send(int type, int datasize, char *data, unsigned long addr, struct sockaddr_in *saddr)
++{
++
++	struct kcom_node *node;
++	struct kcom_task *tsk;
++	task_t *p = current;
++	unsigned int msgid;
++
++	node=kcom_node_find((struct sockaddr *)saddr);
++	if (node==NULL) {
++		printk("node not found, creating new connection.\n");
++		node=create_connection((struct sockaddr *)saddr);
++		if (node==NULL)
++			return -1;
++	}
++
++	tsk=kcom_task_find(p->pid);
++	if (tsk==NULL) {
++		printk("Task not found. creating new.\n");
++		tsk=kcom_task_create(node, p->pid);
++		if (tsk==NULL)
++			return -1;
++	}
++
++	msgid=kcom_task_send(tsk, type, datasize, data, NULL, addr);
++
++	if (kcomd_task != NULL)
++		send_sig(SIGHUP,kcomd_task,0);
++
++	return 0;
++}
++/**
++ * kcom_send_nack
++ *
++ * Description:
++ *    Send an ack to the other node.  This is the matching function for kcom_send_with_ack.
++ *    An ack is the acknowledgement that the kcom pkt was received correctly.
++ **/
++int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt)
++{
++	// task_t *kcomd_task;
++	int mig_flag;
++	int syscall_flag;
++	int node_flag;
++	struct kcom_pkt *send_pkt;
++	struct kcom_task *send_tsk;
++
++	mig_flag=recv_pkt->type & MIG_MASK;
++	syscall_flag=recv_pkt->type & SYSCALL_MASK;
++
++	send_tsk=kcom_task_find(p->pid);
++
++	if (task_test_dflags(p, DREMOTE))
++		node_flag = REM_FLG;
++	else
++		node_flag = DEP_FLG;
++	send_pkt=kcom_pkt_create(0, mig_flag | syscall_flag | PKT_NACK | node_flag, PKT_NACK, NULL);
++
++	send_pkt->msgid=recv_pkt->msgid; // responses have same msg id as pkt they are responding to.
++	send_pkt->hpid=recv_pkt->hpid;
++	send_pkt->rpid=recv_pkt->rpid;
++	send_pkt->resp=recv_pkt->resp;
++
++	// spin_lock(&send_tsk->spinlock); // done outside this function
++	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
++	// spin_unlock(&send_tsk->spinlock);
++
++	if (kcomd_task)
++		send_sig(SIGHUP,kcomd_task,0);
++	else {
++		printk("Unable to signal kcomd\n");
++		return -1;
++	}
++
++	return 0;
++}
++EXPORT_SYMBOL(kcom_send_nack);
++
++
++/**
++ * kcom_send_ack
++ *
++ * Description:
++ *    Send an ack to the other node.  This is the matching function for kcom_send_with_ack.
++ *    An ack is the acknowledgement that the kcom pkt was received correctly.
++ **/
++int kcom_send_ack(task_t *p, struct kcom_pkt *recv_pkt)
++{
++	// task_t *kcomd_task;
++	int mig_flag;
++	int syscall_flag;
++	int node_flag;
++	struct kcom_pkt *send_pkt;
++	struct kcom_task *send_tsk;
++
++	mig_flag=recv_pkt->type & MIG_MASK;
++	syscall_flag=recv_pkt->type & SYSCALL_MASK;
++
++	send_tsk=kcom_task_find(p->pid);
++
++	if (task_test_dflags(p, DREMOTE))
++		node_flag = REM_FLG;
++	else
++		node_flag = DEP_FLG;
++	send_pkt=kcom_pkt_create(0, mig_flag | syscall_flag | PKT_ACK | node_flag, PKT_ACK, NULL);
++
++	send_pkt->msgid=recv_pkt->msgid; // responses have same msg id as pkt they are responding to.
++	send_pkt->hpid=recv_pkt->hpid;
++	send_pkt->rpid=recv_pkt->rpid;
++	send_pkt->resp=recv_pkt->resp;
++
++	// spin_lock(&send_tsk->spinlock); // done outside this function
++	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
++	// spin_unlock(&send_tsk->spinlock);
++
++	if (kcomd_task)
++		send_sig(SIGHUP,kcomd_task,0);
++	else {
++		printk("Unable to signal kcomd\n");
++		return -1;
++	}
++
++	return 0;
++}
++EXPORT_SYMBOL(kcom_send_ack);
++
++/**
++ * kcom_send_resp
++ *
++ * Description:
++ *    Send an response to the other node.  This is the matching function for kcom_send_with_response.
++ *    An response is both the acknowledgement that the kcom pkt was received correctly (or not) and
++ *    the expected response data.
++ **/
++int kcom_send_resp(task_t *p, int len, char *buf, struct kcom_pkt *recv_pkt)
++{
++	int mig_flag;
++	int syscall_flag;
++	int node_flag;
++	struct kcom_pkt *send_pkt;
++	struct kcom_task *send_tsk;
++
++	mig_flag=recv_pkt->type & MIG_MASK;
++	syscall_flag=recv_pkt->type & SYSCALL_MASK;
++
++	send_tsk=kcom_task_find(p->pid);
++
++	if (task_test_dflags(p, DREMOTE))
++		node_flag = REM_FLG;
++	else
++		node_flag = DEP_FLG;
++
++	send_pkt=kcom_pkt_create(len, mig_flag | syscall_flag | PKT_ACK | node_flag, PKT_ACK, buf);
++
++	send_pkt->msgid=recv_pkt->msgid;
++	send_pkt->hpid=send_tsk->hpid;
++	send_pkt->rpid=send_tsk->rpid;
++	send_pkt->resp=recv_pkt->resp;
++
++	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
++	if (kcomd_task) {
++		printk("Signaling kcomd\n");
++		send_sig(SIGHUP, kcomd_task, 0);
++	} else {
++		printk("Unable to signal kcomd\n");
++		return -1;
++	}
++	return 0;
++
++}
++EXPORT_SYMBOL(kcom_send_resp);
++
++/**
++ * wait_for_ack
++ *
++ * Description:
++ *    This actually checks the task's incoming pkt list for the matching msgid.
++ *    If the matching pkt is found, it is removed from the list and the function
++ *    returns success, else returns failure.
++ **/
++int wait_for_ack(struct kcom_task *task, unsigned int msgid)
++{
++	struct kcom_pkt *pkt, *pkt_next;
++
++	// spin_lock(&task->spinlock);
++	if (!list_empty(&task->in_packs)) {
++		list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
++			if ((msgid==pkt->msgid) && ((pkt->type & MSG_MASK) == PKT_ACK)) {
++				list_del(&pkt->list);
++				kmem_cache_free(kcom_pkt_cachep, pkt);
++
++				// FIXME:  this doesn't belong here.
++				// init packet has rpid
++				if ((pkt->type & MIG_MASK) == MIG_INIT)
++					task->rpid=pkt->rpid;
++
++				// spin_unlock(&task->spinlock);
++
++				return 0;
++			}  // FIXME:  what about nacks?
++
++		}
++	}
++
++	// spin_unlock(&task->spinlock);
++	return -1;
++
++}
++
++/**
++ * wait_for_response
++ *
++ * Description:
++ *    This actually checks the task's incoming pkt list for the matching msgid.
++ *    If the matching pkt is found, it is removed from the list and the function
++ *    returns success, else returns failure.
++ *    FIXME: very similar to wait_for_ack,  merge??
++ **/
++int wait_for_response(struct kcom_task *task, unsigned int msgid)
++{
++	struct kcom_pkt *pkt, *pkt_next;
++	int i=-1;
++
++	printk("wait_for_response...for msgid %u\n", msgid);
++		list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list)
++			// FIXME:  check for resp or ack, too.
++			if (msgid==pkt->msgid) {
++				i=pkt->len;
++				list_del(&pkt->list);
++				kmem_cache_free(kcom_pkt_cachep, pkt);
++				printk("wait_for_response: i=%d, addr=%lu pkt->resp=%s\n", i, pkt->addr, pkt->resp);
++			}
++	return i;
++
++}
++
++/**
++ * kcom_send_with_ack
++ *
++ * Description:
++ *    Same as kcom_send except this function waits until an (n)ack is received.
++ **/
++int kcom_send_with_ack(int type, int datasize, char *data, unsigned long addr, struct sockaddr_in *saddr)
++{
++	struct kcom_node *node;
++	struct kcom_task *tsk;
++	task_t *p = current;
++	unsigned int msgid;
++
++	node=kcom_node_find((struct sockaddr *)saddr);
++	if (node==NULL) {
++		printk("Node not found, creating new connection.\n");
++		node=create_connection((struct sockaddr *)saddr);
++		if (!node) {
++			printk("ERROR: Unable to create new connection.\n");
++			return -1;
++		}
++	}
++
++	tsk=kcom_task_find(p->pid);
++	if (tsk==NULL) {
++		printk("Task not found. creating new.\n");
++		tsk=kcom_task_create(node, p->pid);
++		if (!tsk) {
++			printk("ERROR: Unable to create task.\n");
++			return -1;
++		}
++	}
++
++	// FIXME:  what if tsk is deleted between kcom_task_send and wait_for_ack ?
++	msgid=kcom_task_send(tsk, type, datasize, data, NULL, addr);
++
++	if (kcomd_task)
++		send_sig(SIGHUP,kcomd_task,0);
++	else {
++		printk("Unable to find kcomd daemon.\n");
++		return -1;
++	}
++
++	set_current_state(TASK_INTERRUPTIBLE);
++	while (wait_for_ack(tsk, msgid)!=0) {
++		schedule();
++		set_current_state(TASK_INTERRUPTIBLE);
++	}
++	set_current_state(TASK_RUNNING);
++	printk("Done waiting. msgid %d received...\n", msgid);
++
++
++	return 0;
++}
++
++/**
++ * kcom_send_with_response
++ *
++ * Description:
++ *    Same as kcom_send except this function waits until an response is received.
++ **/
++int kcom_send_with_response(int type, int datasize, char *data, unsigned long addr, char *resp, struct sockaddr_in *saddr)
++{
++	struct kcom_node *node;
++	struct kcom_task *tsk;
++	task_t *p = current;
++	unsigned int msgid;
++	int i=-1;
++
++	node=kcom_node_find((struct sockaddr *)saddr);
++	if (node==NULL) {
++		printk("node not found, creating new connection.\n");
++		node=create_connection((struct sockaddr *)saddr);
++		if (node==NULL) {
++			return -1;
++		}
++	}
++
++	tsk=kcom_task_find(p->pid);
++	if (!tsk) {
++		printk("Task not found. Creating new.\n");
++		tsk=kcom_task_create(node, p->pid);
++		if (!tsk) {
++			printk("Unable to create task\n");
++			return -1;
++		}
++	}
++
++	msgid=kcom_task_send(tsk, type, datasize, data, resp, addr);
++
++	if (kcomd_task)
++		send_sig(SIGHUP,kcomd_task,0);
++	else {
++		printk("Unable to find kcomd daemon.\n");
++		return -1;
++	}
++
++	set_current_state(TASK_INTERRUPTIBLE);
++retry:
++	i=wait_for_response(tsk, msgid);
++	if (i < 0) {
++		set_current_state(TASK_INTERRUPTIBLE); // Not the correct packet. go back to sleep
++		schedule();
++		goto retry;
++	}
++	printk("Done waiting. msgid %d received...\n", msgid);
++
++	return i;
++}
+Index: linux/include/hpc/kcom.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/kcom.h	2006-11-02 22:51:51.000000000 +0100
+@@ -0,0 +1,140 @@
++/*
++ *	Copyright (C) 2006 Matt Dew <matt@osource.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#ifndef _HPC_KCOM_H
++#define _HPC_KCOM_H
++
++#include <linux/sched.h>
++#include <net/sock.h>
++#include <hpc/comm.h>
++
++#include <linux/in.h>
++
++#include <hpc/protocol.h>
++
++#define DAEMON_IP4_PORT	0xB55 // 2901
++#define DAEMON_IP6_PORT	0xB56 // 2902
++
++/* PROTOTYPES */
++#ifdef _HPC_KCOMC_H
++	DEFINE_SPINLOCK(kcom_nodes_lock);
++	EXPORT_SYMBOL(kcom_nodes_lock);
++
++	struct list_head kcom_nodes = LIST_HEAD_INIT(kcom_nodes);
++	EXPORT_SYMBOL(kcom_nodes);
++
++	fd_set_bits sockets_fds;
++	EXPORT_SYMBOL(sockets_fds);
++
++	char *sockets_fds_bitmap = NULL;
++	EXPORT_SYMBOL(sockets_fds_bitmap);
++
++	int maxfds = -1;
++	EXPORT_SYMBOL(maxfds);
++
++	struct socket *lsock4=NULL, *lsock6=NULL;
++	EXPORT_SYMBOL(lsock4);
++	EXPORT_SYMBOL(lsock6);
++
++	int fd4, fd6;
++	EXPORT_SYMBOL(fd4);
++	EXPORT_SYMBOL(fd6);
++
++	// pid_t kcom_pid;
++	// EXPORT_SYMBOL(kcom_pid);
++
++	task_t *kcomd_task=NULL;
++	EXPORT_SYMBOL(kcomd_task);
++
++	unsigned int kcom_msgid=0;
++	EXPORT_SYMBOL(kcom_msgid);
++
++	kmem_cache_t *kcom_data_cachep;
++	EXPORT_SYMBOL(kcom_data_cachep);
++
++	kmem_cache_t *kcom_pkt_cachep;
++	EXPORT_SYMBOL(kcom_pkt_cachep);
++
++	kmem_cache_t *kcom_task_cachep;
++	EXPORT_SYMBOL(kcom_task_cachep);
++
++	kmem_cache_t *kcom_node_cachep;
++	EXPORT_SYMBOL(kcom_node_cachep);
++
++	kmem_cache_t *kcom_saddr_cachep;
++	EXPORT_SYMBOL(kcom_saddr_cachep);
++
++
++#else /* _HPC_KCOMC_H */
++	extern int maxfds;
++	extern spinlock_t kcom_nodes_lock;
++	extern struct list_head kcom_nodes;
++
++	extern fd_set_bits sockets_fds;
++	extern char *sockets_fds_bitmap;
++	extern struct socket *lsock4;
++	extern struct socket *lsock6;
++	extern int fd4;
++	extern int fd6;
++
++	//extern pid_t kcom_pid;
++	extern task_t *kcomd_task;
++	extern kmem_cache_t *kcom_data_cachep;
++	extern kmem_cache_t *kcom_pkt_cachep;
++	extern kmem_cache_t *kcom_task_cachep;
++	extern kmem_cache_t *kcom_node_cachep;
++	extern kmem_cache_t *kcom_saddr_cachep;
++#endif /* _HPC_KCOMC_H */
++
++
++struct kcom_pkt
++{
++	pid_t hpid;     /* home pid of the this process */
++	pid_t rpid;     /* remote pid of 'that' other node process */
++	int len;      /* len of data */
++	int type;     /* type of data */
++	// int ack;      /* new msg, ack or response */
++	unsigned long addr; /* used by mm pages */
++	unsigned int msgid;
++	struct list_head list;
++	char *data;   /* ptr of data */
++	char *resp;   /* ptr of response */
++};
++
++struct kcom_node
++{
++	int fd;                 /* fd to send packet */
++	struct socket *sock;    /* socket */
++	struct sockaddr addr;   /* addr of this node */
++	spinlock_t tasks_lock;  /* lock for the list */
++	struct list_head tasks; /* list of task */
++	struct list_head list; /* list of nodes */
++	spinlock_t spinlock;
++};
++
++struct kcom_task
++{
++        pid_t hpid;          /* pid of the home node process owning this struct */
++        pid_t rpid;          /* pid of remote node process */
++        struct kcom_node *node; /* node of the process to send/recv */
++        struct list_head list;  /* list of process using some node */
++
++        struct list_head out_packs;
++        // struct kcom_pkt in_packs;
++        struct list_head in_packs;
++			spinlock_t spinlock; // FIXME:   ?? two spinlocks?  in_packs, out_packs
++};
++
++extern int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt);
++#endif /* _HPC_KCOM_H */

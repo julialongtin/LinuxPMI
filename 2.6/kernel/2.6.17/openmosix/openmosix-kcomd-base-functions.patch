@@ -1,0 +1,1093 @@
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-02 22:50:57.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-02 22:51:22.000000000 +0100
+@@ -21,6 +21,12 @@
+ #include <net/sock.h>
+ #include <net/tcp.h>
+ 
++#include <linux/inet.h>
++#include <hpc/kcom.h>
++#include <hpc/prototype.h>
++
++static int kcomd_done=0;
++
+ /**
+  * socket_listen - Creates the network socket and maps it to a file descriptor
+  **/
+@@ -78,162 +84,6 @@
+ 	return socket_listen((struct sockaddr *) &saddr6, res);
+ }
+ 
+-struct kcom_pkt
+-{
+-	pid_t pid;    /* pid of the process */
+-	int len;      /* len of data */
+-	int type;     /* type of data */
+-	char *data;   /* ptr of data */
+-	struct list_head list;
+-};
+-
+-struct kcom_node
+-{
+-	int fd;                 /* fd to send packet */
+-	struct socket *sock;    /* socket */
+-	struct sockaddr addr;   /* addr of this node */
+-	spinlock_t tasks_lock;  /* lock for the list */
+-	struct list_head tasks; /* list of task */
+-	struct list_head list; /* list of nodes */
+-};
+-
+-struct kcom_task
+-{
+-	pid_t pid;              /* pid of the process owning this struct */
+-	struct kcom_node *node; /* node of the process to send/recv */
+-	struct list_head list;  /* list of process using some node */
+-
+-	struct list_head out_packs;
+-	struct kcom_pkt in_packs;
+-};
+-
+-static DEFINE_SPINLOCK(kcom_nodes_lock);
+-struct list_head kcom_nodes = LIST_HEAD_INIT(kcom_nodes);
+-
+-fd_set_bits sockets_fds;
+-char *sockets_fds_bitmap = NULL;
+-int maxfds = -1;
+-
+-static int alloc_fd_bitmap(int fd4, int fd6)
+-{
+-	struct kcom_node *node;
+-	int n, size;
+-
+-	n = max(fd4, fd6);
+-
+-	spin_lock(&kcom_nodes_lock);
+-	list_for_each_entry(node, &kcom_nodes, list)
+-		n = max(node->fd, n);
+-	spin_unlock(&kcom_nodes_lock);
+-
+-	/* we don't need to reallocate the bitmap */
+-	if (n <= maxfds)
+-		return 0;
+-	maxfds = n;
+-
+-	kfree(sockets_fds_bitmap);
+-
+-	size = FDS_BYTES(n);
+-	sockets_fds_bitmap = kmalloc(6 * size, GFP_KERNEL);
+-	if (!sockets_fds_bitmap)
+-		return ENOMEM;
+-
+-	sockets_fds.in      = (unsigned long *)  sockets_fds_bitmap;
+-	sockets_fds.out     = (unsigned long *) (sockets_fds_bitmap +   size);
+-	sockets_fds.ex      = (unsigned long *) (sockets_fds_bitmap + 2*size);
+-	sockets_fds.res_in  = (unsigned long *) (sockets_fds_bitmap + 3*size);
+-	sockets_fds.res_out = (unsigned long *) (sockets_fds_bitmap + 4*size);
+-	sockets_fds.res_ex  = (unsigned long *) (sockets_fds_bitmap + 5*size);
+-
+-	return 0;
+-}
+-
+-struct kcom_pkt *kcom_pkt_create(int len, int type, char *data)
+-{
+-	struct kcom_pkt *pkt;
+-	pkt = kzalloc(sizeof(struct kcom_pkt), GFP_KERNEL);
+-	if (pkt) {
+-		pkt->len = len;
+-		pkt->type = type;
+-		pkt->data = data;
+-	}
+-	return pkt;
+-}
+-
+-struct kcom_node *__kcom_node_find(struct sockaddr *saddr)
+-{
+-	struct kcom_node *tmp;
+-
+-	list_for_each_entry(tmp, &kcom_nodes, list) {
+-		/* FIXME compare fields, no memcmp */
+-		if (memcmp(saddr, tmp, sizeof(struct sockaddr)) == 0)
+-			return tmp;
+-	}
+-	return NULL;
+-}
+-
+-struct kcom_node *kcom_node_find(struct sockaddr *saddr)
+-{
+-	struct kcom_node *node;
+-
+-	spin_lock(&kcom_nodes_lock);
+-	node = __kcom_node_find(saddr);
+-	spin_unlock(&kcom_nodes_lock);
+-	return node;
+-}
+-
+-int kcom_node_add(int fd, struct socket *sock)
+-{
+-	struct kcom_node *node;
+-
+-	node = kzalloc(sizeof(struct kcom_node), GFP_KERNEL);
+-	if (!node)
+-		return -ENOMEM;
+-	INIT_LIST_HEAD(&node->list);
+-	node->sock = sock;
+-	node->fd = fd;
+-	/*
+-	if (!sock->ops || !sock->ops->getname)
+-		goto err;
+-
+-	ret = sock->ops->getname
+-	check if it's already in node list.
+-	*/
+-
+-	spin_lock(&kcom_nodes_lock);
+-	list_add(&node->list, &kcom_nodes);
+-	spin_unlock(&kcom_nodes_lock);
+-	return 0;
+-}
+-
+-int kcom_node_del(struct sockaddr *addr)
+-{
+-	struct kcom_node *node;
+-
+-	/* remove the node from the list */
+-	spin_lock(&kcom_nodes_lock);
+-	node = __kcom_node_find(addr);
+-	if (!node) {
+-		spin_unlock(&kcom_nodes_lock);
+-		return -ENOENT;
+-	}
+-	list_del(&node->list);
+-	spin_unlock(&kcom_nodes_lock);
+-
+-	/* release and free structure */
+-	sys_close(node->fd);
+-	sock_release(node->sock);
+-	kfree(node);
+-	return 0;
+-}
+-
+-int comm_simple(int type, char * data)
+-{
+-	return 0;
+-}
+-int comm_ack(void);
+-int comm_iovec(void);
+-int comm_iovec_ack(void);
+ 
+ /**
+  * accept_connection
+@@ -248,6 +98,7 @@
+ static int accept_connection(struct socket *lsock)
+ {
+ 	struct socket *sock;
++	struct kcom_node *node;
+ 	int ret, fd;
+ 	int len;
+ 	struct sockaddr_in address;
+@@ -277,11 +128,16 @@
+ 		goto err_accept;
+ 	}
+ 
+-	ret = kcom_node_add(fd, sock);
+-	if (ret < 0) {
++ 	node = kcom_node_add(sock);
++ 	if (node==NULL) {
+ 		printk(KERN_ERR "openMosix: Error adding new node\n");
+ 		goto errfd;
+ 	}
++ 	// Store the IP addr.
++ 	memcpy(&node->addr, &address, sizeof(address));
++ 	node->fd=fd;
++ 	// Allocated file descriptor bitmap for do_select
++ 	alloc_fd_bitmap(fd);
+ 
+ 	return fd;
+ 
+@@ -292,101 +148,287 @@
+ 	return -1;
+ }
+ 
+-int data_read(struct kcom_node *node)
++/**
++ * data_send
++ *
++ * Description:
++ *    Sends the kcom pkt header and the data, if any.
++ **/
++int data_send(struct socket *sock, void *data, int len)
+ {
+-	return 0;
++	struct iovec iov;
++	int i=-1;
++	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
++	mm_segment_t oldfs;
++	struct kcom_pkt *send_pkt;
++	char buf[32];
++	struct timeval start,stop;
++
++	do_gettimeofday(&start);
++	send_pkt=data;
++
++
++   	/* Send kcom_pkt header */
++	iov.iov_base = send_pkt;
++	iov.iov_len = sizeof(*send_pkt);
++
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++
++	while (iov.iov_len > 0) {
++		printk(KERN_DEBUG "sock_sendmsg hdr\n");
++		i = sock_sendmsg(sock, &msg, iov.iov_len);
++		if ((i == -ENOSPC) || (i == -EAGAIN)) {
++			printk(KERN_ERR "Retrying hdr...error %d\n", i);
++			schedule_timeout(HZ/1000);
++			continue;
++		}
++		if (i == -EFAULT) {
++			printk(KERN_ERR "Error %d sending data. Unable to access data.\n", i);
++			printk(KERN_ERR "Data may need to be copied into a temporary buffer to be sent.\n");
++		}
++
++		if (i < 0) {
++			set_fs(oldfs);
++			return -1;
++		}
++		iov.iov_base += i;
++		iov.iov_len -= i;
++ 	}
++	set_fs(oldfs);
++
++	/* Sending too small a data packet, delays.  */
++	if ((send_pkt->len > 0) && (send_pkt->len < 32)) {
++		memset(&buf, 0, 32);
++		memcpy(&buf, send_pkt->data, send_pkt->len);
++		iov.iov_base = &buf;
++		iov.iov_len = 32;
++	} else {
++		iov.iov_base = send_pkt->data;
++		iov.iov_len = send_pkt->len;
++	}
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++	while (iov.iov_len > 0) {
++		printk(KERN_DEBUG "sock_sendmsg data\n");
++		i = sock_sendmsg(sock, &msg, iov.iov_len);
++
++		if ((i == -ENOSPC) || (i == -EAGAIN)) {
++
++			printk(KERN_DEBUG "Retrying data...error %d\n", i);
++			schedule_timeout(HZ/1000);
++			continue;
++		}
++		if (i < 0) {
++			printk(KERN_ERR"openMosix: ERROR %d sending data\n", i);
++			set_fs(oldfs);
++			return -1;
++		}
++		iov.iov_base += i;
++		iov.iov_len -= i;
++ 	}
++	set_fs(oldfs);
++	do_gettimeofday(&stop);
++	return i;
++
+ }
+ 
+ /**
+- * data_write
++ * data_exception
+  *
+  * Description:
+- *    Loops through all tasks that have processes on the node that
+- *    has data to send, and sends the pkts.
+- *    Once the pkt has been sent, its memory is freed.
++ *    Dropped connections need to be cleaned up.  Memory freed,
++ *    file descriptors unmapped, etc.  This function does that.
++ *    FIXME:  Supposed to, but doesn't work yet.  Dropped connections
++ *    are seen as data, of length 0, is available for read.
+  **/
+-int data_write(struct kcom_node *node)
++int data_exception(struct kcom_node *node)
+ {
+-	return 0;
+-}
+ 
+-int dispatch(struct kcom_node *node)
+-{
++	sock_release(node->sock);
++	sys_close(node->fd);
++	/* kfree(node->sock);*/
++	list_del(&node->list);
++	kmem_cache_free(kcom_node_cachep, node);
++	/* kfree(node);*/
+ 	return 0;
+ }
+ 
+-struct kcom_task *kcom_task_create(struct kcom_node *node, int pid)
++/**
++ * append_in_packs
++ *
++ * Description:
++ *    Packets are either new pkts, or responses or (n)acks to new pkts.
++ *    If a pkt isn't new, a function is waiting on it (wait_for_ack/response),
++ *    so we can just add this pkt to the task in_packs list.
++ **/
++int append_in_packs(struct kcom_pkt *recv_kcom_pkt)
+ {
+-	struct kcom_task *kctask;
++	struct kcom_task *tsk;
++	task_t *sltsk;
+ 
+-	kctask = kzalloc(sizeof(struct kcom_task), GFP_KERNEL);
+-	if (kctask) {
+-		kctask->pid = pid;
+-		kctask->node = node;
+-		INIT_LIST_HEAD(&kctask->list);
++	/* FIXME : should spinlock/unlock */
++
++	if ((recv_kcom_pkt->type & NODE_MASK) == DEP_FLG) {
++		/* command from dep to remote? */
++
++		tsk=kcom_remote_task_find(recv_kcom_pkt->rpid);
++		if (tsk) {
++			/* spin_lock(&tsk->spinlock); */
++			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
++			/* spin_unlock(&tsk->spinlock); */
++		} else {
++			printk(KERN_ERR "unable to find remote pid %u\n", recv_kcom_pkt->rpid);
++			return -1;
++
++		}
++		/* read_lock(&tasklist_lock); */
++		sltsk=find_task_by_pid(recv_kcom_pkt->rpid);
++		/* read_unlock(&tasklist_lock); */
++		if (sltsk) {
++			wake_up_process(sltsk);
++		} else {
++			printk(KERN_ERR "Unable to find remote pid %u to wake up\n", recv_kcom_pkt->rpid);
++			return -1;
++		}
+ 
+-		list_add(&kctask->list, &node->tasks);
++	} else {
++		tsk=kcom_home_task_find(recv_kcom_pkt->hpid);
++		if (tsk) {
++			/* spin_lock(&tsk->spinlock); */
++			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
++			/* spin_unlock(&tsk->spinlock); */
++		} else {
++			printk(KERN_ERR "unable to find home pid %u\n", recv_kcom_pkt->hpid);
++			return -1;
++		}
++		/* read_lock(&tasklist_lock); */
++		sltsk=find_task_by_pid(recv_kcom_pkt->hpid);
++		/* read_unlock(&tasklist_lock); */
++		if (sltsk) {
++			wake_up_process(sltsk);
++		} else {
++			printk(KERN_ERR "Unable to find home pid %u to wake up\n", recv_kcom_pkt->hpid);
++			return -1;
++		}
+ 	}
+-	return kctask;
++	return 0;
+ }
+ 
+-int kcom_task_delete(int pid)
++/**
++ * pkt_read
++ *
++ * Description:
++ *    Reads the packet header and, if exists, data,  and put in appropriate task's
++ *    in_pack list.
++ *    All but 3 pkts an be handled by the task itself.
++ *    MIG_INIT creates a new process and task
++ *    MIG_GO/COME_HOME - migration command.
++ **/
++int pkt_read(struct kcom_node *node)
+ {
+-	struct kcom_node *tmp;
+-	struct kcom_task *tmp2;
++	struct kcom_pkt *recv_kcom_pkt;
++	int i=0;
++	task_t *sltsk;
++
++	// read in hdr
++	recv_kcom_pkt=pkt_hdr_read(node);
++	if (recv_kcom_pkt==NULL) {
++		printk(KERN_ERR "ERROR: incomplete header pkt\n");
++		goto error_recv;
++	}
++
++	// read in any data
++	if (recv_kcom_pkt->len > 0) {
++		if ((recv_kcom_pkt->type & MSG_MASK) == PKT_NEW_MSG) {
++			recv_kcom_pkt->data=kzalloc(recv_kcom_pkt->len, GFP_KERNEL);
++			i=pkt_data_read(node, recv_kcom_pkt, recv_kcom_pkt->len, recv_kcom_pkt->data);
++		} else {
++			i=pkt_data_read(node, recv_kcom_pkt, recv_kcom_pkt->len, recv_kcom_pkt->resp);
++		}
++		if (i<recv_kcom_pkt->len) {
++			printk(KERN_ERR "ERROR: incomplete data pkt\n");
++			goto error_recv;
++		}
++	}
+ 
+-	list_for_each_entry(tmp, &kcom_nodes, list)
+-		list_for_each_entry(tmp2, &tmp->tasks, list)
+-			if (tmp2->pid == pid) {
+-				list_del(&tmp2->list);
+-				kfree(tmp2);
++
++	if ((recv_kcom_pkt->type & MSG_MASK) == PKT_NEW_MSG) {
++		switch (recv_kcom_pkt->type & MIG_MASK) {
++			case MIG_INIT:
++				mig_do_receive_init(node, recv_kcom_pkt);
+ 				break;
+-			}
++			case MIG_GO_HOME:
++				mig_do_receive_home(node, recv_kcom_pkt);
++				break;
++			case MIG_COME_HOME:
++				sltsk=find_task_by_pid(recv_kcom_pkt->rpid);
++				task_register_migration(sltsk);
++				break;
++			default:
++				append_in_packs(recv_kcom_pkt);
++
++				break;
++		}
++	} else { // PKT_ACK and PKT_RESP go straight to in_packs
++		append_in_packs(recv_kcom_pkt);
++	}
++
+ 	return 0;
+-}
+ 
+-struct kcom_task *__kcom_task_find(int pid)
+-{
+-	struct kcom_node *tmp;
+-	struct kcom_task *tmp2;
++error_recv:
++	printk(KERN_DEBUG "sock_close\n");
++	sys_close(node->fd);
++	printk(KERN_DEBUG "sock_release\n");
++	sock_release(node->sock);
+ 
+-	list_for_each_entry(tmp, &kcom_nodes, list)
+-		list_for_each_entry(tmp2, &tmp->tasks, list)
+-			if (tmp2->pid == pid)
+-				return tmp2;
+-	return NULL;
+-}
++	#if 0
++	node->fd=-1;
++	printk("kfree(data)\n");
++	kfree(pkt);
++	printk("kfree(node->sock)\n");
++	kfree(node->sock);
++	printk("list_del\n");
++	#endif
+ 
+-struct kcom_task *kcom_task_find(int pid)
+-{
+-	struct kcom_task *tmp;
++	list_del(&node->list);
++	kmem_cache_free(kcom_node_cachep, node);
++
++	#if 0
++	kfree(node);
++	#endif
++	return -1;
+ 
+-	tmp = __kcom_task_find(pid);
+-	return tmp;
+ }
+ 
+-int kcom_task_send(int pid, int type, char *data)
+-{
+-	struct kcom_task *tsk;
+-	struct kcom_pkt *pkt;
+ 
+-	tsk = kcom_task_find(pid);
+-	if (!tsk)
+-		return -ENODEV;
+-
+-	/* put pkt in kcom_task */
+-	pkt = kcom_pkt_create(0, 0, NULL);
+-	if (!pkt)
+-		return -1;
+-	list_add(&pkt->list, &tsk->out_packs);
+ 
+-	/* go to sleep */
+-	/* wait reply */
++/**
++ * data_write
++ *
++ * Description:
++ *    Loops through all tasks that have processes on the node that
++ *    has data to send, and sends the pkts.
++ *    Once the pkt has been sent, its memory is freed.
++ **/
++int data_write(struct kcom_node *node)
++{
++	struct kcom_task *task, *task_next;
++	struct kcom_pkt *pkt, *pkt_next;
++
++	list_for_each_entry_safe(task, task_next, &node->tasks, list)
++		list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
++			data_send(node->sock, (void *)pkt, pkt->len);
++
++			list_del(&pkt->list);
++			if (((pkt->type|PKT_ACK)==PKT_ACK) && (pkt->len > 0))
++				kmem_cache_free(kcom_data_cachep, pkt->data);
++			kmem_cache_free(kcom_pkt_cachep, pkt);
++		}
+ 
+ 	return 0;
+ }
+ 
+-
+ /**
+  * kcomd_thread
+  *
+@@ -403,28 +445,53 @@
+ static int kcomd_thread(void *nothing)
+ {
+ 	int ret;
+-	struct socket *lsock4, *lsock6;
+-	int fd4, fd6;
+-
++	struct kcom_node *node, *node_next;
++	struct kcom_task *task, *task_next;
++	struct kcom_pkt *pkt, *pkt_next;
++	s64 timeout = -1;
++	int n = -1;
++	siginfo_t info; /* matt*/
++	int sig;
++	int outpkt_cnt, inpkt_cnt, tsk_cnt;
++	int err;
++	struct timeval start,stop;
++
++	fd4=-1;
++	fd6=-1;
++	kcomd_done=0;
+ 	printk(KERN_INFO "kcomd: init\n");
++
++	kcom_data_cachep=kmem_cache_create("kcom_data_cache", 1024, 0, 0, NULL, NULL); /* for now help chase down memory leaks*/
++	kcom_pkt_cachep=kmem_cache_create("kcom_pkt_cache", sizeof(struct kcom_pkt), 0, 0, NULL, NULL);
++	kcom_task_cachep=kmem_cache_create("kcom_task_cache", sizeof(struct kcom_task), 0, 0, NULL, NULL);
++	kcom_node_cachep=kmem_cache_create("kcom_node_cache", sizeof(struct kcom_node), 0, 0, NULL, NULL);
++	/* kcom_saddr_cachep=kmem_cache_create("kcom_saddr_cache", sizeof(struct sockaddr), 0, 0, NULL, NULL);*/
++
+ 	daemonize("kcomd", 0);
++	sigfillset(&current->blocked);
++
++	/* kcom_pid=current->pid;*/
++	/* read_lock(&tasklist_lock);*/
++	/* kcomd_task = find_task_by_pid(current->pid);*/
++	/* read_unlock(&tasklist_lock);*/
++	kcomd_task=current;
+ 
+ retry_listen:
+-	fd4 = socket_listen_ip4(0xb55, &lsock4);
+-	fd6 = socket_listen_ip6(0xb56, &lsock6);
++	fd4 = socket_listen_ip4(DAEMON_IP4_PORT, &lsock4);
++	fd6 = socket_listen_ip6(DAEMON_IP6_PORT, &lsock6);
+ 
+ 	if (fd4 == -1 && fd6 == -1) {
+ 		schedule_timeout_interruptible(HZ);
+ 		goto retry_listen;
+ 	}
+ 
+-	while (1)
++
++	n=alloc_fd_bitmap(max(fd4, fd6));
++
++	while (kcomd_done==0)
+ 	{
+-		s64 timeout = -1;
+-		int n = -1;
+-		struct kcom_node *node;
+ 
+-		alloc_fd_bitmap(fd4, fd6);
++
+ 		n = maxfds;
+ 
+ 		zero_fd_set(n, sockets_fds.in);
+@@ -432,61 +499,221 @@
+ 		zero_fd_set(n, sockets_fds.ex);
+ 
+ 		/* add listening sockets to the set */
+-		set_bit(fd4, sockets_fds.in);
+-		set_bit(fd6, sockets_fds.in);
++		if (fd4!=-1)
++			set_bit(fd4, sockets_fds.in);
++		if (fd6!=-1)
++			set_bit(fd6, sockets_fds.in);
+ 
+ 		/* for each nodes (set fds.in && fds.out) */
+-		spin_lock(&kcom_nodes_lock);
++		/* printk("spin_lock\n");*/
++		/* spin_lock(&kcom_nodes_lock);*/
++		/* printk("Setting bits for select (n=%d, maxfds=%d).\n", n, maxfds);*/
++	do_gettimeofday(&start);
+ 		list_for_each_entry(node, &kcom_nodes, list) {
+-			struct kcom_task *task;
++			/* printk("node->fd=%d\n", node->fd);*/
+ 
+-			if (node->fd == -1 || node->fd > maxfds)
++			if (node->fd == -1 || node->fd > maxfds) {
++				/* spin_unlock(&kcom_nodes_lock);*/
+ 				continue;
++			}
++
++			/* if a file descriptor is open, we want select to pay attention.*/
++			/* printk("Setting in bit for fd%d\n", node->fd);*/
+ 			set_bit(node->fd, sockets_fds.in);
++			set_bit(node->fd, sockets_fds.ex);
++
++			/* if there are packets to be sent, select should pay attention.*/
+ 			list_for_each_entry(task, &node->tasks, list)
+-				if (!list_empty(&task->out_packs))
++				if (!list_empty(&task->out_packs)) {
++					/* printk("Setting out bit for fd%d\n", node->fd);*/
+ 					set_bit(node->fd, sockets_fds.out);
++				}
+ 		}
+-		spin_unlock(&kcom_nodes_lock);
++	do_gettimeofday(&stop);
++	if (stop.tv_sec==start.tv_sec)
++		printk(KERN_DEBUG "node_loopB: time %lu usecs\n", stop.tv_usec-start.tv_usec);
++	else
++		printk(KERN_DEBUG "node_loopB: time %lu usecs\n", ((stop.tv_sec*USEC_PER_SEC)+stop.tv_usec)-((start.tv_sec*USEC_PER_SEC)+start.tv_usec));
++		/* spin_unlock(&kcom_nodes_lock);*/
++		/* printk("Done setting bits for select.\n");*/
++
++
+ 
+ 		zero_fd_set(n, sockets_fds.res_in);
+ 		zero_fd_set(n, sockets_fds.res_out);
+ 		zero_fd_set(n, sockets_fds.res_ex);
+ 
++	do_gettimeofday(&start);
++		allow_signal (SIGHUP);
++		timeout=-1;
++		printk(KERN_DEBUG "............DO_SELECT...........");
+ 		ret = do_select(n + 1, &sockets_fds, &timeout);
+-		if (ret < 0)
++		printk(KERN_DEBUG " returned %d.\n", ret);
++		/* SIGHUP is sent by kcom_send to wake up kcomd so it can send the packet*/
++		while (signal_pending (current)) {
++			printk(KERN_DEBUG "[kcomd] dequeueing signal\n");
++			sig = dequeue_signal (current, &current->blocked, &info);
++		}
++		disallow_signal (SIGHUP);
++		if (ret == 0) { /* -1=error; 0=signal*/
++			/* New kernel security, prohibits sharing file descriptors between kernel threads.*/
++			/* We have to allocate them here.*/
++			/* We'll do that for the signal so we don't have to do it every iteration.*/
++
++			list_for_each_entry(node, &kcom_nodes, list)
++				if (node->fd==0) { /* unmapped*/
++					/* printk("Found unmapped socket\n");*/
++					node->fd = sock_map_fd(node->sock);
++					alloc_fd_bitmap(node->fd);
++				}
+ 			continue;
++		} else if (ret < 0) {/* -1=error; 0=signal*/
++			printk(KERN_ERR "do_select returned an error. \n");
++			schedule_timeout_interruptible(HZ);
++		}
++	do_gettimeofday(&stop);
++	if (stop.tv_sec==start.tv_sec)
++		printk(KERN_DEBUG "do_select: time %lu usecs\n", stop.tv_usec-start.tv_usec);
++	else
++		printk(KERN_DEBUG "do_select: time %lu usecs\n", ((stop.tv_sec*USEC_PER_SEC)+stop.tv_usec)-((start.tv_sec*USEC_PER_SEC)+start.tv_usec));
+ 
+ 		/* test listening sockets */
+-		if (fd4 != -1 && test_bit(fd4, sockets_fds.res_in))
++		if (fd4 != -1 && test_bit(fd4, sockets_fds.res_in)) {
+ 			accept_connection(lsock4);
+-		if (fd6 != -1 && test_bit(fd6, sockets_fds.res_in))
++			continue;
++		}
++
++		if (fd6 != -1 && test_bit(fd6, sockets_fds.res_in)) {
+ 			accept_connection(lsock6);
++			continue;
++		}
+ 
+ 		/* for each nodes { test bit, in, out and do stuff } */
+-		spin_lock(&kcom_nodes_lock);
+-		list_for_each_entry(node, &kcom_nodes, list) {
+-			if (test_bit(node->fd, sockets_fds.res_in))
+-				data_read(node);
+-			if (test_bit(node->fd, sockets_fds.res_out))
++		/* spin_lock(&kcom_nodes_lock);*/
++restart:
++		list_for_each_entry_safe(node, node_next, &kcom_nodes, list) {
++			/*
++			if (test_bit(node->fd, sockets_fds.res_ex)) {
++				data_exception(node);
++				goto restart;
++			}
++			*/
++			if (test_bit(node->fd, sockets_fds.res_in)) {
++				do_gettimeofday(&start);
++				err=pkt_read(node);
++				do_gettimeofday(&stop);
++				if (stop.tv_sec==start.tv_sec)
++					printk(KERN_DEBUG "pkt_read: time %lu usecs\n", stop.tv_usec-start.tv_usec);
++				else
++					printk(KERN_DEBUG "pkt_read: time %lu usecs\n", ((stop.tv_sec*USEC_PER_SEC)+stop.tv_usec)-((start.tv_sec*USEC_PER_SEC)+start.tv_usec));
++				if (err!=0) {
++					kcomd_done=1;
++					printk(KERN_ERR "ERROR receiving data.\nQuitting.\n");
++					continue;
++				}
++			}
++			if (node->fd!=-1 && test_bit(node->fd, sockets_fds.res_out)) {
++				do_gettimeofday(&start);
+ 				data_write(node);
++				do_gettimeofday(&stop);
++				if (stop.tv_sec==start.tv_sec)
++					printk(KERN_DEBUG "data_write: time %lu usecs\n", stop.tv_usec-start.tv_usec);
++				else
++					printk(KERN_DEBUG "data_write: time %lu usecs\n", ((stop.tv_sec*USEC_PER_SEC)+stop.tv_usec)-((start.tv_sec*USEC_PER_SEC)+start.tv_usec));
++			}
+ 		}
+-		spin_unlock(&kcom_nodes_lock);
++		/* spin_unlock(&kcom_nodes_lock);*/
+ 	}
+ 
+-	return -1;
++/* DONE*/
++	printk(KERN_INFO "kcomd: cleaning up.\n");
++	/* spin_lock(&kcom_nodes_lock);*/
++	if (fd4!=-1) {
++		printk(KERN_DEBUG "fd4=%d\n", fd4);
++		printk(KERN_DEBUG "sys_close(fd4)\n");
++		sys_close(fd4);
++		if (lsock4) {  /* doesn't like this.  Help????????*/
++			printk(KERN_DEBUG "sock_release(lsock4)\n");
++			sock_release(lsock4);
++		}
++	}
++
++	if (fd6!=-1) {
++		printk(KERN_DEBUG "fd6=%d\n", fd6);
++		if (lsock6) { /* doesn't like this.  Help????????*/
++			printk(KERN_DEBUG "sock_release(lsock6)\n");
++			sock_release(lsock6);
++		}
++		printk(KERN_DEBUG "sys_close(fd6)\n");
++		sys_close(fd6);
++	}
++	printk(KERN_DEBUG "Stopped accepting new connections.\n");
++
++	list_for_each_entry_safe(node, node_next, &kcom_nodes, list) {
++		list_for_each_entry_safe(task, task_next, &node->tasks, list) {
++			list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
++				if ((pkt->len) > 0)
++					kfree(pkt->data);
++				kmem_cache_free(kcom_pkt_cachep, pkt);
++				list_del(&pkt->list);
++			}
++			list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
++				if ((pkt->len) > 0)
++					kfree(pkt->data);
++				kmem_cache_free(kcom_pkt_cachep, pkt);
++				list_del(&pkt->list);
++			}
++			list_del(&task->list);
++			kmem_cache_free(kcom_task_cachep, task);
++		}
++
++
++		printk(KERN_DEBUG "sock_release, %d\n", node->fd);
++		sock_release(node->sock);
++		printk(KERN_DEBUG "sys_close\n");
++		sys_close(node->fd);
++		/* kfree(node->sock);*/
++		printk(KERN_DEBUG "list_del\n");
++		list_del(&node->list);
++		printk(KERN_DEBUG "kmem_cache_free\n");
++		kmem_cache_free(kcom_node_cachep, node);
++		/* kfree(node);*/
++	}
++	/* spin_unlock(&kcom_nodes_lock);*/
++	kfree(sockets_fds_bitmap);
++
++	kmem_cache_destroy(kcom_data_cachep);
++	kmem_cache_destroy(kcom_pkt_cachep);
++	kmem_cache_destroy(kcom_task_cachep);
++	kmem_cache_destroy(kcom_node_cachep);
++
++	kcomd_task=NULL;
++	printk(KERN_INFO "kcomd: exit\n");
++	return 0;
+ }
+ 
+ static int __init kcomd_init(void)
+ {
+ 	long ret;
+ 
+-	ret = kernel_thread(kcomd_thread, NULL, 0);
++	ret = kernel_thread(kcomd_thread, NULL, CLONE_FS | CLONE_FILES);
+ 	return ret;
+ }
+ 
+ static void __exit kcomd_exit(void)
+ {
++
++	/*
++	 * Set the exit condition and signal kcomd
++	 * kcomd cleans up after itself
++	 */
++	kcomd_done=1;
++
++	if (kcomd_task)
++		send_sig(SIGHUP, kcomd_task, 0);
++	else
++		printk(KERN_WARNING "Unable to to find kcomd daemon\n");
++
+ }
+ 
+ module_init(kcomd_init);
+Index: linux/hpc/Makefile
+===================================================================
+--- linux.orig/hpc/Makefile	2006-11-02 22:50:50.000000000 +0100
++++ linux/hpc/Makefile	2006-11-02 22:51:22.000000000 +0100
+@@ -2,7 +2,7 @@
+ obj-$(CONFIG_KCOMD)     += kcomd.o
+ 
+ # core part
+-obj-$(CONFIG_OPENMOSIX)		+= kernel.o task.o comm.o
++obj-$(CONFIG_OPENMOSIX)		+= kernel.o task.o comm.o kcom.o
+ obj-$(CONFIG_OPENMOSIX)		+= remote.o deputy.o copyuser.o files.o syscalls.o
+ obj-$(CONFIG_OPENMOSIX)		+= migrecv.o migsend.o migctrl.o
+ obj-$(CONFIG_OPENMOSIX)		+= service.o
+Index: linux/include/hpc/protocol.h
+===================================================================
+--- linux.orig/include/hpc/protocol.h	2006-11-02 22:50:50.000000000 +0100
++++ linux/include/hpc/protocol.h	2006-11-02 22:51:22.000000000 +0100
+@@ -34,12 +34,12 @@
+ 	int personality;	/* of process to be sent */
+ };
+ /* handshake types */
++
+ #define HSHAKE_MIG_REQUEST	0x01
+ #define HSHAKE_DEPUTY_PROBE	0x02
+ #define HSHAKE_REPLY		0x04
+ #define HSHAKE_NOTOK		0x08
+ 
+-
+ /* main structure for passing messages between
+  * DEPUTY and REMOTE. Denotes the type of request,
+  * and the length of it */
+@@ -48,30 +48,68 @@
+ 	int type;
+ 	int dlen;
+ };
++// pkt type
+ 
+-#define DEP_FLG		0x100
+-#define MIG_FLG		0x200
+-#define REM_FLG		0x400
+-#define REPLY		0x800
++// bits 3:0 - ACK
++#define MSG_MASK 		0xF
++#define PKT_NEW_MSG	0x0
++#define PKT_ACK		0x1
++#define PKT_RESP		0x2
++#define PKT_NACK		0x3
++
++#define NODE_MASK		0xF000
++#define DEP_FLG		0x1000
++#define MIG_FLG		0x2000
++#define REM_FLG		0x4000
++#define REPLY			0x8000
++
++#define DEP_PKT_NEW_MSG	(DEP_FLAG | PKT_NEW_MSG)
++#define DEP_PKT_ACK		(DEP_FLAG | PKT_ACK)
++#define DEP_PKT_RESP		(DEP_FLAG | PKT_RESP)
++#define DEP_PKT_NACK		(DEP_FLAG | PKT_NACK)
++
++#define REM_PKT_NEW_MSG	(REM_FLAG | PKT_NEW_MSG)
++#define REM_PKT_ACK		(REM_FLAG | PKT_ACK)
++#define REM_PKT_RESP		(REM_FLAG | PKT_RESP)
++#define REM_PKT_NACK		(REM_FLAG | PKT_NACK)
+ 
+ /* commands sent during migration */
+-#define MIG_MM		(MIG_FLG | 0x10)
+-#define MIG_VMA		(MIG_FLG | 0x11)
+-#define MIG_PAGE	(MIG_FLG | 0x12)
+-#define MIG_FP		(MIG_FLG | 0x13)
+-#define MIG_ARCH	(MIG_FLG | 0x14)
+-#define MIG_TASK	(MIG_FLG | 0x15)
+-#define MIG_ABORT	(MIG_FLG | 0x16)
++// #define MIG_MM		(MIG_FLG | 0x10)
++// #define MIG_VMA		(MIG_FLG | 0x11)
++// #define MIG_PAGE	(MIG_FLG | 0x12)
++// #define MIG_FP		(MIG_FLG | 0x13)
++// #define MIG_ARCH	(MIG_FLG | 0x14)
++// #define MIG_TASK	(MIG_FLG | 0x15)
++// #define MIG_ABORT	(MIG_FLG | 0x16)
++
++// PKT_TYPES
++#define MIG_MASK	0xF0
++#define MIG_PING	0x10
++#define MIG_INIT	0x20
++#define MIG_MM		0x30
++#define MIG_VMA	0x40
++#define MIG_PAGE	0x50
++#define MIG_FP		0x60
++#define MIG_ARCH	0x70
++#define MIG_TASK	0x80
++#define MIG_GO_HOME	0x90
++#define MIG_COME_HOME	0xA0
++#define MIG_ABORT	0xB0
++#define MIG_SYSCALL	0xC0
++
++#define MIG_HOME	MIG_GO_HOME
+ 
+ /* commands sent by deputy to remote */
+-#define DEP_COPY_FROM_USER	(DEP_FLG | 0x01)
+-#define DEP_COPY_TO_USER	(DEP_FLG | 0x02)
+-#define DEP_STRNCPY_FROM_USER	(DEP_FLG | 0x03)
+-#define DEP_STRNLEN_USER	(DEP_FLG | 0x04)
+-#define DEP_GET_USER		(DEP_FLG | 0x05)
+-#define DEP_PUT_USER		(DEP_FLG | 0x06)
+-#define DEP_SIGNAL		(DEP_FLG | 0x07)
+-#define DEP_COMING_HOME		(DEP_FLG | 0x10)
++#define SYSCALL_MASK 0xF00
++#define DEP_COPY_FROM_USER	0x100
++#define DEP_COPY_TO_USER	0x200
++#define DEP_STRNCPY_FROM_USER	0x300
++#define DEP_STRNLEN_USER	0x400
++#define DEP_GET_USER		0x500
++#define DEP_PUT_USER		0x600
++#define DEP_SIGNAL		0x700
++#define DEP_COMING_HOME		0x800
++#define SYSCALL_DONE		0x900
+ 
+ /* commands sent by remote to deputy */
+ #define REM_BRING_HOME	(REM_FLG | 0x10)
+@@ -107,7 +145,7 @@
+ 	struct pt_regs regs;
+ 
+ 	struct omp_mig_arch_task arch;
+-	char comm[TASK_COMM_LEN]; 
++	char comm[TASK_COMM_LEN];
+ };
+ 
+ /* mm_struct values */
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- linux.orig/include/hpc/prototype.h	2006-11-02 22:50:50.000000000 +0100
++++ linux/include/hpc/prototype.h	2006-11-02 22:51:23.000000000 +0100
+@@ -28,6 +28,8 @@
+ 
+ #define OMBUG(f, a...)	printk(KERN_ERR "[OMBUG] %s: " f, __FUNCTION__, ## a)
+ 
++#include <linux/in.h>
++#include <hpc/kcom.h>
+ 
+ NORET_TYPE void		deputy_die_on_communication(void);
+ void			deputy_main_loop(void);
+@@ -83,4 +85,39 @@
+ 				struct vm_area_struct *vma);
+ int		remote_readpage(struct file *file, struct page *page);
+ 
++int remote_handle_user(task_t *, int);
++
++int alloc_fd_bitmap(int);
++
++struct kcom_pkt *kcom_pkt_create(int, int, int, char *);
++
++int kcom_send(int, int, char *, unsigned long, struct sockaddr_in *);
++int kcom_send_with_ack(int, int, char *, unsigned long, struct sockaddr_in *);
++int kcom_send_with_response(int, int, char *, unsigned long, char *, struct sockaddr_in *);
++int wait_for_ack(struct kcom_task *, unsigned int);
++int wait_for_response(struct kcom_task *, unsigned int);
++int kcom_send_ack(task_t *, struct kcom_pkt *);
++int kcom_send_resp(task_t *, int , char *, struct kcom_pkt *);
++
++struct kcom_node *kcom_node_add(struct socket *);
++struct kcom_node *kcom_node_find(struct sockaddr *);
++
++struct kcom_task *kcom_task_create(struct kcom_node *, int);
++struct kcom_task *kcom_task_find(int);
++int kcom_task_send(struct kcom_task *, int, int, char *, char *, unsigned long);
++int kcom_task_delete(int);
++
++int mig_handle_migration(int *);
++int user_thread(int (*fn)(void *), void * arg, unsigned long flags);
++int mig_init(struct kcom_node *,struct kcom_pkt *);
++
++struct kcom_pkt* pkt_hdr_read(struct kcom_node *);
++int pkt_data_read(struct kcom_node *, struct kcom_pkt *, int, char *);
++
++struct kcom_task *kcom_remote_task_find(int);
++struct kcom_task *kcom_home_task_find(int);
++int mig_do_receive_home(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt);
++int mig_do_receive_init(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt);
++
++int remote_do_signal(task_t *,  struct kcom_pkt *);
+ #endif /* _HPC_PROTOTYPE_H */
+Index: linux/include/hpc/task.h
+===================================================================
+--- linux.orig/include/hpc/task.h	2006-11-02 22:50:50.000000000 +0100
++++ linux/include/hpc/task.h	2006-11-02 22:51:23.000000000 +0100
+@@ -142,7 +142,7 @@
+ void task_do_request(void);
+ 
+ struct sockaddr;
+-int task_register_migration(task_t *p, struct sockaddr *);
++int task_register_migration(task_t *p);
+ 
+ struct inode;
+ int task_maps_inode(task_t *p, struct inode *);
+Index: linux/net/socket.c
+===================================================================
+--- linux.orig/net/socket.c	2006-11-02 22:50:58.000000000 +0100
++++ linux/net/socket.c	2006-11-02 22:51:23.000000000 +0100
+@@ -530,7 +530,7 @@
+ 	put_cpu_var(sockets_in_use);
+ 	return sock;
+ }
+-#ifdef CONFIG_KCOMD
++#if defined(CONFIG_KCOMD) || defined (CONFIG_KCOMD_MODULE)
+ EXPORT_SYMBOL_GPL(sock_alloc);
+ #endif
+ 
+Index: linux/fs/select.c
+===================================================================
+--- linux.orig/fs/select.c	2006-11-02 22:50:50.000000000 +0100
++++ linux/fs/select.c	2006-11-02 22:51:23.000000000 +0100
+@@ -294,7 +294,7 @@
+ 
+ 	return retval;
+ }
+-#ifdef CONFIG_KCOMD
++#ifdef CONFIG_KCOMD_MODULE
+ EXPORT_SYMBOL_GPL(do_select);
+ #endif
+ 
+Index: linux/include/linux/compiler.h
+===================================================================
+--- linux.orig/include/linux/compiler.h	2006-11-02 22:50:58.000000000 +0100
++++ linux/include/linux/compiler.h	2006-11-02 22:51:23.000000000 +0100
+@@ -44,7 +44,7 @@
+ #define OM_NSTATIC static
+ #endif
+ 
+-#ifdef CONFIG_KCOMD
++#if defined(CONFIG_KCOMD) || defined(CONFIG_KCOMD_MODULE)
+ #define KCOMD_NSTATIC
+ #else
+ #define KCOMD_NSTATIC static

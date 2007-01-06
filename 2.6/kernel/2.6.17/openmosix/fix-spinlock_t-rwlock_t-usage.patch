@@ -1,0 +1,450 @@
+Subject: [patch @num@/@total@] spinlock_t / rwlock_t usage
+
+This patch fix the spinlock_t / rwlock_t structure, it seems that
+locks were not properly declared/initialized ... (for obscure
+reasons, the compiler didn't care ... )
+
+Added two different locks for input and output packets
+
+Main changes: 
+- __kcom_node_find lock the read spinlock now .. 
+- all functions adding kcom_nodes will now write_lock
+- all function reading kcom_nodes will now read_lock
+- all functions adding/removing tasks now write_lock
+- all functions adding/removing packets now write_lock
+- all functions reading packets now read_lock
+- all functions reading the task list now read_lock
+
+and many more ... 
+
+20061106: deleted a rw_lock in mig_do_receive (unlocked twice)
+
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:42.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:47.000000000 +0100
+@@ -242,6 +242,8 @@
+ 		else
+ 			pkt->data=NULL;
+ 
++		INIT_LIST_HEAD(&pkt->list);
++
+ 		// acks and responses don't get new a msgid
+ 		// FIXME:  is this inc SMP safe?
+ 		if ((type & MSG_MASK) == PKT_NEW_MSG)
+@@ -271,6 +273,7 @@
+ 
+ 	find_addr=saddr_in->sin_addr.s_addr;
+ 
++	read_lock(&kcom_nodes_lock);
+ 	list_for_each_entry(tmp, &kcom_nodes, list) {
+ 		saddr_tmp=(struct sockaddr_in *)&tmp->addr;
+ 		node_addr=saddr_tmp->sin_addr.s_addr;
+@@ -279,6 +282,7 @@
+ 			(find_addr == node_addr))
+ 			return tmp;
+ 	}
++	read_unlock(&kcom_nodes_lock);
+ 	return NULL;
+ }
+ 
+@@ -299,9 +303,7 @@
+ 
+ 	addr_tmp=(struct sockaddr_in *)p->om.whereto;
+ 	addr=addr_tmp->sin_addr.s_addr;
+-	// spin_lock(&kcom_nodes_lock);
+ 	node = __kcom_node_find(saddr);
+-	// spin_unlock(&kcom_nodes_lock);
+ 	return node;
+ }
+ EXPORT_SYMBOL_GPL(kcom_node_find);
+@@ -327,6 +329,9 @@
+ 	}
+ 	INIT_LIST_HEAD(&node->list);
+ 	INIT_LIST_HEAD(&node->tasks);
++
++	rwlock_init(&node->tasks_lock);
++
+ 	node->sock=sock;
+ 	node->fd = 0; // kcomd will see this and assign a fd properly.
+ 
+@@ -338,9 +343,9 @@
+ 	check if it's already in node list.
+ 	*/
+ 
+-	spin_lock(&kcom_nodes_lock);
++	write_lock(&kcom_nodes_lock);
+ 	list_add_tail(&node->list, &kcom_nodes);
+-	spin_unlock(&kcom_nodes_lock);
++	write_unlock(&kcom_nodes_lock);
+ 
+ 	if (kcomd_task)
+ 		send_sig(SIGHUP,kcomd_task,0);
+@@ -365,14 +370,15 @@
+ 	struct kcom_node *node;
+ 
+ 	/* remove the node from the list */
+-	spin_lock(&kcom_nodes_lock);
+ 	node = __kcom_node_find(addr);
++
++	write_lock(&kcom_nodes_lock);
+ 	if (!node) {
+-		spin_unlock(&kcom_nodes_lock);
++		write_unlock(&kcom_nodes_lock);
+ 		return -ENOENT;
+ 	}
+ 	list_del(&node->list);
+-	spin_unlock(&kcom_nodes_lock);
++	write_unlock(&kcom_nodes_lock);
+ 
+ 	/* release and free structure */
+ 	sys_close(node->fd);
+@@ -554,9 +560,13 @@
+ 		INIT_LIST_HEAD(&kctask->list);
+ 		INIT_LIST_HEAD(&kctask->out_packs);
+ 		INIT_LIST_HEAD(&kctask->in_packs);
+-		spin_lock_init(&kctask->spinlock);
++		rwlock_init(&kctask->in_packs_lock);
++		rwlock_init(&kctask->out_packs_lock);
+ 
++		write_lock(&node->tasks_lock);
+ 		list_add_tail(&kctask->list, &node->tasks);
++		write_unlock(&node->tasks_lock);
++
+ 	} else
+ 		return NULL;
+ 	return kctask;
+@@ -586,22 +596,29 @@
+ 	while (!list_empty(&tsk->out_packs))
+ 			schedule_timeout(HZ/1000);
+ 
++	read_lock(&kcom_nodes_lock);
++	list_for_each_entry(tmp, &kcom_nodes, list) {
++
++		write_lock(&tmp->tasks_lock);
++		list_for_each_entry(tmp2, &tmp->tasks, list) {
+ 
+-	list_for_each_entry(tmp, &kcom_nodes, list)
+-		list_for_each_entry(tmp2, &tmp->tasks, list)
+ 			if (task_test_dflags(current, DREMOTE)) {
+-				if (tmp2->rpid == pid) {
+-					list_del(&tmp2->list);
+-					kfree(tmp2);
+-					break;
+-				}
++				if (tmp2->rpid == pid)
++				    goto delete_node;
+ 			 } else {
+-				if (tmp2->hpid == pid) {
+-					list_del(&tmp2->list);
+-					kfree(tmp2);
+-					break;
+-				}
++				if (tmp2->hpid == pid)
++				    goto delete_node;
+ 			}
++			continue;
++
++			delete_node:
++			    list_del(&tmp2->list);
++			    kfree(tmp2);
++			    break;
++		}
++		write_unlock(&tmp->tasks_lock) ;
++	}
++	read_unlock(&kcom_nodes_lock);
+ 	return 0;
+ }
+ 
+@@ -774,9 +791,9 @@
+ 	pkt->rpid=tsk->rpid;
+ 	pkt->addr=addr; // used by vma_pages
+ 
+-	// spin_lock(&tsk->spinlock);
++	write_lock(&tsk->out_packs_lock);
+ 	list_add_tail(&pkt->list, &tsk->out_packs);
+-	// spin_unlock(&tsk->spinlock);
++	write_unlock(&tsk->out_packs_lock);
+ 
+ 	return pkt->msgid;
+ }
+@@ -976,7 +993,7 @@
+ 
+ 	if (!task || list_empty(&task->in_packs)) goto not_found;
+ 
+-	write_lock(&task->spinlock);
++ 	write_lock(&task->in_packs_lock);
+ 
+ 	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+ 
+@@ -1011,7 +1028,7 @@
+ 
+ return_value_unlock:
+ 
+-	write_unlock(&task->spinlock);
++ 	write_unlock(&task->in_packs_lock);
+ 	return ret;
+ 
+ }
+@@ -1033,7 +1050,7 @@
+ 	if (!task || list_empty(&task->in_packs)) goto not_found;
+ 
+ 
+-	write_lock(&task->spinlock);
++ 	write_lock(&task->in_packs_lock);
+ 	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+ 		/* FIXME:  check for resp or ack, too. */
+ 		if (msgid == pkt->msgid) {
+@@ -1048,7 +1065,7 @@
+ 	ret = -1;
+ 
+ return_value_unlock:
+-	write_unlock(&task->spinlock);
++ 	write_unlock(&task->in_packs_lock);
+ 	return ret;
+ 
+ }
+Index: linux/include/hpc/kcom.h
+===================================================================
+--- linux.orig/include/hpc/kcom.h	2006-11-13 16:00:22.000000000 +0100
++++ linux/include/hpc/kcom.h	2006-11-13 16:01:47.000000000 +0100
+@@ -28,7 +28,7 @@
+ 
+ /* PROTOTYPES */
+ #ifdef _HPC_KCOMC_H
+-	DEFINE_SPINLOCK(kcom_nodes_lock);
++	DEFINE_RWLOCK(kcom_nodes_lock);
+ 	EXPORT_SYMBOL(kcom_nodes_lock);
+ 
+ 	struct list_head kcom_nodes = LIST_HEAD_INIT(kcom_nodes);
+@@ -78,7 +78,7 @@
+ 
+ #else /* _HPC_KCOMC_H */
+ 	extern int maxfds;
+-	extern spinlock_t kcom_nodes_lock;
++	extern rwlock_t kcom_nodes_lock;
+ 	extern struct list_head kcom_nodes;
+ 
+ 	extern fd_set_bits sockets_fds;
+@@ -117,10 +117,10 @@
+ 	int fd;                 /* fd to send packet */
+ 	struct socket *sock;    /* socket */
+ 	struct sockaddr addr;   /* addr of this node */
+-	spinlock_t tasks_lock;  /* lock for the list */
++	rwlock_t tasks_lock;  /* lock for the list */
+ 	struct list_head tasks; /* list of task */
+ 	struct list_head list; /* list of nodes */
+-	spinlock_t spinlock;
++
+ };
+ 
+ struct kcom_task
+@@ -133,7 +133,9 @@
+         struct list_head out_packs;
+         // struct kcom_pkt in_packs;
+         struct list_head in_packs;
+-			spinlock_t spinlock; // FIXME:   ?? two spinlocks?  in_packs, out_packs
++
++	rwlock_t out_packs_lock;	// List structure locks ...
++	rwlock_t in_packs_lock;
+ };
+ 
+ extern int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt);
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:46.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:47.000000000 +0100
+@@ -269,24 +269,23 @@
+ 	struct kcom_task *tsk;
+ 	task_t *sltsk;
+ 
+-	/* FIXME : should spinlock/unlock */
+ 
+ 	if ((recv_kcom_pkt->type & NODE_MASK) == DEP_FLG) {
+ 		/* command from dep to remote? */
+ 
+ 		tsk=kcom_remote_task_find(recv_kcom_pkt->rpid);
+ 		if (tsk) {
+-			/* spin_lock(&tsk->spinlock); */
++			write_lock(&tsk->in_packs_lock);
+ 			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
+-			/* spin_unlock(&tsk->spinlock); */
++			write_unlock(&tsk->in_packs_lock);
+ 		} else {
+ 			printk(KERN_ERR "unable to find remote pid %u\n", recv_kcom_pkt->rpid);
+ 			return -1;
+ 
+ 		}
+-		/* read_lock(&tasklist_lock); */
++		read_lock(&tasklist_lock);
+ 		sltsk=find_task_by_pid(recv_kcom_pkt->rpid);
+-		/* read_unlock(&tasklist_lock); */
++		read_unlock(&tasklist_lock);
+ 		if (sltsk) {
+ 			wake_up_process(sltsk);
+ 		} else {
+@@ -297,16 +296,16 @@
+ 	} else {
+ 		tsk=kcom_home_task_find(recv_kcom_pkt->hpid);
+ 		if (tsk) {
+-			/* spin_lock(&tsk->spinlock); */
++			write_lock(&tsk->in_packs_lock);
+ 			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
+-			/* spin_unlock(&tsk->spinlock); */
++			write_unlock(&tsk->in_packs_lock);
+ 		} else {
+ 			printk(KERN_ERR "unable to find home pid %u\n", recv_kcom_pkt->hpid);
+ 			return -1;
+ 		}
+-		/* read_lock(&tasklist_lock); */
+-		sltsk=find_task_by_pid(recv_kcom_pkt->hpid);
+-		/* read_unlock(&tasklist_lock); */
++		read_lock(&tasklist_lock);
++		sltsk = find_task_by_pid(recv_kcom_pkt->hpid);
++		read_unlock(&tasklist_lock);
+ 		if (sltsk) {
+ 			wake_up_process(sltsk);
+ 		} else {
+@@ -333,8 +332,6 @@
+ 	int i=0;
+ 
+ 
+-	OMDEBUG_KCOMD(2, "KCOMD: Receiving packet \n");
+-
+ 	// read in hdr
+ 	recv_kcom_pkt = pkt_hdr_read(node);
+ 
+@@ -393,7 +390,9 @@
+ 	sys_close(node->fd);
+ 	sock_release(node->sock);
+ 
++	write_lock(kcom_nodes_lock);
+ 	list_del(&node->list);
++	write_unlock(kcom_nodes_lock);
+ 	kmem_cache_free(kcom_node_cachep, node);
+ 
+ 
+@@ -416,7 +415,10 @@
+ 	struct kcom_task *task, *task_next;
+ 	struct kcom_pkt *pkt, *pkt_next;
+ 
+-	list_for_each_entry_safe(task, task_next, &node->tasks, list)
++	read_lock(&node->tasks_lock);
++	list_for_each_entry_safe(task, task_next, &node->tasks, list) {
++
++		write_lock(&task->out_packs_lock);
+ 		list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
+ 			data_send(node->sock, (void *)pkt, pkt->len);
+ 
+@@ -425,7 +427,9 @@
+ 				kmem_cache_free(kcom_data_cachep, pkt->data);
+ 			kmem_cache_free(kcom_pkt_cachep, pkt);
+ 		}
+-
++		write_unlock(&task->out_packs_lock);
++	}
++	read_unlock(&node->tasks_lock);
+ 	return 0;
+ }
+ 
+@@ -702,21 +706,23 @@
+ 		write_lock(&node->tasks_lock);
+ 		list_for_each_entry_safe(task, task_next, &node->tasks, list) {
+ 
+-			write_lock(&task->spinlock);
++ 			write_lock(&task->in_packs_lock);
+ 			list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+ 				if ((pkt->len) > 0)
+ 					kfree(pkt->data);
+ 				kmem_cache_free(kcom_pkt_cachep, pkt);
+ 				list_del(&pkt->list);
+ 			}
++ 			write_unlock(&task->in_packs_lock);
+ 
++ 			write_lock(&task->out_packs_lock);
+ 			list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
+ 				if ((pkt->len) > 0)
+ 					kfree(pkt->data);
+ 				kmem_cache_free(kcom_pkt_cachep, pkt);
+ 				list_del(&pkt->list);
+ 			}
+-			write_unlock(&task->spinlock);
++ 			write_unlock(&task->out_packs_lock);
+ 
+ 			list_del(&task->list);
+ 			kmem_cache_free(kcom_task_cachep, task);
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-13 16:01:38.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-13 16:01:47.000000000 +0100
+@@ -502,7 +502,7 @@
+ 		if (60000 < waiting_time) {
+ 			printk(KERN_ERR "openMosix: kcomd task creation timeout exceeded, dying ... \n");
+ 			ret = -1;
+-			goto init_exit;
++			goto protocol_exit;
+ 		}
+ 	}
+ 
+@@ -515,7 +515,7 @@
+ 	OMDEBUG_MIG(3, "pid %d kcomd did his work, all fine !\n", p->pid);
+ 	set_current_state(TASK_INTERRUPTIBLE);
+ 
+-	write_lock(&mytsk->spinlock);
++	write_lock(&mytsk->in_packs_lock);
+ 	while (1) {
+ 
+ 		if (list_empty(&mytsk->in_packs)) goto protocol_sleep;
+@@ -527,19 +527,19 @@
+ 			switch (pkt->type & MIG_MASK) {
+ 
+ 				case MIG_MM:
+-					ret =  mig_do_receive_mm(p, pkt);
++					ret = mig_do_receive_mm(p, pkt);
+ 					break;
+ 
+ 				case MIG_VMA:
+-					ret=mig_do_receive_vma(p, pkt);
++					ret = mig_do_receive_vma(p, pkt);
+ 					break;
+ 
+ 				case MIG_PAGE:
+-					ret=mig_do_receive_page(p, pkt);
++					ret = mig_do_receive_page(p, pkt);
+ 					break;
+ 
+ 				case MIG_FP:
+-					ret=mig_do_receive_fp(p, pkt);
++					ret = mig_do_receive_fp(p, pkt);
+ 					break;
+ 
+ 				/* this is the last thing we do in the chain of receiving,
+@@ -553,7 +553,6 @@
+ 
+ 					list_del(&pkt->list);
+ 					kmem_cache_free(kcom_pkt_cachep, pkt);
+-					/* spin_unlock(&mytsk->spinlock);*/
+ 
+ 					if (!ret) set_current_state(TASK_RUNNING);
+ 
+@@ -577,18 +576,14 @@
+ 
+ 	/* This label is inside the while, yes, but it allows much more readability ... */
+ 	protocol_sleep:
+-		write_unlock(&mytsk->spinlock);
+ 		set_current_state(TASK_INTERRUPTIBLE);
+ 		schedule();
+-		write_lock(&mytsk->spinlock);
+ 	}
+ 
+ 
+ protocol_exit:
+-	write_unlock(&mytsk->spinlock);
+- 	OMDEBUG_MIG(3, "pid %d unlocking and returning, ret=%d!\n", p->pid, ret);
+-
+-init_exit:
++	write_unlock(&mytsk->in_packs_lock);
++ 	OMDEBUG_MIG(3, "pid %d returning, ret=%d!\n", p->pid, ret);
+ 
+ 	return ret;
+ 

@@ -1,0 +1,168 @@
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-02 22:50:47.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-02 22:51:46.000000000 +0100
+@@ -29,6 +29,7 @@
+ #include <hpc/arch.h>
+ #include <hpc/syscalls.h>
+ #include <hpc/debug.h>
++#include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/hpc.h>
+ 
+@@ -41,26 +42,43 @@
+ /**
+  * deputy_do_syscall - process a syscall coming from remote
+  **/
+-static int deputy_do_syscall(task_t *p)
++static int deputy_do_syscall(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_syscall_req s;
+ 	struct omp_syscall_ret r;
+-	int error;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
++	struct kcom_task *send_tsk;
++	struct kcom_pkt *send_pkt;
++	// task_t *kcomd_task;
++
++	// Send MIG_SYSCALL ack
++	send_tsk=kcom_task_find(p->pid);
++
++	send_pkt=kcom_pkt_create(0, MIG_SYSCALL | PKT_ACK | DEP_FLG, PKT_ACK, NULL);
++
++	send_pkt->msgid=pkt->msgid; // responses have same msg id as pkt they are responding to.
++	send_pkt->hpid=pkt->hpid;
++	send_pkt->rpid=pkt->rpid;
++	send_pkt->resp=pkt->resp;
++
++	// spin_lock(&send_tsk->spinlock);
++	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
++	// spin_unlock(&send_tsk->spinlock);
++
++	if (kcomd_task != NULL)
++		send_sig(SIGHUP,kcomd_task,0);
++
++	if (sizeof(struct omp_syscall_req) != pkt->len)
++		printk("ERROR in deputy_do_syscall.  data size of %d does not match expected %d\n", pkt->len, sizeof(struct omp_syscall_req));
++	memcpy(&s, pkt->data, pkt->len);
+ 	
+-	error = comm_recv(p->om.contact, &s, sizeof(s));
+-	if (error < 0)
+-		return -1;
+-
+ 	OMDEBUG_SYS(1, "[deputy] receive syscall %d\n", s.n);
+ 
+ 	/* do the syscall and put reply in r */
+ 	r.ret = arch_exec_syscall(s.n, (syscall_parameter_t *) &s.arg);
+ 	
+-	error = comm_send_hd(p->om.contact, REM_SYSCALL | REPLY, &r, sizeof(r));
+-	if (error < 0)
+-		return -1;
++	kcom_send_with_ack(MIG_SYSCALL | PKT_NEW_MSG | SYSCALL_DONE | DEP_FLG, 0, NULL, r.ret, dest_ptr);
+ 
+-	OMDEBUG_SYS(2, "[deputy] replied to syscall %d\n", s.n);
+ 
+ 	return 0;
+ }
+@@ -379,25 +397,38 @@
+ static inline void deputy_do_sigpending(task_t *p)
+ {
+ 	siginfo_t info;
++
++	#if 0
+ 	struct omp_signal s;
+-	int signr, error;
++	struct sockaddr_in *dest_ptr=p->om.whereto;
++	#endif
++
++	int signr;
+ 
+ 	do_signal(ARCH_TASK_GET_USER_REGS(p), NULL);
+ 	
+-	return;
+-	
+-	for (;;) {
++
++	printk(KERN_WARNING "%s does not yet know how to process signals ... \n", __FUNCTION__);
++
++	while (signal_pending (p)) {
+ 		signr = dequeue_signal(p, &p->blocked, &info);
+-		if (!signr)
+-			break;
+ 
+-		s.signr = signr;
+-		memcpy(&s.siginfo, &info, sizeof(siginfo_t));
++	/* FIXME:   was kinda working, not now. */
++	#if 0
++		if (signr != SIGKILL) {
++			s.signr = signr;
++			memcpy(&s.siginfo, &info, sizeof(siginfo_t));
++
++			kcom_send_with_ack(MIG_SYSCALL | PKT_NEW_MSG | DEP_SIGNAL | DEP_FLG, sizeof(struct omp_signal), &s, 0, dest_ptr);
++			printk("Signal %d sent to remote.\n", signr);
++		} else
++			printk("Signal %d discarded.\n", signr);
++	#endif
+ 
+-		error = comm_send_hd(p->om.contact, DEP_SIGNAL, &s, sizeof(s));
+-		if (error < 0)
+-			OMBUG("error %d\n", error);
+ 	}
++
++	return;
++
+ }
+ 
+ /**
+@@ -413,6 +444,7 @@
+ 	}
+ }
+ 
++#if 0
+ /**
+  * deputy_process_communication - process has receive communication in deputy
+  **/
+@@ -455,20 +487,39 @@
+ 	if (error < 0)
+ 		deputy_die_on_communication();
+ }
++#endif
+ 
+ /**
+  * deputy_main_loop - process loop when process is deputy
+  **/
+ void deputy_main_loop(void)
+ {
+-	int has_communication;
++	task_t *p=current;
++	struct kcom_task *mytsk;
++	int error=0;
++	struct kcom_pkt *pkt, *pkt_next;
+ 	
++	mytsk=kcom_task_find(p->pid);
+ 	while (task_test_dflags(current, DDEPUTY))
+ 	{
+-		has_communication = comm_wait(current->om.contact);
+-		if (has_communication)
+-			deputy_process_communication(current);
++		set_current_state(TASK_INTERRUPTIBLE);
++
++		if (!list_empty(&mytsk->in_packs)) {
++
++			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
++
++				if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
++
++
++					error = deputy_do_syscall(p, pkt);
++					list_del(&pkt->list);
++				}
++			}
++
++		}
++
+ 		deputy_process_misc(current);
++		schedule();
+ 	}
+ }
+ 

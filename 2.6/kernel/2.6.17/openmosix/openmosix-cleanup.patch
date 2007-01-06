@@ -1,0 +1,180 @@
+[patch @num@/@total@] code cleanup
+
+This patch adds some cleanup in the code ...
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-02 22:50:51.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-02 22:50:57.000000000 +0100
+@@ -31,27 +31,30 @@
+ 
+ 	ret = sock_create(saddr->sa_family, SOCK_STREAM, IPPROTO_TCP, &sock);
+ 	if (ret < 0)
+-		return -1;
++		goto err_fd;
+ 
+ 	fd = sock_map_fd(sock);
+ 	if (fd < 0)
+-		goto err;
++		goto err_fd;
+ 
+ 	ret = sock->ops->bind(sock, saddr, sizeof(*saddr));
+ 	if (ret < 0)
+-		goto err_fd;
++		goto err_bind;
+ 
+ 	ret = sock->ops->listen(sock, SOMAXCONN);
+ 	if (ret < 0)
+-		goto err_fd;
++		goto err_listen;
+ 	*res = sock;
+ 	return fd;
+-err_fd:
+-	sys_close(fd);
+-err:
++
++err_listen:
+ 	sock_release(sock);
++err_bind:
++	sys_close(fd);
++err_fd:
+ 	*res = NULL;
+ 	return -1;
++
+ }
+ 
+ static int socket_listen_ip4(int port, struct socket **res)
+@@ -246,33 +249,45 @@
+ {
+ 	struct socket *sock;
+ 	int ret, fd;
++	int len;
++	struct sockaddr_in address;
+ 
+ 	sock = sock_alloc();
+-	if (!sock)
++	if (!sock) {
++		printk(KERN_ERR "openMosix: Unable to allocate socket.\n");
+ 		return -1;
++	}
++
++	sock->type = lsock->type;
++	sock->ops = lsock->ops;
+ 
+ 	ret = lsock->ops->accept(lsock, sock, 0);
+-	if (ret)
+-		goto err;
+-	/*
+-	if (!sock->ops || !sock->ops->getname)
+-		goto err;
++	if (ret) {
++		printk(KERN_ERR "openMosix: Error accepting connection\n");
++		goto err_accept;
++	}
+ 
+-	ret = sock->ops->getname
+-	check if it's already in node list.
+-	*/
++	ret = sock->ops->getname(sock, (struct sockaddr *)&address, &len, 1);
++	if (ret)
++		goto err_accept;
+ 
+ 	fd = sock_map_fd(sock);
+-	if (fd < 0)
+-		goto err;
++	if (fd < 0) {
++		printk(KERN_ERR "openMosix: Error mapping socket to file descriptor\n");
++		goto err_accept;
++	}
+ 
+ 	ret = kcom_node_add(fd, sock);
+-	if (ret < 0)
++	if (ret < 0) {
++		printk(KERN_ERR "openMosix: Error adding new node\n");
+ 		goto errfd;
++	}
++
+ 	return fd;
++
+ errfd:
+ 	sys_close(fd);
+-err:
++err_accept:
+ 	sock_release(sock);
+ 	return -1;
+ }
+Index: linux/include/hpc/hpc.h
+===================================================================
+--- linux.orig/include/hpc/hpc.h	2006-11-02 22:50:51.000000000 +0100
++++ linux/include/hpc/hpc.h	2006-11-02 22:50:57.000000000 +0100
+@@ -71,4 +71,5 @@
+ 				char __user *__user *envp,
+ 				struct pt_regs * regs);
+ 
++int remote_handle_user(task_t *p, int endtype);
+ #endif /* _HPC_HPC_H */
+Index: linux/include/hpc/mig.h
+===================================================================
+--- linux.orig/include/hpc/mig.h	2006-11-02 22:50:51.000000000 +0100
++++ linux/include/hpc/mig.h	2006-11-02 22:50:58.000000000 +0100
+@@ -25,6 +25,10 @@
+ #include <hpc/comm.h>
+ 
+ #define REMOTE_DAEMON_PORT  0x3412
++/* Define some linux functions (remove warnings) */
++
++
++void reparent_to_init(void);
+ 
+ /* PROTOTYPES */
+ int openmosix_mig_daemon(void *);
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:50:51.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:50:58.000000000 +0100
+@@ -408,4 +408,7 @@
+ 		if (error < 0)
+ 			comm_close(mlink);
+ 	}
++
++	/* Not reached, just to prevent warning on recent gcc: */
++	return 0;
+ }
+Index: linux/include/net/sock.h
+===================================================================
+--- linux.orig/include/net/sock.h	2006-11-02 22:50:51.000000000 +0100
++++ linux/include/net/sock.h	2006-11-02 22:50:58.000000000 +0100
+@@ -774,6 +774,7 @@
+ 						     unsigned long size,
+ 						     int noblock,
+ 						     int *errcode);
++extern struct socket 		*sock_alloc(void);
+ extern void *sock_kmalloc(struct sock *sk, int size,
+ 			  gfp_t priority);
+ extern void sock_kfree_s(struct sock *sk, void *mem, int size);
+Index: linux/include/linux/compiler.h
+===================================================================
+--- linux.orig/include/linux/compiler.h	2006-11-02 22:50:51.000000000 +0100
++++ linux/include/linux/compiler.h	2006-11-02 22:50:58.000000000 +0100
+@@ -1,6 +1,8 @@
+ #ifndef __LINUX_COMPILER_H
+ #define __LINUX_COMPILER_H
+ 
++#include <linux/config.h>
++
+ #ifndef __ASSEMBLY__
+ 
+ #ifdef __CHECKER__
+Index: linux/net/socket.c
+===================================================================
+--- linux.orig/net/socket.c	2006-11-02 22:50:51.000000000 +0100
++++ linux/net/socket.c	2006-11-02 22:50:58.000000000 +0100
+@@ -511,7 +511,7 @@
+  *	NULL is returned.
+  */
+ 
+-KCOMD_NSTATIC struct socket *sock_alloc(void)
++struct socket *sock_alloc(void)
+ {
+ 	struct inode * inode;
+ 	struct socket * sock;

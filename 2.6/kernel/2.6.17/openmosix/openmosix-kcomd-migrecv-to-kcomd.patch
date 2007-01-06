@@ -1,0 +1,832 @@
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:50:58.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:51:42.000000000 +0100
+@@ -25,6 +25,7 @@
+ #include <linux/stddef.h>
+ #include <linux/highmem.h>
+ #include <linux/personality.h>
++#include <linux/syscalls.h>
+ #include <asm/mmu_context.h>
+ #include <asm/tlbflush.h>
+ #include <hpc/comm.h>
+@@ -34,10 +35,12 @@
+ #include <hpc/mig.h>
+ #include <hpc/debug.h>
+ #include <hpc/protocol.h>
++#include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/version.h>
+ #include <hpc/arch.h>
+ 
++#include <linux/inet.h>  /* in_aton*/
+ /* handshake with the remote part */
+ int mig_recv_hshake(struct socket *mlink)
+ {
+@@ -66,110 +69,316 @@
+ 	return 0;
+ }
+ 
++/**
++ * mig_do_receive_home
++ *
++ * Description:
++ *    Called by kcomd when it receives a MIG_GO_HOME pkt.
++ *    Task_register_migration is called to inform the process that the
++ *    remote process is coming home.
++ **/
++int mig_do_receive_home(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt)
++{
++	struct kcom_task *recv_tsk;
++	struct kcom_pkt *send_pkt;
++	task_t *sltsk;
++
++	printk("FUNCTION: mig_do_receive_home\n");
++
++	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {
++		printk("Received MIG_GO_HOME NEW_MSG packet.\n");
++
++		recv_tsk=kcom_task_find(recv_kcom_pkt->hpid);
++		if (!recv_tsk) {
++			printk("Unable to find home pid %u\n", recv_kcom_pkt->hpid);
++			return -1;
++		}
++
++		send_pkt=kcom_pkt_create(0, MIG_GO_HOME | PKT_ACK | DEP_FLG, 0,  NULL);
++
++		send_pkt->msgid=recv_kcom_pkt->msgid; /* responses have same msg id as pkt they are responding to.*/
++		send_pkt->hpid=recv_kcom_pkt->hpid;
++		send_pkt->rpid=recv_kcom_pkt->rpid;;
++		send_pkt->resp=recv_kcom_pkt->resp;
++		/* spin_lock(&recv_tsk->spinlock);*/
++		list_add_tail(&send_pkt->list, &recv_tsk->out_packs);
++		/* spin_unlock(&recv_tsk->spinlock);*/
++
++		/* Ok, tell task migration is coming*/
++		/* read_lock(&tasklist_lock);*/
++		sltsk=find_task_by_pid(recv_kcom_pkt->hpid); /* only home node will receive MIG_GO_HOME NEW_MSG*/
++		/* read_unlock(&tasklist_lock);*/
++		if (sltsk) {
++			printk("Registering task migration\n");
++			task_register_migration(sltsk);
++		} else {
++			printk("Failed to register task migration\n");
++			return -1;
++		}
++
++
++	} else {
++		printk("Received MIG_GO_HOME PKT_ACK packet.\n");
++
++		recv_tsk=kcom_task_find(recv_kcom_pkt->rpid);
++		if (!recv_tsk) {
++			printk("Unable to find remote pid %u\n", recv_kcom_pkt->rpid);
++			return -1;
++		}
++
++		/* spin_lock(&recv_tsk->spinlock);*/
++		list_add_tail(&recv_kcom_pkt->list, &recv_tsk->in_packs);
++		/* spin_unlock(&recv_tsk->spinlock);*/
++		sltsk=find_task_by_pid(recv_kcom_pkt->rpid); /* only remote node will receive MIG_GO_HOME ack*/
++		if (sltsk) {
++			printk("Waking up process %u\n", sltsk->pid);
++			wake_up_process(sltsk);
++		} else {
++			printk("Unable to wake up process %u\n", recv_kcom_pkt->rpid);
++			return -1;
++		}
++	}
++
++	return 0;
++}
++EXPORT_SYMBOL_GPL(mig_do_receive_home);
++
++/**
++ * mig_do_receive_init
++ *
++ * Description:
++ *    Called by kcomd when it receives a MIG_INIT pkt.
++ *    Creates a new process and sets up the associated task.
++ **/
++int mig_do_receive_init(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt)
++{
++	struct kcom_task *send_tsk;
++	struct kcom_pkt *send_pkt;
++
++	pid_t rpid;
++	struct sockaddr_in *saddr;
++	const unsigned int LO_IP=in_aton("127.0.0.1");
++	printk("Received MIG_INIT packet.\n");
++
++	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {	 /* incoming process*/
++		printk("Creating new process.\n");
++		rpid=0;
++
++		send_pkt=kcom_pkt_create(0, MIG_INIT | PKT_ACK | REM_FLG, 0,  NULL);
++
++		if (!send_pkt) {
++			printk("ERROR creating pkt in mig_do_receive_init\n");
++			return -1;
++		}
++		/* responses have same msg id as pkt they are responding to.*/
++		send_pkt->msgid=recv_kcom_pkt->msgid;
++
++		send_pkt->hpid=recv_kcom_pkt->hpid;
++		send_pkt->resp=recv_kcom_pkt->resp;
++
++		/* spin_lock();*/
++		saddr=(struct sockaddr_in *)&node->addr;
++		if (saddr->sin_addr.s_addr==LO_IP) { /* this allows loopback migration to work.*/
++			printk("Loopback migration.\n"); /* both home and remote processes use same task.  better idea?*/
++			send_tsk=kcom_home_task_find(recv_kcom_pkt->hpid);
++		} else {
++			send_tsk=kcom_task_create(node, 0);
++			/* spin_unlock();*/
++			if (!send_tsk) {
++				printk("ERROR: creating new kcom_task.\n");
++				return -1;
++			}
++			send_tsk->hpid=recv_kcom_pkt->hpid;
++		}
++		/* Delete init packet before starting new process.*/
++		/* spin_lock(&send_tsk->spinlock);*/
++		list_del(&recv_kcom_pkt->list);
++		/* spin_unlock(&send_tsk->spinlock);*/
++
++		/* send_pkt->rpid=0; // set this to 0 or if same process migrates second time here, it'll keep old rpid*/
++		user_thread(mig_handle_migration, &rpid, 0);
++		while (rpid==0) {
++			schedule_timeout_interruptible(HZ/1000);
++		}
++
++		if (rpid < 0) {
++			printk("Error creating new process.\n");
++			send_pkt->type=MIG_INIT | PKT_NACK | REM_FLG;
++
++			/* spin_lock(&send_tsk->spinlock);*/
++			list_add_tail(&send_pkt->list, &send_tsk->out_packs);
++			/* spin_unlock(&send_tsk->spinlock);*/
++			return -1;
++		} else
++			printk("New process: %u\n", rpid);
++
++		send_pkt->rpid=rpid;
++
++		/* spin_lock(&send_tsk->spinlock);*/
++		list_add_tail(&send_pkt->list, &send_tsk->out_packs);
++		/* spin_unlock(&send_tsk->spinlock);*/
++
++		send_tsk->rpid=rpid;
++
++	}
++	return 0;
++}
++EXPORT_SYMBOL_GPL(mig_do_receive_init);
++
++
+ /*****************************************************************************/
+ 
+ /**
+- * mig_do_receive_mig_mm - Receive some parameters for a mm
++ * mig_do_receive_mm
++ *
++ * Description:
++ *    Receives the process mmap info.
+  **/
+-static void mig_do_receive_mm(task_t *p, struct omp_mig_mm *s)
++KCOMD_NSTATIC void mig_do_receive_mm(task_t *p, struct kcom_pkt *pkt)
+ {
++
+ 	OMDEBUG_MIG(2, "MIG_MM\n");
+-	/* copy all mm's parameter from start_code to env_end */
+-	memcpy(&p->mm->start_code, s, sizeof(*s));
++	printk("FUNCTION: mig_do_receive_mm\n");
++
++	down_write(&p->mm->mmap_sem);
++	memcpy(&p->mm->start_code, pkt->data, pkt->len);
++	p->mm->exec_vm=0; /* MSD debug*/
++	up_write(&p->mm->mmap_sem);
++
++	kcom_send_ack(p, pkt);
++
++	printk("leaving FUNCTION: mig_do_receive_mm\n");
++
+ }
++EXPORT_SYMBOL_GPL(mig_do_receive_mm);
+ 
+ /**
+- * mig_do_receive_mm_area - Set up an mmap
++ * mig_do_receive_vma
++ *
++ * Description:
++ *    Receives the process vma info.
+  **/
+-static int mig_do_receive_vma(task_t *p, struct omp_mig_vma *a)
++KCOMD_NSTATIC int mig_do_receive_vma(task_t *p, struct kcom_pkt *pkt)
+ {
++	struct omp_mig_vma *a;
+ 	unsigned long result, prot, flags;
+ 	struct file *file = NULL;
+ 	extern asmlinkage long sys_madvise(unsigned long, size_t, int);
+ 
++
++	printk("FUNCTION: mig_do_receive_vma\n");
++
++	a = (struct omp_mig_vma *)pkt->data;
++
+ 	OMDEBUG_MIG(2, "MIG_VMA [%lx, %ld]\n", a->vm_start, a->vm_size);
+ 
+-	/* FIXME : Temporary disabled */
+-	if (0 && a->vm_file) {
+-		file = (task_test_dflags(p, DREMOTE))
+-			? task_rfiles_get(p, a->vm_file, -1, a->i_size)
+-			: a->vm_file;
+-	}
++		/* FIXME : Temporary disabled */
++		if (0 && a->vm_file) {
++			file = (task_test_dflags(p, DREMOTE))
++				? task_rfiles_get(p, a->vm_file, -1, a->i_size)
++				: a->vm_file;
++		}
+ 
+-	/* unconvert prot+flags: */
+-	flags = MAP_FIXED | MAP_PRIVATE;
+-	prot = 0;
+-	if (a->vm_flags & VM_GROWSDOWN)
+-		flags |= MAP_GROWSDOWN;
+-	if (a->vm_flags & VM_DENYWRITE)
+-		flags |= MAP_DENYWRITE;
+-	if (a->vm_flags & VM_EXECUTABLE)
+-		flags |= MAP_EXECUTABLE;
+-
+-	/* copy VM_(READ|WRITE|EXEC) bits to prot */
+-	prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));
+-
+-	/* mmap stuff */
+-	result = do_mmap_pgoff(file, a->vm_start, a->vm_size, prot,
+-						flags, a->vm_pgoff);
+-	if (IS_ERR((const void *) result))
+-		return PTR_ERR((const void *) result);
+-
+-	if (a->vm_flags & VM_READHINTMASK) {
+-		int behavior = (a->vm_flags & VM_SEQ_READ)
+-				? MADV_RANDOM
+-				: MADV_SEQUENTIAL;
+-		sys_madvise(a->vm_start, a->vm_size, behavior);
+-	}
++		/* unconvert prot+flags: */
++		flags = MAP_FIXED | MAP_PRIVATE;
++		prot = 0;
++		if (a->vm_flags & VM_GROWSDOWN)
++			flags |= MAP_GROWSDOWN;
++		if (a->vm_flags & VM_DENYWRITE)
++			flags |= MAP_DENYWRITE;
++		if (a->vm_flags & VM_EXECUTABLE)
++			flags |= MAP_EXECUTABLE;
++
++	/* VM_GROWSDOWN =  0x0100*/
++	/* VM_DENYWRITE =  0x0800*/
++	/* VM_EXECUTABLE = 0x1000*/
++
++	/* MAP_GROWSDOWN =  0x0100*/
++	/* MAP_DENYWRITE =  0x0800*/
++	/* MAP_EXECUTABLE = 0x1000*/
++
++
++	/* flags=a->vm_flags;*/
++
++		/* copy VM_(READ|WRITE|EXEC) bits to prot */
++		/* prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));*/
++		prot = (VM_READ | VM_WRITE | VM_EXEC);
++		/* VM_READ =  0x1*/
++		/* VM_WRITE = 0x2*/
++		/* VM_EXEC =  0x4*/
++
++		/* mmap stuff */
++		down_write(&p->mm->mmap_sem);
++		result = do_mmap_pgoff(file, a->vm_start, a->vm_size, prot,
++							flags, a->vm_pgoff);
++		up_write(&p->mm->mmap_sem);
++
++		if (IS_ERR((const void *) result))
++			return PTR_ERR((const void *) result);
++
++		if (a->vm_flags & VM_READHINTMASK) {
++			int behavior = (a->vm_flags & VM_SEQ_READ)
++					? MADV_RANDOM
++					: MADV_SEQUENTIAL;
++			result=sys_madvise(a->vm_start, a->vm_size, behavior);
++			if (result)
++				kcom_send_nack(p, pkt);
++				return result;
++		}
++
++
++	kcom_send_ack(p, pkt);
++
++	printk("leaving FUNCTION: mig_do_receive_vma\n");
+ 	return 0;
+ }
++EXPORT_SYMBOL_GPL(mig_do_receive_vma);
+ 
+ 
+ /**
+- * mig_do_receive_page - Receive one page
++ * mig_do_receive_page
++ *
++ * Description:
++ *    Receives one process memory page.
++ *    FIXME:   remote node segfaults on system calls because
++ *    of a bug in this function.   HELP!!!
+  **/
+-static int mig_do_receive_page(task_t *p, unsigned long addr)
++KCOMD_NSTATIC int mig_do_receive_page(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct mm_struct *mm = p->mm;
+ 	struct vm_area_struct *vma;
+ 	struct page *recv_page = NULL;
+-	void *kmpage; /* kmapped page */
+-	int error;
++	unsigned long addr;
++	void *kmpage;
+ 	pgd_t * pgd;
+ 	pud_t * pud;
+ 	pmd_t * pmd;
+ 	pte_t * pte;
+ 
+-	OMDEBUG_MIG(3, "MIG_PAGE [%lx]\n", addr);
++	/* FIXME:   another way?*/
++	/* Must be done from process context.*/
++
++	/* recv_page = alloc_page(GFP_HIGHUSER);*/
++	/* kfree(pkt->data);*/
+ 
++
++	addr=pkt->addr;
+ 	vma = find_vma(mm, addr);
+ 	if (!vma) {
+ 		OMBUG("vma not found (addr: %p)\n", (void *) addr);
++		kcom_send_nack(p, pkt);
+ 		return -1;
+ 	}
+-
+-	/* check if enough memory */
+-
+-	/* alloc page */
+-	recv_page = alloc_page(GFP_HIGHUSER);
+-	if (!recv_page) {
+-		OMBUG("unable to allocate page\n");
+-		return -ENOMEM;
+-	}
+-
+-	kmpage = kmap(recv_page);
+-
+-	/* receive the data into the page */
+-	error = comm_recv(p->om.contact, kmpage, PAGE_SIZE);
+-
++	recv_page=alloc_zeroed_user_highpage(vma, addr);
++	kmpage=kmap(recv_page);
++	memcpy(kmpage, pkt->data, pkt->len);
+ 	kunmap(recv_page);
+-	if (error < 0) {
+-		OMBUG("failed to receive data\n");
+-		goto out;
+-	}
++	/**/
+ 
+ 	/* add the page at correct place */
++
+ 	pgd = pgd_offset(mm, addr);
++
+ 	pud = pud_alloc(mm, pgd, addr);
+ 	if (!pud)
+ 		goto out;
+@@ -187,30 +396,69 @@
+ 	page_dup_rmap(recv_page);
+ 	inc_mm_counter(mm, file_rss);
+ 
++
++/*
++	down_write(&mm->mmap_sem);
++	install_arg_page(vma, recv_page, pkt->addr);
++	up_write(&mm->mmap_sem);
++*/
++	/* make_pages_present(pkt->addr, pkt->addr+PAGE_SIZE); // NOPE*/
++
++	kcom_send_ack(p, pkt);
++
+ 	return 0;
++
+ out:
++	printk("receive page failed at addr %p\n", (void *) addr);
+ 	OMBUG("receive page failed at addr %p\n", (void *) addr);
+ 	__free_page(recv_page);
+ 	return -1;
++
+ }
+ 
+ /**
+- * mig_do_receive_fp - Receive floating points registers
++ * mig_do_receive_fp
+  * @p:		task
+- * @fpr:	floating point registers
++ * @pkt: ->data: floating point registers.
++ *
++ * Description:
++ *    Receive floating points registers
+  **/
+-static void mig_do_receive_fp(task_t *p, struct omp_mig_fp *fp)
++KCOMD_NSTATIC int mig_do_receive_fp(task_t *p, struct kcom_pkt *pkt)
+ {
++	struct omp_mig_fp *fp;
++
++	printk("FUNCTION: mig_do_receive_fp\n");
++	fp=(void *)pkt->data;
++
+ 	OMDEBUG_MIG(2, "MIG_FP\n");
+ 	set_used_math();
+ 	arch_mig_receive_fp(p, fp);
++
++	kcom_send_ack(p, pkt);
++
++	printk("leaving FUNCTION: mig_do_receive_fp\n");
++
++	return 0;
+ }
+ 
+ /**
+- * mig_do_receive_misc - Receive normal registers, limits
++ * mig_do_receive_misc
++ **/
++/**
++ * mig_do_receive_proc_context
++ * @p:		task
++ * @pkt:		->data: normal registers, limits.
++ *
++ * Description:
++ *    Receive normal registers, limits
+  **/
+-static void mig_do_receive_proc_context(task_t *p, struct omp_mig_task *m)
++KCOMD_NSTATIC int mig_do_receive_proc_context(task_t *p, struct kcom_pkt *pkt)
+ {
++	struct omp_mig_task *m;
++
++	m=(struct omp_mig_task *)pkt->data;
++
+ 	OMDEBUG_MIG(1, "MIG_TASK\n");
+ 	/* arch specific proc receive context */
+ 	arch_mig_receive_proc_context(p, m);
+@@ -220,15 +468,12 @@
+ 	p->om.tgid = m->tgid;
+ 
+ 	/* copy credentials */
+-	p->uid = m->uid;
+-	p->euid = m->euid;
+-	p->suid = m->suid;
+-	p->fsuid = m->fsuid;
+-
+-	p->gid = m->gid;
+-	p->egid = m->egid;
+-	p->sgid = m->sgid;
+-	p->fsgid = m->fsgid;
++	sys_setuid(m->uid);
++	sys_setresuid(m->uid,m->euid,m->suid);
++	sys_setfsuid(m->fsuid);
++	sys_setgid(m->gid);
++	sys_setresgid(m->gid, m->egid, m->sgid);
++	sys_setfsgid(m->fsgid);
+ 
+ 	/* signals stuffs */
+ 	p->blocked = m->blocked;
+@@ -238,177 +483,196 @@
+ 	memcpy(p->sighand->action, m->sighand, sizeof(struct k_sigaction)
+ 								* _NSIG);
+ 
+-	/* FIXME we don't trust the other node anyway so copy rlimit from node[nr] */
+-
+-	memcpy(p->comm, m->comm, sizeof(m->comm));
++  	/* FIXME we don't trust the other node anyway so copy rlimit from node[nr] */
+ 
+-	p->personality = m->personality;
++  	memcpy(p->comm, m->comm, sizeof(m->comm));
++	/* p->personality = m->personality;*/
++	set_personality(m->personality);
+ 	arch_pick_mmap_layout(p->mm);
++
++	kcom_send_ack(p, pkt);
++	printk("leaving FUNCTION: mig_do_receive_proc_context\n");
++
++	return 0;
+ }
+ 
+ /**
+- * mig_do_receive - Receive all process stuff (mm, pages, fpr, ..)
++ * mig_do_receive
++ * @p:		task
++ *
++ * Description:
++ *    Main loop to receive all process stuff (mm, pages, fpr, ..)
+  **/
+ int mig_do_receive(task_t *p)
+ {
+-	int error;
+-	unsigned int got_not_coming = 0;
+-	unsigned long data;
+-	struct omp_req req;
++	struct kcom_task *mytsk=NULL;
++	struct kcom_pkt *pkt, *pkt_next;
++	int ret;
+ 
+-	data = __get_free_page(GFP_KERNEL);
+-	if (!data)
+-		goto fail;
+ 
+ 	task_set_dflags(p, DINCOMING);
+-	clear_used_math();
++	/* clear_used_math();*/
+ 
+-	while (1) {
+-		error = comm_recv(p->om.contact, &req, sizeof(req));
+-		if (error < 0)
+-			goto fail;
+-
+-		BUG_ON(req.dlen > PAGE_SIZE);
+-		error = comm_recv(p->om.contact, (void *) data, req.dlen);
+-		if (error < 0)
+-			goto fail;
+-
+-		switch (req.type) {
+-		case MIG_MM:
+-			mig_do_receive_mm(p, (struct omp_mig_mm *) data);
+-			break;
+-		case MIG_VMA:
+-			if (mig_do_receive_vma(p, (struct omp_mig_vma *) data))
+-				goto fail;
+-			break;
+-		case MIG_PAGE:
+-			if (mig_do_receive_page(p, *((unsigned long *) data)))
+-				goto fail;
+-			break;
+-		case MIG_FP:
+-			mig_do_receive_fp(p, (struct omp_mig_fp *) data);
+-			break;
+-		case MIG_ARCH:
+-			if (arch_mig_receive_specific(p, (struct omp_mig_arch *) data))
+-				goto fail;
+-			break;
+-		/* this is the last thing we do in the chain of receiving,
+-		 * so return 0 after we're done */
+-		case MIG_TASK:
+-			mig_do_receive_proc_context(p, (struct omp_mig_task *) data);
+-			comm_send_req(p->om.contact, MIG_TASK | REPLY);
+-			task_clear_dflags(p, DINCOMING);
+-
+-			flush_tlb_mm(p->mm); /* for all the new pages */
+-			return 0;
+-		case MIG_ABORT:
+-			printk("mig_do_recv(): got MIG_ABORT\n");
+-			got_not_coming = 1;
+-			goto fail;
+-		default:
+-			printk("mig_do_recv(): got default\n");
+-			goto fail;
+-		}
++	/* Wait for kcomd to set up the kcom_task struct*/
++	while (mytsk==NULL) {
++		schedule_timeout_interruptible(HZ/1000);
++	/*spin_lock();*/
++		mytsk=kcom_task_find(p->pid);
++	/*spin_unlock();*/
+ 	}
+-fail:
+-	task_clear_dflags(p, DINCOMING);
+-	free_page(data);
+ 
+-	OMBUG("failed\n");
+-	return -1;
+-}
+-
+-static NORET_TYPE int mig_handle_migration(void *ptr)
+-{
+-	task_t *p = current;
+-	/* link against the other end */
+-	struct socket *link = (struct socket *) ptr;
+-	int error;
++	/* Initialize remote proc's whereto*/
++	if (task_test_dflags(p, DREMOTE)) {
++		memcpy(p->om.whereto, &mytsk->node->addr, sizeof(mytsk->node->addr));
++		printk("Setting mytsk->rpid (currently: %u) = p->pid (%u)\n", mytsk->rpid, p->pid);
++	}
+ 
+-	OM_VERBOSE_MIG("[OM] receiving new process\n");
++	set_current_state(TASK_INTERRUPTIBLE);
++	/* spin_lock(&mytsk->spinlock);*/
++	while (1) {
+ 
+-	task_set_comm(p, link);
++		if (!list_empty(&mytsk->in_packs))
++			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
++				printk("mig_do_receive:  msgid=%u\n", pkt->msgid);
++
++				switch (pkt->type & MIG_MASK) {
++
++					case MIG_MM:
++						mig_do_receive_mm(p, pkt);
++						list_del(&pkt->list);
++						kmem_cache_free(kcom_pkt_cachep, pkt);
++						break;
++
++					case MIG_VMA:
++						ret=mig_do_receive_vma(p, pkt);
++						list_del(&pkt->list);
++						kmem_cache_free(kcom_pkt_cachep, pkt);
++						if (ret)
++							return ret;
++						break;
++
++					case MIG_PAGE:
++						ret=mig_do_receive_page(p, pkt);
++						list_del(&pkt->list);
++						kmem_cache_free(kcom_pkt_cachep, pkt);
++						if (ret)
++							return ret;
++						break;
++
++					case MIG_FP:
++						ret=mig_do_receive_fp(p, pkt);
++						list_del(&pkt->list);
++						kmem_cache_free(kcom_pkt_cachep, pkt);
++						if (ret)
++							return ret;
++						break;
++
++					/* this is the last thing we do in the chain of receiving,
++					 * so return 0 after we're done */
++					case MIG_TASK:
++						ret=mig_do_receive_proc_context(p, pkt);
++
++						task_clear_dflags(p, DINCOMING);
++						flush_tlb_mm(p->mm); /* for all the new pages */
++
++						list_del(&pkt->list);
++						kmem_cache_free(kcom_pkt_cachep, pkt);
++						/* spin_unlock(&mytsk->spinlock);*/
++
++						if (ret)
++							return ret;
++						set_current_state(TASK_RUNNING);
++						return 0;
++
++					default:
++						printk("[pid: %u] Unknown packet type 0x%x received.\n", p->pid, pkt->type);
++						break;
+ 
+-	error = obtain_mm(p);
+-	if (error)
+-		goto fail;
+-	if (mig_recv_hshake(link))
+-		goto fail;
++				}
+ 
+-	error = mig_do_receive(p);
++			}
+ 
+-	if (error)
+-		goto fail;
++	/* spin_unlock(&mytsk->spinlock);*/
++	printk("process %u going to sleep.\n", p->pid);
++	schedule();
++	printk("process %u waking up.\n", p->pid);
++	set_current_state(TASK_INTERRUPTIBLE);
++	/* spin_lock(&mytsk->spinlock);*/
++	}
++	/* spin_unlock(&mytsk->spinlock);*/
+ 
+-	OM_VERBOSE_MIG("[OM] starting process(%d)\n", p->pid);
+-	reparent_to_init();
+-	arch_kickstart(p);
+-	/*NOTREACHED*/
+ 
+-fail:
+-	OMBUG("failed\n");
+-	do_exit(SIGKILL);
+-	/*NOTREACHED*/
+ }
+ 
+ /**
+- * openmosix_mig_daemon - openMosix migration daemon
+- * @nothing:	unused
++ * mig_handle_migration
++ * @*pid:		address to pid used in mig_do_receive_init.
++ *             mig_do_receive_init waits until pid!=0, before setting
++ *             up task and sending ack back to home node.
+  *
+  * Description:
+- * 	start the migration daemon.
+- * 	wait for communication, and if it is a remote request
+- * 	then start a user-thread with the new program to run
++ *    This is the newly created process.
+  **/
+-int openmosix_mig_daemon(void *nothing)
++KCOMD_NSTATIC NORET_TYPE int mig_handle_migration(pid_t *pid)
+ {
+ 	task_t *p = current;
+ 	int error;
+-	struct socket *mlink;
+-	struct sockaddr saddr;
+ 
+-	om_daemonize("omkmigd", 0);
++	/* reparent before anything real happens to the process so nothing gets*/
++	/* re-initialized.*/
++	reparent_to_init();
++	error = obtain_mm(p);
++	if (error)
++		goto fail;
++	/* clear_used_math(); // not really sure what this does?*/
+ 
+-	task_set_dflags(p, DREMOTEDAEMON);
++	task_set_dflags(p, DREMOTE);
++	*pid=p->pid;
+ 
+-	set_our_addr(AF_INET, &saddr, REMOTE_DAEMON_PORT);
++	OM_VERBOSE_MIG("[OM] receiving new process\n");
+ 
+-restart:
+-	if (!p->om.contact) {
+-		p->om.contact = comm_setup_listen(&saddr);
+-		if (!p->om.contact) {
+-			printk(KERN_WARNING
+-				"omkmigd: failed to open mig service\n");
+-			flush_signals(p);
+-			set_current_state(TASK_INTERRUPTIBLE);
+-			schedule_timeout(HZ);
+-			goto restart;
+-		}
+-	}
++	error = mig_do_receive(p);
++	if (error)
++		goto fail;
+ 
+-	/* migration daemon loop */
+-	while (1)
+-	{
+-		error = comm_accept(p->om.contact, &mlink, &saddr, 0UL);
+-		if (error == -EINTR || error == -ERESTART || error == -EAGAIN
+-		   || error == -ERESTARTSYS)
+-		{
+-			if (sigismember(&(p->pending.signal), SIGCHLD)) {
+-				printk("omigd: SIGCHLD caught\n");
+-			}
+-			flush_signals(p);
+-			continue;
+-		} else if (error) {
+-			OMBUG("failed to accept\n");
+-			comm_close(mlink);
+-			goto restart;
+-		}
++	/* clear_tsk_thread_flag(p, TIF_SIGPENDING); // Added by MSD ???*/
++	/* init_sigpending(&p->pending); // Added by MSD ????*/
++
++	/* OM_VERBOSE_MIG("[OM] starting process(%d)\n", p->pid);*/
++	set_current_state(TASK_RUNNING);
++	/* set_current_state(TASK_INTERRUPTIBLE);*/
++	schedule();
++	if (task_test_dflags(p, DREMOTE))
++	printk("[OM] starting remote process(%d)\n", p->pid);
++	else
++	printk("[OM] starting local process(%d)\n", p->pid);
++
++	#if 0
++	flush_signals(p); //MSDMSD
++	reparent_to_init(); //MSD
++	cap_clear(p->cap_permitted);
++	cap_clear(p->cap_effective);
++	cap_task_reparent_to_init(p);
++	p->cap_permitted=0;
++	p->cap_effective=0;
++	#endif
+ 
+-		error = user_thread(mig_handle_migration, (void *) mlink, 0);
+-		if (error < 0)
+-			comm_close(mlink);
++	clear_thread_flag(TIF_SIGPENDING);
++	/* flush_thread();*/
++	arch_kickstart(p);
++	/*NOTREACHED*/
++
++	printk("process %u, waking up. YOU SHOULD NOT SEE THIS!!!!!\n", p->pid);
++	while (1) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		schedule();
+ 	}
+ 
+-	/* Not reached, just to prevent warning on recent gcc: */
+-	return 0;
++
++fail:
++	printk("mig_handle_migration failed with %d\n", error);
++	OMBUG("failed\n");
++	do_exit(SIGKILL);
++	/*NOTREACHED*/
+ }
++

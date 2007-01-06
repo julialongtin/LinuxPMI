@@ -1,0 +1,35 @@
+Subject: [patch @num@/@total@] @name@
+
+This trivial bug set the data pointer to NULL by default, so that when packet
+eventually are deleted, it does not crash :)
+
+---
+ hpc/kcom.c  |    2 +-
+ hpc/kcomd.c |    1 +
+ 2 files changed, 2 insertions(+), 1 deletion(-)
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-12-19 16:59:18.000000000 +0100
++++ linux/hpc/kcomd.c	2006-12-22 23:43:56.000000000 +0100
+@@ -383,6 +383,7 @@
+ 		return -ENOENT;
+ 
+ 	// read in any data
++        (*recv_kcom_pkt)->data = NULL;
+ 	len = (*recv_kcom_pkt)->len;
+ 	if (len > 0) {
+ 		if (((*recv_kcom_pkt)->type & MSG_MASK) == PKT_NEW_MSG) {
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-12-19 16:59:18.000000000 +0100
++++ linux/hpc/kcom.c	2006-12-22 23:43:56.000000000 +0100
+@@ -469,7 +469,7 @@
+ 		list_del(&pkt->list);
+ 	}
+ 
+-	if (pkt->data) kfree(pkt->data);
++	if (pkt->len && pkt->data) kfree(pkt->data);
+ 
+ 	kmem_cache_free(kcom_pkt_cachep, pkt);
+ }

@@ -1,0 +1,99 @@
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:00:28.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:07.000000000 +0100
+@@ -448,7 +448,7 @@
+ 	siginfo_t info; /* matt*/
+ 	int sig;
+ 	int err;
+-	struct timeval start,stop;
++	struct timeval;
+ 
+ 	fd4=-1;
+ 	fd6=-1;
+@@ -465,9 +465,6 @@
+ 	sigfillset(&current->blocked);
+ 
+ 	/* kcom_pid=current->pid;*/
+-	/* read_lock(&tasklist_lock);*/
+-	/* kcomd_task = find_task_by_pid(current->pid);*/
+-	/* read_unlock(&tasklist_lock);*/
+ 	kcomd_task=current;
+ 
+ retry_listen:
+@@ -498,42 +495,38 @@
+ 		if (fd6!=-1)
+ 			set_bit(fd6, sockets_fds.in);
+ 
+-		/* for each nodes (set fds.in && fds.out) */
+-		/* printk("spin_lock\n");*/
+-		/* spin_lock(&kcom_nodes_lock);*/
+-		/* printk("Setting bits for select (n=%d, maxfds=%d).\n", n, maxfds);*/
+-	do_gettimeofday(&start);
++		/* for each nodes (set fds.in && fds.out) and reset the waiting fds */
++
++		read_lock(&kcom_nodes_lock);
+ 		list_for_each_entry(node, &kcom_nodes, list) {
+ 			/* printk("node->fd=%d\n", node->fd);*/
+ 
+ 			if (node->fd == -1 || node->fd > maxfds) {
+-				/* spin_unlock(&kcom_nodes_lock);*/
++				read_unlock(&kcom_nodes_lock);
+ 				continue;
+ 			}
+ 
+ 			/* if a file descriptor is open, we want select to pay attention.*/
+-			/* printk("Setting in bit for fd%d\n", node->fd);*/
+ 			set_bit(node->fd, sockets_fds.in);
+ 			set_bit(node->fd, sockets_fds.ex);
+ 
+ 			/* if there are packets to be sent, select should pay attention.*/
++			read_lock(&node->tasks_lock);
+ 			list_for_each_entry(task, &node->tasks, list)
+ 				if (!list_empty(&task->out_packs)) {
+-					/* printk("Setting out bit for fd%d\n", node->fd);*/
+ 					set_bit(node->fd, sockets_fds.out);
+ 				}
++			read_unlock(&node->task_locks);
+ 		}
+-	do_gettimeofday(&stop);
+-		/* spin_unlock(&kcom_nodes_lock);*/
+-		/* printk("Done setting bits for select.\n");*/
+-
+-
++		read_unlock(&kcom_nodes_lock);
+ 
+ 		zero_fd_set(n, sockets_fds.res_in);
+ 		zero_fd_set(n, sockets_fds.res_out);
+ 		zero_fd_set(n, sockets_fds.res_ex);
+ 
+-	do_gettimeofday(&start);
++
++		/* Now wait for a signal or packet to arrive */
++
+ 		allow_signal (SIGHUP);
+ 		timeout=-1;
+ 		ret = do_select(n + 1, &sockets_fds, &timeout);
+@@ -547,18 +540,20 @@
+ 			/* We have to allocate them here.*/
+ 			/* We'll do that for the signal so we don't have to do it every iteration.*/
+ 
++			read_lock(&kcom_nodes_lock);
+ 			list_for_each_entry(node, &kcom_nodes, list)
+ 				if (node->fd==0) { /* unmapped*/
+-					/* printk("Found unmapped socket\n");*/
+ 					node->fd = sock_map_fd(node->sock);
+ 					alloc_fd_bitmap(node->fd);
+ 				}
++			read_unlock(&kcom_nodes_lock);
++
+ 			continue;
++
+ 		} else if (ret < 0) {/* -1=error; 0=signal*/
+ 			printk(KERN_ERR "do_select returned an error. \n");
+ 			schedule_timeout_interruptible(HZ);
+ 		}
+-	do_gettimeofday(&stop);
+ 
+ 		/* test listening sockets */
+ 		if (fd4 != -1 && test_bit(fd4, sockets_fds.res_in)) {

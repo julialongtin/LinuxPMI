@@ -1,0 +1,33 @@
+
+This patch removes an unreached else statement int mig_do_receive_home.
+ack pkts are dealt with in kcomd so no need to deal with them here.
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:51:58.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:52:00.000000000 +0100
+@@ -113,25 +113,6 @@
+ 			return -1;
+ 		}
+ 
+-
+-	} else {
+-
+-		recv_tsk=kcom_task_find(recv_kcom_pkt->rpid);
+-		if (!recv_tsk) {
+-			printk(KERN_ERR "Unable to find remote pid %u\n", recv_kcom_pkt->rpid);
+-			return -1;
+-		}
+-
+-		/* spin_lock(&recv_tsk->spinlock);*/
+-		list_add_tail(&recv_kcom_pkt->list, &recv_tsk->in_packs);
+-		/* spin_unlock(&recv_tsk->spinlock);*/
+-		sltsk=find_task_by_pid(recv_kcom_pkt->rpid); /* only remote node will receive MIG_GO_HOME ack*/
+-		if (sltsk) {
+-			wake_up_process(sltsk);
+-		} else {
+-			printk(KERN_ERR"Unable to wake up process %u\n", recv_kcom_pkt->rpid);
+-			return -1;
+-		}
+ 	}
+ 
+ 	return 0;

@@ -1,0 +1,25 @@
+Subject: [patch @num@/@total@] @name@ fix migrating status
+
+Nobody noticed, but actually, the test was wrong for checking if the process
+was (or not) migrating in proc_pid_get_where. The test I initially wrote was
+'if (task_test_dreqs(current, DREQ_MOVE))' which was obviously always false, 
+since the process (current) intiating the proc read was the shell, not the 
+process we were looking for !!
+
+Well, this is fixed now :)
+
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-15 19:39:08.000000000 +0100
++++ linux/hpc/proc.c	2006-11-16 21:52:26.000000000 +0100
+@@ -114,7 +114,9 @@
+ 	struct sockaddr_in *saddr;
+ 	unsigned int addr;
+ 
+-	if (task_test_dreqs(current, DREQ_MOVE)) {
++	if (task_test_dreqs(p, DREQ_MOVE)) {
++		length = sprintf(buf, "queued\n");
++	} else if(task_test_dflags(p, DPASSING)) {
+ 		length = sprintf(buf, "migrating\n");
+ 	} else if (task_test_dflags(p, DMIGRATED)) {
+ 		saddr=(struct sockaddr_in *)p->om.whereto;

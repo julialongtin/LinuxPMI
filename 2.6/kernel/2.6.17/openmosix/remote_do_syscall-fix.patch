@@ -1,0 +1,20 @@
+Subject: [patch @num@/@total@] @name@ Fixed improper task state on return
+
+
+syscall may change task state, and thus the task state must be set to TASK_RUNNING on syscall return
+---
+ hpc/remote.c |    1 +
+ 1 file changed, 1 insertion(+)
+
+Index: linux/hpc/remote.c
+===================================================================
+--- linux.orig/hpc/remote.c	2007-01-04 12:11:46.000000000 +0100
++++ linux/hpc/remote.c	2007-01-04 12:40:31.000000000 +0100
+@@ -190,6 +190,7 @@
+ 	}
+ 
+ 	task_clear_dflags(current, DSYSCALL);
++	set_task_state(current, TASK_RUNNING);
+ 	return r.ret;
+ 
+ error:

@@ -1,0 +1,225 @@
+[patch @num@/@total@] @name@ mig_do_receive cleanup
+
+This patch cleans up the implementation of mig_do_receive, adding spin locks and
+cleaning the structure .... 
+
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-13 16:01:34.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-13 16:01:36.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006-2007 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -15,6 +16,8 @@
+  *
+  * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
+  *
++ * Kcomd protocol by Matt Dew and Florian Delizy
++ *
+  */
+ 
+ #include <linux/sched.h>
+@@ -471,7 +474,8 @@
+ {
+ 	struct kcom_task *mytsk=NULL;
+ 	struct kcom_pkt *pkt, *pkt_next;
+-	int ret;
++	int ret = 0;
++	int waiting_time = 0;
+ 
+ 
+ 	task_set_dflags(p, DINCOMING);
+@@ -479,91 +483,100 @@
+ 
+ 	/* Wait for kcomd to set up the kcom_task struct*/
+ 	while (mytsk==NULL) {
++		waiting_time++;
+ 		schedule_timeout_interruptible(HZ/1000);
+-	/*spin_lock();*/
+ 		mytsk=kcom_task_find(p->pid);
+-	/*spin_unlock();*/
++		/* Preventing infinite loops */
++		if (1000000 < waiting_time) {
++			printk(KERN_ERR "openMosix: kcomd task creation timeout exceeded, dying ... \n");
++			ret = -1;
++			goto init_exit;
++		}
+ 	}
+ 
++	ret = 0;
+ 	/* Initialize remote proc's whereto*/
+ 	if (task_test_dflags(p, DREMOTE)) {
+ 		memcpy(p->om.whereto, &mytsk->node->addr, sizeof(mytsk->node->addr));
+ 	}
+ 
+ 	set_current_state(TASK_INTERRUPTIBLE);
+-	/* spin_lock(&mytsk->spinlock);*/
++
++	write_lock(&mytsk->spinlock);
+ 	while (1) {
+ 
+-		if (!list_empty(&mytsk->in_packs))
+-			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
++		if (list_empty(&mytsk->in_packs)) goto protocol_sleep;
++
++		list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
++
++			ret = 0;
++
++			switch (pkt->type & MIG_MASK) {
++
++				case MIG_MM:
++					ret =  mig_do_receive_mm(p, pkt);
++					break;
++
++				case MIG_VMA:
++					ret=mig_do_receive_vma(p, pkt);
++					break;
++
++				case MIG_PAGE:
++					ret=mig_do_receive_page(p, pkt);
++					break;
++
++				case MIG_FP:
++					ret=mig_do_receive_fp(p, pkt);
++					break;
++
++				/* this is the last thing we do in the chain of receiving,
++				 * so return 0 after we're done */
++				case MIG_TASK:
++					ret=mig_do_receive_proc_context(p, pkt);
++
++					task_clear_dflags(p, DINCOMING);
++					flush_tlb_mm(p->mm); /* for all the new pages */
+ 
+-				switch (pkt->type & MIG_MASK) {
++					list_del(&pkt->list);
++					kmem_cache_free(kcom_pkt_cachep, pkt);
++					/* spin_unlock(&mytsk->spinlock);*/
+ 
+-					case MIG_MM:
+-						ret =  mig_do_receive_mm(p, pkt);
+-						list_del(&pkt->list);
+-						kmem_cache_free(kcom_pkt_cachep, pkt);
+-						if (ret)
+-							return ret;
+-						break;
+-
+-					case MIG_VMA:
+-						ret=mig_do_receive_vma(p, pkt);
+-						list_del(&pkt->list);
+-						kmem_cache_free(kcom_pkt_cachep, pkt);
+-						if (ret)
+-							return ret;
+-						break;
+-
+-					case MIG_PAGE:
+-						ret=mig_do_receive_page(p, pkt);
+-						list_del(&pkt->list);
+-						kmem_cache_free(kcom_pkt_cachep, pkt);
+-						if (ret)
+-							return ret;
+-						break;
+-
+-					case MIG_FP:
+-						ret=mig_do_receive_fp(p, pkt);
+-						list_del(&pkt->list);
+-						kmem_cache_free(kcom_pkt_cachep, pkt);
+-						if (ret)
+-							return ret;
+-						break;
+-
+-					/* this is the last thing we do in the chain of receiving,
+-					 * so return 0 after we're done */
+-					case MIG_TASK:
+-						ret=mig_do_receive_proc_context(p, pkt);
+-
+-						task_clear_dflags(p, DINCOMING);
+-						flush_tlb_mm(p->mm); /* for all the new pages */
+-
+-						list_del(&pkt->list);
+-						kmem_cache_free(kcom_pkt_cachep, pkt);
+-						/* spin_unlock(&mytsk->spinlock);*/
+-
+-						if (ret)
+-							return ret;
+-						set_current_state(TASK_RUNNING);
+-						return 0;
+-
+-					default:
+-						printk(KERN_ERR "[pid: %u] Unknown packet type 0x%x received.\n", p->pid, pkt->type);
+-						break;
++					if (!ret) set_current_state(TASK_RUNNING);
+ 
+-				}
++					goto protocol_exit;
++
++					break;
++
++				default:
++					printk(KERN_ERR "openMosix: (receive) [pid: %u] Unknown packet type 0x%x received.\n", p->pid, pkt->type);
++
++					ret = -1; /* Should exit on unknown packet !! */
++					break;
+ 
+ 			}
++			list_del(&pkt->list);
++			kmem_cache_free(kcom_pkt_cachep, pkt);
++			if (ret)
++				goto protocol_exit;
+ 
+-	/* spin_unlock(&mytsk->spinlock);*/
+-	schedule();
+-	set_current_state(TASK_INTERRUPTIBLE);
+-	/* spin_lock(&mytsk->spinlock);*/
++		}
++
++	/* This label is inside the while, yes, but it allows much more readability ... */
++	protocol_sleep:
++		write_unlock(&mytsk->spinlock);
++		set_current_state(TASK_INTERRUPTIBLE);
++		schedule();
++		write_lock(&mytsk->spinlock);
+ 	}
+-	/* spin_unlock(&mytsk->spinlock);*/
+ 
+ 
++protocol_exit:
++	write_unlock(&mytsk->spinlock);
++
++init_exit:
++
++	return ret;
++
+ }
+ 
+ /**
+@@ -575,8 +588,9 @@
+  * Description:
+  *    This is the newly created process.
+  **/
+-KCOMD_NSTATIC NORET_TYPE int mig_handle_migration(pid_t *pid)
++KCOMD_NSTATIC NORET_TYPE int mig_handle_migration(void *param)
+ {
++	pid_t *pid = (pid_t *) param;
+ 	task_t *p = current;
+ 	int error;
+ 
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- linux.orig/include/hpc/prototype.h	2006-11-13 16:00:25.000000000 +0100
++++ linux/include/hpc/prototype.h	2006-11-13 16:01:36.000000000 +0100
+@@ -107,7 +107,7 @@
+ int kcom_task_send(struct kcom_task *, int, int, char *, char *, unsigned long);
+ int kcom_task_delete(int);
+ 
+-int mig_handle_migration(int *);
++int mig_handle_migration(void *);
+ int user_thread(int (*fn)(void *), void * arg, unsigned long flags);
+ int mig_init(struct kcom_node *,struct kcom_pkt *);
+ 

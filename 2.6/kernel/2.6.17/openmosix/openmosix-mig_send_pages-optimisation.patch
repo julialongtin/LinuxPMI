@@ -1,0 +1,46 @@
+[patch @num@/@total@] mig_send_pages optimization and spinlock
+
+This patches optimize the mig_send_pages procedure (data do not need to be
+copied before sent ... just sent
+
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2006-11-13 16:00:26.000000000 +0100
++++ linux/hpc/migsend.c	2006-11-13 16:01:31.000000000 +0100
+@@ -182,27 +182,23 @@
+ 	struct vm_area_struct * vma;
+ 	unsigned long addr;
+ 	struct sockaddr_in *dest_ptr;
+-	char *data;
+-
+-	data=kzalloc(PAGE_SIZE, GFP_KERNEL);
++        int type = MIG_PAGE;
+ 
+ 	dest_ptr=(void *)p->om.whereto;
++
++        if (task_test_dflags(p, DREMOTE))
++                type |= REM_FLG;
++        else
++                type |= DEP_FLG;
++
+ 	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
+ 	{
+ 		if (!(vma->vm_flags & VM_READ))
+ 			continue;
+-		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE)
+-		{
+-			// FIXME:   mem pages need to be copied into a buffer, then send the buffer.   ???
+-			memcpy(data, (void *)addr, PAGE_SIZE);
+-			if (task_test_dflags(p, DREMOTE))
+-				kcom_send_with_ack(MIG_PAGE | REM_FLG, PAGE_SIZE, (char *)data, addr, dest_ptr);
+-			else
+-				kcom_send_with_ack(MIG_PAGE | DEP_FLG, PAGE_SIZE, (char *)data, addr, dest_ptr);
+ 
+-		}
++		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE)
++                        kcom_send_with_ack(type, PAGE_SIZE, (char *)addr, addr, dest_ptr);
+ 	}
+-	kfree(data);
+ 	return 0;
+ }
+ 

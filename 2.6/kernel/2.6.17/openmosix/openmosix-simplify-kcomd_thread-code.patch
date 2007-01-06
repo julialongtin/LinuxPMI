@@ -1,0 +1,272 @@
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:07.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:20.000000000 +0100
+@@ -424,6 +424,70 @@
+ 	return 0;
+ }
+ 
++static void kcomd_thread_free_ressources(void);
++
++/**
++ * kcomd_thread_initialize
++ *
++ * Description:
++ *    initialize caches for kcomd_thread function
++ **/
++
++static void kcomd_thread_initialize(void)
++{
++	kcom_data_cachep=kmem_cache_create("kcom_data_cache", 1024, 0, 0, NULL, NULL); /* for now help chase down memory leaks*/
++	kcom_pkt_cachep =kmem_cache_create("kcom_pkt_cache", sizeof(struct kcom_pkt), 0, 0, NULL, NULL);
++	kcom_task_cachep=kmem_cache_create("kcom_task_cache", sizeof(struct kcom_task), 0, 0, NULL, NULL);
++	kcom_node_cachep=kmem_cache_create("kcom_node_cache", sizeof(struct kcom_node), 0, 0, NULL, NULL);
++	/* kcom_saddr_cachep=kmem_cache_create("kcom_saddr_cache", sizeof(struct sockaddr), 0, 0, NULL, NULL);*/
++}
++
++
++/**
++ * kcomd_thread_set_fds
++ *
++ * Description:
++ *    Set the fd_set_bits properly for the select call (only used in kcomd_thread)
++ **/
++
++static void kcomd_thread_set_fds(int n)
++{
++	struct kcom_node *node;
++	struct kcom_task *task;
++	/* for each nodes (set fds.in && fds.out) and reset the waiting fds */
++
++	zero_fd_set(n, sockets_fds.in);
++	zero_fd_set(n, sockets_fds.out);
++	zero_fd_set(n, sockets_fds.ex);
++
++	read_lock(&kcom_nodes_lock);
++	list_for_each_entry(node, &kcom_nodes, list) {
++		/* printk("node->fd=%d\n", node->fd);*/
++
++		if (node->fd == -1 || node->fd > maxfds) {
++			read_unlock(&kcom_nodes_lock);
++			continue;
++		}
++
++		/* if a file descriptor is open, we want select to pay attention.*/
++		set_bit(node->fd, sockets_fds.in);
++		set_bit(node->fd, sockets_fds.ex);
++
++		/* if there are packets to be sent, select should pay attention.*/
++		read_lock(&node->tasks_lock);
++		list_for_each_entry(task, &node->tasks, list)
++			if (!list_empty(&task->out_packs)) {
++				set_bit(node->fd, sockets_fds.out);
++			}
++		read_unlock(&node->tasks_lock);
++	}
++	read_unlock(&kcom_nodes_lock);
++
++	zero_fd_set(n, sockets_fds.res_in);
++	zero_fd_set(n, sockets_fds.res_out);
++	zero_fd_set(n, sockets_fds.res_ex);
++}
++
+ /**
+  * kcomd_thread
+  *
+@@ -441,8 +505,6 @@
+ {
+ 	int ret;
+ 	struct kcom_node *node, *node_next;
+-	struct kcom_task *task, *task_next;
+-	struct kcom_pkt *pkt, *pkt_next;
+ 	s64 timeout = -1;
+ 	int n = -1;
+ 	siginfo_t info; /* matt*/
+@@ -455,11 +517,7 @@
+ 	kcomd_done=0;
+ 	printk(KERN_INFO "kcomd: init\n");
+ 
+-	kcom_data_cachep=kmem_cache_create("kcom_data_cache", 1024, 0, 0, NULL, NULL); /* for now help chase down memory leaks*/
+-	kcom_pkt_cachep=kmem_cache_create("kcom_pkt_cache", sizeof(struct kcom_pkt), 0, 0, NULL, NULL);
+-	kcom_task_cachep=kmem_cache_create("kcom_task_cache", sizeof(struct kcom_task), 0, 0, NULL, NULL);
+-	kcom_node_cachep=kmem_cache_create("kcom_node_cache", sizeof(struct kcom_node), 0, 0, NULL, NULL);
+-	/* kcom_saddr_cachep=kmem_cache_create("kcom_saddr_cache", sizeof(struct sockaddr), 0, 0, NULL, NULL);*/
++	kcomd_thread_initialize();
+ 
+ 	daemonize("kcomd", 0);
+ 	sigfillset(&current->blocked);
+@@ -485,9 +543,7 @@
+ 
+ 		n = maxfds;
+ 
+-		zero_fd_set(n, sockets_fds.in);
+-		zero_fd_set(n, sockets_fds.out);
+-		zero_fd_set(n, sockets_fds.ex);
++		kcomd_thread_set_fds(n);
+ 
+ 		/* add listening sockets to the set */
+ 		if (fd4!=-1)
+@@ -495,46 +551,17 @@
+ 		if (fd6!=-1)
+ 			set_bit(fd6, sockets_fds.in);
+ 
+-		/* for each nodes (set fds.in && fds.out) and reset the waiting fds */
+-
+-		read_lock(&kcom_nodes_lock);
+-		list_for_each_entry(node, &kcom_nodes, list) {
+-			/* printk("node->fd=%d\n", node->fd);*/
+-
+-			if (node->fd == -1 || node->fd > maxfds) {
+-				read_unlock(&kcom_nodes_lock);
+-				continue;
+-			}
+-
+-			/* if a file descriptor is open, we want select to pay attention.*/
+-			set_bit(node->fd, sockets_fds.in);
+-			set_bit(node->fd, sockets_fds.ex);
+-
+-			/* if there are packets to be sent, select should pay attention.*/
+-			read_lock(&node->tasks_lock);
+-			list_for_each_entry(task, &node->tasks, list)
+-				if (!list_empty(&task->out_packs)) {
+-					set_bit(node->fd, sockets_fds.out);
+-				}
+-			read_unlock(&node->task_locks);
+-		}
+-		read_unlock(&kcom_nodes_lock);
+-
+-		zero_fd_set(n, sockets_fds.res_in);
+-		zero_fd_set(n, sockets_fds.res_out);
+-		zero_fd_set(n, sockets_fds.res_ex);
+-
+ 
+ 		/* Now wait for a signal or packet to arrive */
+ 
+ 		allow_signal (SIGHUP);
+ 		timeout=-1;
+ 		ret = do_select(n + 1, &sockets_fds, &timeout);
++		disallow_signal (SIGHUP);
+ 		/* SIGHUP is sent by kcom_send to wake up kcomd so it can send the packet*/
+ 		while (signal_pending (current)) {
+ 			sig = dequeue_signal (current, &current->blocked, &info);
+ 		}
+-		disallow_signal (SIGHUP);
+ 		if (ret == 0) { /* -1=error; 0=signal*/
+ 			/* New kernel security, prohibits sharing file descriptors between kernel threads.*/
+ 			/* We have to allocate them here.*/
+@@ -567,19 +594,12 @@
+ 		}
+ 
+ 		/* for each nodes { test bit, in, out and do stuff } */
+-		/* spin_lock(&kcom_nodes_lock);*/
+-/*restart:*/
++
++		write_lock(&kcom_nodes_lock);
+ 		list_for_each_entry_safe(node, node_next, &kcom_nodes, list) {
+-			/*
+-			if (test_bit(node->fd, sockets_fds.res_ex)) {
+-				data_exception(node);
+-				goto restart;
+-			}
+-			*/
++
+ 			if (test_bit(node->fd, sockets_fds.res_in)) {
+-				do_gettimeofday(&start);
+ 				err=pkt_read(node);
+-				do_gettimeofday(&stop);
+ 				if (err!=0) {
+ 					kcomd_done=1;
+ 					printk(KERN_ERR "ERROR receiving data.\nQuitting.\n");
+@@ -587,17 +607,14 @@
+ 				}
+ 			}
+ 			if (node->fd!=-1 && test_bit(node->fd, sockets_fds.res_out)) {
+-				do_gettimeofday(&start);
+ 				data_write(node);
+-				do_gettimeofday(&stop);
+ 			}
+ 		}
+-		/* spin_unlock(&kcom_nodes_lock);*/
++		write_unlock(&kcom_nodes_lock);
+ 	}
+ 
+ /* DONE*/
+ 	printk(KERN_INFO "kcomd: cleaning up.\n");
+-	/* spin_lock(&kcom_nodes_lock);*/
+ 	if (fd4!=-1) {
+ 		sys_close(fd4);
+ 		if (lsock4) {  /* doesn't like this.  Help????????*/
+@@ -612,24 +629,53 @@
+ 		sys_close(fd6);
+ 	}
+ 
++
++	kcomd_thread_free_ressources();
++
++	kcomd_task=NULL;
++	printk(KERN_INFO "kcomd: exit\n");
++	return 0;
++}
++
++
++/**
++ * kcomd_thread_free_ressources
++ *
++ * Description:
++ * Free the kcomd_thread ressources
++ */
++static void kcomd_thread_free_ressources(void)
++{
++	struct kcom_pkt *pkt, *pkt_next;
++	struct kcom_task *task, *task_next;
++	struct kcom_node *node, *node_next;
++
++	write_lock(&kcom_nodes_lock);
+ 	list_for_each_entry_safe(node, node_next, &kcom_nodes, list) {
++
++		write_lock(&node->tasks_lock);
+ 		list_for_each_entry_safe(task, task_next, &node->tasks, list) {
++
++			write_lock(&task->spinlock);
+ 			list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+ 				if ((pkt->len) > 0)
+ 					kfree(pkt->data);
+ 				kmem_cache_free(kcom_pkt_cachep, pkt);
+ 				list_del(&pkt->list);
+ 			}
++
+ 			list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
+ 				if ((pkt->len) > 0)
+ 					kfree(pkt->data);
+ 				kmem_cache_free(kcom_pkt_cachep, pkt);
+ 				list_del(&pkt->list);
+ 			}
++			write_unlock(&task->spinlock);
++
+ 			list_del(&task->list);
+ 			kmem_cache_free(kcom_task_cachep, task);
+ 		}
+-
++		write_unlock(&node->tasks_lock);
+ 
+ 		sock_release(node->sock);
+ 		sys_close(node->fd);
+@@ -638,6 +684,8 @@
+ 		kmem_cache_free(kcom_node_cachep, node);
+ 		/* kfree(node);*/
+ 	}
++	write_unlock(&kcom_nodes_lock);
++
+ 	/* spin_unlock(&kcom_nodes_lock);*/
+ 	kfree(sockets_fds_bitmap);
+ 
+@@ -646,9 +694,6 @@
+ 	kmem_cache_destroy(kcom_task_cachep);
+ 	kmem_cache_destroy(kcom_node_cachep);
+ 
+-	kcomd_task=NULL;
+-	printk(KERN_INFO "kcomd: exit\n");
+-	return 0;
+ }
+ 
+ static int __init kcomd_init(void)

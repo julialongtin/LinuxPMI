@@ -1,0 +1,12 @@
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2006-11-02 22:51:58.000000000 +0100
++++ linux/hpc/migsend.c	2006-11-02 22:52:10.000000000 +0100
+@@ -272,7 +272,6 @@
+ int mig_do_send(task_t *p)
+ {
+ 	struct sockaddr_in* dest_ptr=(void *)p->om.whereto;
+-	unsigned int addr=dest_ptr->sin_addr.s_addr;
+ 	arch_mig_send_pre(p);
+ 
+ 	if (task_test_dflags(p, DREMOTE))  {

@@ -1,0 +1,129 @@
+Index: linux/hpc/remote.c
+===================================================================
+--- linux.orig/hpc/remote.c	2006-11-02 22:50:49.000000000 +0100
++++ linux/hpc/remote.c	2006-11-02 22:51:34.000000000 +0100
+@@ -28,10 +28,12 @@
+ #include <hpc/comm.h>
+ #include <hpc/task.h>
+ #include <hpc/arch.h>
++#include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/service.h>
+ #include <hpc/hpc.h>
+ #include <hpc/debug.h>
++#include <asm/unistd.h>
+ 
+ 
+ NORET_TYPE void remote_disappear(void)
+@@ -149,19 +151,47 @@
+ 	return -1;
+ }
+ 
+-static int remote_do_signal(task_t *p)
++int remote_do_signal(task_t *p,  struct kcom_pkt *pkt)
+ {
+ 	struct omp_signal s;
+ 	unsigned long flags;
+ 	int error;
+-
+-	error = comm_recv(p->om.contact, &s, sizeof(s));
++	struct kcom_pkt *send_pkt;
++	struct kcom_task *send_tsk;
++	// task_t *kcomd_task;
++
++	printk("FUNCTION: remote_do_signal\n");
++	memcpy(&s, pkt->data, pkt->len);
++	// error = comm_recv(p->om.contact, &s, sizeof(s));
+ 	printk("received signal %d\n", s.signr);
+ 
++
+ 	spin_lock_irqsave(&p->sighand->siglock, flags);
+ 	error = __group_send_sig_info(s.signr, &s.siginfo, p);
+ 	spin_unlock_irqrestore(&p->sighand->siglock, flags);
+ 
++
++	send_tsk=kcom_task_find(p->pid);
++	send_pkt=kcom_pkt_create(0, MIG_SYSCALL | PKT_ACK | DEP_SIGNAL | REM_FLG, PKT_ACK, NULL);
++	send_pkt->msgid=pkt->msgid;
++	send_pkt->hpid=send_tsk->hpid;
++	send_pkt->rpid=send_tsk->rpid;
++	send_pkt->resp=pkt->resp;
++
++	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
++
++	#if 0
++	read_lock(&tasklist_lock);
++	kcomd_task=find_task_by_pid(kcom_pid);
++	read_unlock(&tasklist_lock);
++	#endif
++
++	if (kcomd_task) {
++		printk("Signaling kcomd\n");
++		send_sig(SIGHUP, kcomd_task, 0);
++	} else
++		printk("Unable to signal kcomd\n");
++	printk("leaving FUNCTION: remote_do_signal\n");
+ 	return 0;
+ }
+ 
+@@ -179,7 +209,9 @@
+ 
+ 	switch (req.type) {
+ 	case DEP_SIGNAL:
++		#if 0
+ 		error = remote_do_signal(p);
++		#endif
+ 		break;
+ 	case DEP_COMING_HOME:
+ 		printk("remote_do_comm(): got DEP_COMING_HOME\n");
+@@ -207,7 +239,10 @@
+ 	task_t *p = current;
+ 	struct omp_syscall_req s;
+ 	struct omp_syscall_ret r;
+-	int error, i;
++	int i;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
++
++	printk("FUNCTION: remote_do_syscall\n");
+ 
+ 	OMDEBUG_SYS(1, "[remote] remote syscall %d\n", n);
+ 
+@@ -215,23 +250,29 @@
+ 	for (i = 0; i < NR_MAX_SYSCALL_ARG; i++)
+ 		s.arg[i] = arch_get_sys_arg(i, regs);
+ 
+-	error = comm_send_hd(p->om.contact, REM_SYSCALL, &s, sizeof(s));
+-	if (error < 0)
+-		goto error;
++	printk("syscall: [%d]\n", s.n);
++	kcom_send_with_ack(MIG_SYSCALL | REM_FLG, sizeof(s), (char *)&s, 0, dest_ptr);
++
++	// Set interruptible so we can sleep, but if the remote sends syscall info requests (COPY_TO/FROM_USER, etc), then we have to answer those before sleeping.
++	set_current_state(TASK_INTERRUPTIBLE);
+ 
+ 	OMDEBUG_SYS(3, "[remote] waiting deputy answer\n");
+ 
+-	error = remote_handle_user(p, REM_SYSCALL|REPLY);
+-	if (error < 0)
++	// if exitting, no need for remote_handle_user
++	if ((n != __NR_exit_group) && (n != __NR_exit))
++		r.ret = remote_handle_user(p, REM_SYSCALL|REPLY);
++	else { // exit
++		printk("leaving FUNCTION: remote_do_syscall; exit\n");
+ 		goto error;
++	}
+ 
+-	error = comm_recv(p->om.contact, &r, sizeof(r));
+-	if (error < 0)
+-		goto error;
+ 
+-	OMDEBUG_SYS(2, "[remote] sys[%d] = %ld\n", n, r.ret);
++	// OMDEBUG_SYS(2, "[remote] sys[%d] = %ld\n", n, r.ret);
++	printk("[remote] sys[%d] = %ld\n", n, r.ret);
+ 
++	printk("leaving FUNCTION: remote_do_syscall\n");
+ 	return r.ret;
++
+ error:
+ 	remote_disappear();
+ 	return -1;

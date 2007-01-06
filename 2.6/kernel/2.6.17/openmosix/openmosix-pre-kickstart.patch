@@ -1,0 +1,14 @@
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:52:05.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:52:19.000000000 +0100
+@@ -562,7 +562,8 @@
+ 	/* set_current_state(TASK_INTERRUPTIBLE);*/
+ 	schedule();
+ 
+-	flush_signals(p);
++
++	flush_thread();
+ 
+ 	arch_kickstart(p);
+ 	/*NOTREACHED*/

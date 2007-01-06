@@ -1,0 +1,113 @@
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-11-02 22:50:48.000000000 +0100
++++ linux/hpc/task.c	2006-11-02 22:51:38.000000000 +0100
+@@ -23,8 +23,9 @@
+ #include <hpc/task.h>
+ #include <hpc/comm.h>
+ #include <hpc/mig.h>
+-#include <hpc/prototype.h>
+ #include <hpc/hpc.h>
++#include <hpc/kcom.h>
++#include <hpc/prototype.h>
+ 
+ /**
+  * task_set_comm - swap openMosix link for a process (return old one)
+@@ -124,14 +125,26 @@
+  **/
+ void task_request_move(task_t *p)
+ {
+-	struct sockaddr *addr;
++	struct sockaddr *dest_ptr=p->om.whereto;
++
++/*
++ * FIXME:
++ *  1) home -> remote - fresh migration; *
++ *  2) home -> remote - redundant migration; *
++ *  3) home -> 'home';
++ *  4) home -> new remote;
++ *  5) remote -> 'home' - fresh migration; *
++ *  6) remote -> home ip address;
++ *  7) remote -> remote ip address;
++ *  8) remote -> new remote - initiated from remote;
++ *  9) remote -> new remote - initiated from home;
++ *  10) remote -> home - bring home initiated from home;
++ */
+ 
+ 	task_clear_dreqs(p, DREQ_MOVE);
+-	addr = p->om.whereto;
+-	p->om.whereto = NULL;
+ 
+-	task_move_to_node(p, addr, 0);
+-	kfree(addr);
++	task_move_to_node(p, dest_ptr, 0);
++
+ }
+ 
+ /**
+@@ -142,7 +155,8 @@
+ 	task_t *parent = current;
+ 
+ 	memset(&p->om, 0, sizeof(om_task_t));
+-	
++	printk("leaving FUNCTION: task_local_bring\n");
++
+ 	if (p->pid == 1)
+ 		task_set_stay(p, DSTAY_SYSTEM);
+ 
+@@ -154,7 +168,7 @@
+ 		task_set_dflags(p, DDEPUTY);
+ 
+ 	INIT_LIST_HEAD(&p->om.rfiles);
+-	
++
+ 	return 0;
+ }
+ 
+@@ -164,14 +178,19 @@
+ int openmosix_task_exit(void)
+ {
+ 	task_t *p = current;
+-	
++
+ 	if (!task_test_dflags(p, DDEPUTY | DREMOTE))
+ 		return 0;
+ 
++	dump_stack();
++	kcom_task_delete(p->pid);
+ 	task_heldfiles_clear(p);
+-	
++	kfree(p->om.whereto);
++
++	#if 0
+ 	if (p->om.contact)
+-		comm_close(p->om.contact);
++		 comm_close(p->om.contact);
++	#endif
+ 	return 0;
+ }
+ 
+@@ -195,21 +214,15 @@
+ /**
+  * task_register_migration - register a migration for this process
+  * @p:		task to migrate
+- * @dest:	destination of the migration (NULL == home)
+  **/
+-int task_register_migration(task_t *p, struct sockaddr *dest)
++int task_register_migration(task_t *p)
+ {
+-	if (dest) {
+-		p->om.whereto = kmalloc(sizeof(struct sockaddr), GFP_KERNEL);
+-		if (!p->om.whereto)
+-			return -1;
+-		memcpy(p->om.whereto, dest, sizeof(struct sockaddr));
+-	}
+ 	task_set_dreqs(p, DREQ_MOVE);
+ 	wake_up_process(p);
+ 	set_ti_thread_flag(p->thread_info, TIF_NEED_RESCHED);
+ 	return 0;
+ }
++EXPORT_SYMBOL_GPL(task_register_migration);
+ 
+ /**
+  * task_do_request - current task processes requests coming from other tasks

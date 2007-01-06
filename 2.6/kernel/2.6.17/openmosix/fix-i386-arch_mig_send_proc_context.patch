@@ -1,0 +1,32 @@
+Subject: [@num@/@total@] @name@
+
+This patch fix the %gs/%fs handling, this is a candidate patch, I didn't test it on i386 I'm a amd64 guy ;)
+
+It may or may not correct the bug as well as crash your computer and start the end of the world, who knows ....
+
+i386 guys, please feedback
+
+---
+ hpc/arch-i386.c |    8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+
+Index: linux/hpc/arch-i386.c
+===================================================================
+--- linux.orig/hpc/arch-i386.c	2006-12-22 15:30:18.000000000 +0100
++++ linux/hpc/arch-i386.c	2006-12-22 15:30:22.000000000 +0100
+@@ -186,9 +186,11 @@
+ 	regs = ARCH_TASK_GET_USER_REGS(p);
+ 	memcpy(&m->regs, regs, sizeof(struct pt_regs));
+ 
+-	/* copy some segmentation registers */
+-	m->arch.fs = p->thread.fs;
+-	m->arch.gs = p->thread.gs;
++	/* There is no guaranty that %fs/%gs copie on the thread struct */
++	/* are accurate, we need the real one (TM) 			*/
++
++	savesegment(fs, m->arch.fs);
++	savesegment(gs, m->arch.gs);
+ 
+ 	for (i = 0; i < GDT_ENTRY_TLS_ENTRIES; i++)
+ 		m->arch.tls_array[i] = p->thread.tls_array[i];

@@ -1,0 +1,76 @@
+Subject: [PATCH @num@/@total@] fix wrong set_sockopts error handling
+
+setfs were not reset correctly on error, now done (ok I know error can not happen on ipv4 but still ...)
+
+---
+ hpc/kcom.c |   15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2007-01-03 17:49:41.000000000 +0100
++++ linux/hpc/kcom.c	2007-01-03 17:56:20.000000000 +0100
+@@ -863,7 +863,7 @@
+ int set_sockopts(struct socket *sock)
+ {
+ 	int val;
+-	int ret;
++	int ret = 0;
+ 	char __user *pval;
+ 	mm_segment_t oldfs;
+ 
+@@ -877,7 +877,7 @@
+ 		pval, sizeof(val));
+ 	if (ret) {
+ 		OMBUG("unable to setsock SO_KEEPALIVE ERROR %d\n", ret);
+-		return -1;
++		goto exit;
+ 	}
+ 
+ 	/* FIXME: check on these, old COMM_MIGD */
+@@ -886,7 +886,7 @@
+ 		pval, sizeof(val));
+ 	if (ret) {
+ 		OMBUG("Unable to setsock TCP_KEEPINTVL ERROR %d\n", ret);
+-		return -1;
++		goto exit;
+ 	}
+ 
+ 	val = OPENMOSIX_CONNECTION_KEEPALIVE_MAXTRIES;
+@@ -894,7 +894,7 @@
+ 		pval, sizeof(val));
+ 	if (ret) {
+ 		OMBUG("unable to setsock TCP_KEEPCNT ERROR %d\n", ret);
+-		return -1;
++		goto exit;
+ 	}
+ 
+ 	val = OPENMOSIX_CONNECTION_KEEPALIVE_TOTAL;
+@@ -902,22 +902,23 @@
+ 		pval, sizeof(val));
+ 	if (ret) {
+ 		OMBUG("unable to setsock TCP_KEEPIDLE ERROR %d\n", ret);
+-		return -1;
++		goto exit;
+ 	}
+ 
+ 	val=1;
+ 	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, pval, sizeof(val));
+ 	if (ret < 0) {
+ 		OMBUG("Unable to setsockopt ERROR: %d\n", ret);
+-		return -1;
++		goto exit;
+ 	}
++exit:
+ 	set_fs(oldfs);
+ 
+ 	/* Set timeout for send/recv */
+ 	sock->sk->sk_rcvtimeo = 60*HZ;
+ 	sock->sk->sk_sndtimeo = 60*HZ;
+ 
+-	return 0;
++	return ret;
+ 
+ }
+ 

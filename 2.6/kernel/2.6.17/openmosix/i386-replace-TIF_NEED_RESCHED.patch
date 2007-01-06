@@ -1,0 +1,18 @@
+Index: linux/arch/i386/kernel/entry.S
+===================================================================
+--- linux.orig/arch/i386/kernel/entry.S	2006-11-16 22:45:51.000000000 +0100
++++ linux/arch/i386/kernel/entry.S	2006-11-23 18:43:32.000000000 +0100
+@@ -349,11 +349,11 @@
+ 
+ #ifdef CONFIG_OPENMOSIX
+ 	/* Check if some oM requests are pending */
+-	bt %ecx, $TIF_NEED_OM_RESCHED
++	bt $TIF_NEED_OM_REFRESH, %ecx
+ 	jnc work_pending_no_om
+ 	SAVE_ALL
+ 	call openmosix_pre_usermode
+-	RESTORE_ALL
++	RESTORE_REGS
+ work_pending_no_om:
+ #endif /* CONFIG_OPENMOSIX */
+ 

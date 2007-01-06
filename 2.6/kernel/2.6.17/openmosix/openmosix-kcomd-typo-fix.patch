@@ -1,0 +1,27 @@
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-02 22:51:51.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-02 22:51:53.000000000 +0100
+@@ -938,14 +938,14 @@
+ 	int i=-1;
+ 
+ 	printk("wait_for_response...for msgid %u\n", msgid);
+-		list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list)
+-			// FIXME:  check for resp or ack, too.
+-			if (msgid==pkt->msgid) {
+-				i=pkt->len;
+-				list_del(&pkt->list);
+-				kmem_cache_free(kcom_pkt_cachep, pkt);
+-				printk("wait_for_response: i=%d, addr=%lu pkt->resp=%s\n", i, pkt->addr, pkt->resp);
+-			}
++	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list)
++		// FIXME:  check for resp or ack, too.
++		if (msgid==pkt->msgid) {
++			i=pkt->len;
++			list_del(&pkt->list);
++			kmem_cache_free(kcom_pkt_cachep, pkt);
++			printk("wait_for_response: i=%d, addr=%lu pkt->resp=%s\n", i, pkt->addr, pkt->resp);
++		}
+ 	return i;
+ 
+ }

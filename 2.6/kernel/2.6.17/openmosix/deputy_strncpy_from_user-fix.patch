@@ -1,0 +1,32 @@
+Subject: [patch @num@/@total@] @name@ 
+
+Fixed wrong pointer usage
+
+---
+ hpc/copyuser.c |    6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+
+
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2007-01-04 11:53:14.000000000 +0100
++++ linux/hpc/copyuser.c	2007-01-04 12:03:29.000000000 +0100
+@@ -81,14 +81,14 @@
+ 				      ,long count)
+ {
+         struct kcom_pkt *pkt;
+-	struct omp_usercopy_req *u;
++	struct omp_usercopy_req u;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)current->om.whereto;
+ 	int err;
+ 
+ 	OMDEBUG_CPYUSER(1, "strcpy user[0x%p]->[0x%p][%ld]\n", src, dst, count);
+ 
+-	u->addr = (unsigned long) src;
+-	u->len = count;
++	u.addr = (unsigned long) src;
++	u.len = count;
+ 
+         err = kcom_send_command(KCOM_L2_REQ_STRNCPY_FROM_USER, sizeof(u)
+ 			       ,(char*)&u, 0,dest_ptr, &pkt);

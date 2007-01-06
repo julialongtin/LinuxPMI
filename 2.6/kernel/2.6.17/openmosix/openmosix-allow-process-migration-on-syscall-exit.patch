@@ -1,0 +1,16 @@
+Index: linux/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux.orig/arch/x86_64/kernel/entry.S	2006-11-02 22:50:41.000000000 +0100
++++ linux/arch/x86_64/kernel/entry.S	2006-11-02 22:52:21.000000000 +0100
+@@ -600,6 +600,11 @@
+ 	andl %edi,%edx
+ 	CFI_REMEMBER_STATE
+ 	jnz  retint_careful
++#ifdef CONFIG_OPENMOSIX
++	SAVE_REST
++	call openmosix_pre_usermode
++	RESTORE_REST
++#endif /* CONFIG_OPENMOSIX */
+ retint_swapgs:	 	
+ 	swapgs 
+ retint_restore_args:				

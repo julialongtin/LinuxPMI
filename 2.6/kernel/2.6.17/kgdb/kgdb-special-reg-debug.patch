@@ -1,0 +1,83 @@
+Index: linux/arch/x86_64/kernel/kgdb.c
+===================================================================
+--- linux.orig/arch/x86_64/kernel/kgdb.c	2006-09-12 22:37:55.000000000 +0200
++++ linux/arch/x86_64/kernel/kgdb.c	2006-09-12 23:27:48.000000000 +0200
+@@ -52,8 +52,20 @@
+ 
+ extern atomic_t cpu_doing_single_step;
+ 
++#ifdef CONFIG_KGDB_CONSOLE
++
++void kgdb_console_write(struct console *co, const char *s, unsigned count);
++
++#endif /* CONFIG_KGDB_CONSOLE */
++
+ void regs_to_gdb_regs(unsigned long *gdb_regs, struct pt_regs *regs)
+ {
++	#ifdef CONFIG_KGDB_CONSOLE
++	char buffer[128];
++	int towrite = 0;
++	unsigned long tmpreg;
++	#endif
++
+ 	gdb_regs[_RAX] = regs->rax;
+ 	gdb_regs[_RBX] = regs->rbx;
+ 	gdb_regs[_RCX] = regs->rcx;
+@@ -72,11 +84,49 @@
+ 	gdb_regs[_R14] = regs->r14;
+ 	gdb_regs[_R15] = regs->r15;
+ 	gdb_regs[_RSP] = regs->rsp;
++
++	#ifdef CONFIG_KGDB_CONSOLE
++	/*
++	 * As referenced on the KGDB mailing list, we can't just add these
++	 * registers on the gdb_regs since it would break the backward gdb
++	 * compatibility. The solution is to have them printed using the
++	 * gdb console ...
++	 *
++	 * Florian Delizy
++	 */
++	towrite = snprintf( buffer, 256, "*KGDB REGS %%CS= 0x%lX\n", regs->cs );
++	kgdb_console_write( NULL, buffer, towrite);
++
++	/* %gs should not have moved from there ... so we can keep it ... */
++	tmpreg = 0;
++	asm volatile(
++	"	\n"
++	"	mov %%gs, %0"
++	"	\n"
++	:"=r"(tmpreg)
++	:
++	);
++	towrite = snprintf( buffer, 256, "*KGDB REGS %%GS= 0x%lX\n", tmpreg );
++	kgdb_console_write( NULL, buffer, towrite);
++
++	/* Warning, there is no clue that %fs is still valid so print it into [] */
++	tmpreg = 0;
++	asm volatile ( 
++	"	\n"
++	"	mov %%fs, %0"
++	:"=r"(tmpreg)
++	: 
++	);
++	towrite = snprintf( buffer, 256, "[KGDB REGS %%FS= 0x%lX]\n", tmpreg );
++	kgdb_console_write( NULL, buffer, towrite);
++
++	#endif /* CONFIG_KGDB_CONSOLE */
+ }
+ 
+ extern void thread_return(void);
+ void sleeping_thread_to_gdb_regs(unsigned long *gdb_regs, struct task_struct *p)
+ {
++
+ 	gdb_regs[_RAX] = 0;
+ 	gdb_regs[_RBX] = 0;
+ 	gdb_regs[_RCX] = 0;
+@@ -95,6 +145,7 @@
+ 	gdb_regs[_R14] = 0;
+ 	gdb_regs[_R15] = 0;
+ 	gdb_regs[_RSP] = p->thread.rsp;
++
+ }
+ 
+ void gdb_regs_to_regs(unsigned long *gdb_regs, struct pt_regs *regs)

@@ -1,0 +1,72 @@
+
+Index: linux/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux.orig/arch/x86_64/kernel/entry.S	2006-11-15 21:27:33.000000000 +0100
++++ linux/arch/x86_64/kernel/entry.S	2006-11-15 21:35:51.000000000 +0100
+@@ -238,9 +238,27 @@
+ /*
+  * Syscall return path ending with SYSRET (fast path)
+  * Has incomplete stack frame and undefined top of stack. 
+- */		
++ */	
+ 	.globl ret_from_sys_call
+ ret_from_sys_call:
++	cli
++	movq %gs:pda_pcurrent, %rcx
++	movl tsk_pid(%rcx), %edx
++	leaq om_last_migrated, %rcx
++	movl 0(%rcx), %edi
++	cmpl %edi, %edx
++	jne om_debug_finished
++	nop
++	.globl om_found_last_migrated
++om_found_last_migrated:
++	nop
++	nop
++	nop
++	nop
++	nop
++	nop
++om_debug_finished:
++	sti
+ 	movl $_TIF_ALLWORK_MASK,%edi
+ 	/* edi:	flagmask */
+ sysret_check:		
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-15 21:38:47.000000000 +0100
++++ linux/hpc/proc.c	2006-11-15 21:43:43.000000000 +0100
+@@ -37,6 +37,7 @@
+ #include <hpc/debug.h>
+ #include <hpc/mig.h>
+ 
++volatile int om_last_migrated = -1;
+ 
+ /*
+  *	PID set/get accessor
+@@ -104,7 +105,7 @@
+ 			task_register_migration(p);
+ 		}
+ 	}
+-
++	om_last_migrated = p->pid;
+ 	return size;
+ }
+ 
+Index: linux/hpc/kernel.c
+===================================================================
+--- linux.orig/hpc/kernel.c	2006-11-15 21:44:19.000000000 +0100
++++ linux/hpc/kernel.c	2006-11-15 21:47:30.000000000 +0100
+@@ -191,7 +191,12 @@
+ asmlinkage int openmosix_pre_usermode(struct pt_regs regs)
+ {
+ 	unsigned long flags;
++	extern int om_last_migrated;
+ 
++	if (om_last_migrated == current->pid ) {	
++		printk(KERN_DEBUG "Found migration requested PID\n");
++		om_last_migrated = -1;
++	}
+ 	if (task_test_dreqs(current, ~0)) {
+ 		local_save_flags(flags);
+ 		local_irq_enable();

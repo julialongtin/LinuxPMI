@@ -1,0 +1,142 @@
+Subject: [patch @num@/@total@] Adding kcomd debug control macros
+
+Adding OMDEBUG_KCOMD for debugging the protocol informations as well
+
+
+Index: linux/hpc/debugfs.c
+===================================================================
+--- linux.orig/hpc/debugfs.c	2006-11-13 16:00:23.000000000 +0100
++++ linux/hpc/debugfs.c	2006-11-13 16:01:42.000000000 +0100
+@@ -27,9 +27,10 @@
+ 	{ "syscall", 0644, &om_opts.debug_sys },
+ 	{ "rinode", 0644, &om_opts.debug_rino },
+ 	{ "copyuser", 0644, &om_opts.debug_copyuser },
++	{ "kcomd", 0644, &om_opts.debug_kcomd },
+ };
+ 
+-static struct dentry * dfs_dentries[4];
++static struct dentry * dfs_dentries[ARRAY_SIZE(file_entries)];
+ 
+ int __init om_debugfs_init(void)
+ {
+@@ -59,4 +60,4 @@
+ module_init(om_debugfs_init);
+ module_exit(om_debugfs_exit);
+ MODULE_LICENSE("GPL");
+-MODULE_AUTHOR("Vincent Hanquez");
++MODULE_AUTHOR("Vincent Hanquez\n Florian Delizy");
+Index: linux/include/hpc/debug.h
+===================================================================
+--- linux.orig/include/hpc/debug.h	2006-11-13 16:01:38.000000000 +0100
++++ linux/include/hpc/debug.h	2006-11-13 16:01:42.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -53,5 +54,6 @@
+ #define OMDEBUG_SYS(lim, fmt...)	OMDEBUG(om_opts.debug_sys, lim, fmt)
+ #define OMDEBUG_RINO(lim, fmt...)	OMDEBUG(om_opts.debug_rino, lim, fmt)
+ #define OMDEBUG_CPYUSER(lim, fmt...)	OMDEBUG(om_opts.debug_copyuser, lim, fmt)
++#define OMDEBUG_KCOMD(lim, fmt...)	OMDEBUG(om_opts.debug_kcomd, lim, fmt)
+ 
+ #endif /* _HPC_DEBUG_H */
+Index: linux/include/hpc/hpc.h
+===================================================================
+--- linux.orig/include/hpc/hpc.h	2006-11-13 16:00:23.000000000 +0100
++++ linux/include/hpc/hpc.h	2006-11-13 16:01:42.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -55,6 +56,7 @@
+ 	int debug_sys;
+ 	int debug_rino;
+ 	int debug_copyuser;
++	int debug_kcomd;
+ #endif
+ };
+ 
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:40.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:42.000000000 +0100
+@@ -25,6 +25,8 @@
+ #include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ 
++#include <hpc/debug.h>
++
+ 
+ /**
+  * pkt_data_read
+@@ -47,6 +49,7 @@
+ 	iov.iov_base = data;
+ 	iov.iov_len = len;
+ 
++	OMDEBUG_KCOMD(3, "KCOMD: reading data (%dB)... \n", len);
+ 	// Too small of a packet gets delayed before being sent. Even with TCP_NODELAY
+ 	if (len < 32) {
+ 		iov.iov_base = &buf;
+@@ -115,6 +118,7 @@
+ 	iov.iov_base = recv_kcom_pkt;
+  	iov.iov_len = sizeof(struct kcom_pkt);
+ 
++ 	OMDEBUG_KCOMD(3, "KCOMD: reading headers ... \n");
+ 	oldfs = get_fs();
+ 	set_fs(KERNEL_DS);
+ 
+@@ -227,6 +231,7 @@
+ {
+ 	struct kcom_pkt *pkt;
+ 
++	OMDEBUG_KCOMD(3, "KCOMD: creating packet (len %d type %d ack %d)... \n", len, type, ack);
+ 	pkt=kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
+ 	if (pkt) {
+ 		pkt->len = len;
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:40.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:42.000000000 +0100
+@@ -27,6 +27,7 @@
+ #include <linux/inet.h>
+ #include <hpc/kcom.h>
+ #include <hpc/prototype.h>
++#include <hpc/debug.h>
+ 
+ static int kcomd_done=0;
+ 
+@@ -331,6 +332,8 @@
+ 	int i=0;
+ 
+ 
++	OMDEBUG_KCOMD(2, "KCOMD: Receiving packet \n");
++
+ 	// read in hdr
+ 	recv_kcom_pkt = pkt_hdr_read(node);
+ 
+@@ -356,14 +359,17 @@
+ 	if ((recv_kcom_pkt->type & MSG_MASK) == PKT_NEW_MSG) {
+ 		switch (recv_kcom_pkt->type & MIG_MASK) {
+ 			case MIG_INIT:
++				OMDEBUG_KCOMD(2, "KCOMD: it's a MIG_INIT packet ... \n");
+ 				mig_do_receive_init(node, recv_kcom_pkt);
+ 				break;
+ 			case MIG_GO_HOME:
++				OMDEBUG_KCOMD(2, "KCOMD: it's a MIG_GO_HOME packet ... \n");
+ 				mig_do_receive_home(node, recv_kcom_pkt);
+ 				break;
+ 			case MIG_COME_HOME:
+ 			{
+ 				task_t *sltsk;
++				OMDEBUG_KCOMD(2, "KCOMD: it's a MIG_COME_HOME packet ... \n");
+ 				sltsk = find_task_by_pid(recv_kcom_pkt->rpid);
+ 				if (!sltsk) {
+ 				    printk(KERN_ERR "openMosix: %s Unable to find the task %d ", __FUNCTION__, recv_kcom_pkt->rpid);

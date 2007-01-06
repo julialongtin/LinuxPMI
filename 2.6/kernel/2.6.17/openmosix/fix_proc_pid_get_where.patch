@@ -1,0 +1,29 @@
+Subject: [patch @num@/@total@] Fix /proc/$/om/where
+
+This patch fixes /proc/$/om/where as pointed by Carl Radford,
+the 'where' proc should not return 'home' if the process is currently
+migrating...
+
+Added a little test to report migrating, which will be the default
+behavior for now
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-13 16:01:38.000000000 +0100
++++ linux/hpc/proc.c	2006-11-13 16:01:44.000000000 +0100
+@@ -113,12 +113,13 @@
+ 	struct sockaddr_in *saddr;
+ 	unsigned int addr;
+ 
+-	if (task_test_dflags(p, DMIGRATED)) {
+-	/* FIXME:  what if process is currently migrating? */
++	if (task_test_dreqs(current, DREQ_MOVE)) {
++		length = sprintf(buf, "migrating\n");
++	} else if (task_test_dflags(p, DMIGRATED)) {
+ 		saddr=(struct sockaddr_in *)p->om.whereto;
+ 		addr=saddr->sin_addr.s_addr;
+ 		length=sprintf(buf, "%u.%u.%u.%u\n", (0x000000FF & addr), (0x0000FF00 & addr)>>8,
+-							(0x00FF0000 & addr)>>16, (0xFF000000 & addr) >> 24);
++						     (0x00FF0000 & addr)>>16, (0xFF000000 & addr) >> 24);
+ 	} else
+ 		length = sprintf(buf, "home\n");
+ 

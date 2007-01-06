@@ -1,0 +1,35 @@
+Remove some unnecessary code and commented code right before
+arch_kickstart is called.
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:52:03.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:52:04.000000000 +0100
+@@ -560,26 +560,14 @@
+ 	if (error)
+ 		goto fail;
+ 
+-	/* clear_tsk_thread_flag(p, TIF_SIGPENDING); // Added by MSD ???*/
+-	/* init_sigpending(&p->pending); // Added by MSD ????*/
+ 
+-	/* OM_VERBOSE_MIG("[OM] starting process(%d)\n", p->pid);*/
++	OM_VERBOSE_MIG("[OM] starting process(%d)\n", p->pid);
+ 	set_current_state(TASK_RUNNING);
+ 	/* set_current_state(TASK_INTERRUPTIBLE);*/
+ 	schedule();
+ 
+-	#if 0
+-	flush_signals(p); //MSDMSD
+-	reparent_to_init(); //MSD
+-	cap_clear(p->cap_permitted);
+-	cap_clear(p->cap_effective);
+-	cap_task_reparent_to_init(p);
+-	p->cap_permitted=0;
+-	p->cap_effective=0;
+-	#endif
++	flush_signals(p);
+ 
+-	clear_thread_flag(TIF_SIGPENDING);
+-	/* flush_thread();*/
+ 	arch_kickstart(p);
+ 	/*NOTREACHED*/
+ 

@@ -1,0 +1,36 @@
+Index: linux/Makefile
+===================================================================
+--- linux.orig/Makefile	2006-11-14 21:31:22.000000000 +0100
++++ linux/Makefile	2006-11-14 21:32:33.000000000 +0100
+@@ -185,8 +185,8 @@
+ 
+ HOSTCC  	= gcc
+ HOSTCXX  	= g++
+-HOSTCFLAGS	= -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer
+-HOSTCXXFLAGS	= -O2
++HOSTCFLAGS	= -Wall -Wstrict-prototypes -O -fomit-frame-pointer
++HOSTCXXFLAGS	= -O
+ 
+ # 	Decide whether to build built-in, modular, or both.
+ #	Normally, just do built-in.
+@@ -467,9 +467,9 @@
+ 	scripts/unsparse
+ 
+ ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+-CFLAGS		+= -Os
++CFLAGS		+= -O
+ else
+-CFLAGS		+= -O2
++CFLAGS		+= -O
+ endif
+ 
+ ifdef CONFIG_FRAME_POINTER
+@@ -483,7 +483,7 @@
+ endif
+ 
+ ifdef CONFIG_DEBUG_INFO
+-CFLAGS		+= -g
++CFLAGS		+= -ggdb
+ endif
+ 
+ include $(srctree)/arch/$(ARCH)/Makefile

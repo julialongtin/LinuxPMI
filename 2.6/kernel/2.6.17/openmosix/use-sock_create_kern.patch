@@ -1,0 +1,26 @@
+Subject: [patch @num@/@total@] Fix socket creation 
+
+as suggested by Matt Miller, the sock_create is not to be used in the kernel side
+should use sock_create_kern instead
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:50.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:52.000000000 +0100
+@@ -25,6 +25,7 @@
+ #include <net/tcp.h>
+ 
+ #include <linux/inet.h>
++#include <linux/net.h>
+ #include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/debug.h>
+@@ -40,7 +41,7 @@
+ 	struct socket *sock;
+ 	int ret, fd;
+ 
+-	ret = sock_create(saddr->sa_family, SOCK_STREAM, IPPROTO_TCP, &sock);
++	ret = sock_create_kern(saddr->sa_family, SOCK_STREAM, IPPROTO_TCP, &sock);
+ 	if (ret < 0)
+ 		goto err_fd;
+ 

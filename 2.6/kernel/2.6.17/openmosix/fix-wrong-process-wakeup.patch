@@ -1,0 +1,21 @@
+Subject: [patch @num@/@total@] @name@ fix wrong wake_up
+
+When asked to migrate, process were waken up, but they should not, since
+if a process is artificially waken up too early, it may (and will probably)
+crash ... 
+
+
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-11-16 22:31:55.000000000 +0100
++++ linux/hpc/task.c	2006-11-16 22:32:16.000000000 +0100
+@@ -228,7 +228,8 @@
+ 	OMDEBUG_MIG(3, "pid %d registering process migration ?\n", p->pid);
+ 
+ 	task_set_dreqs(p, DREQ_MOVE);
+-	wake_up_process(p);
++	if (task_test_dflags(p,DDEPUTY))
++		wake_up_process(p);
+ 	set_ti_thread_flag(p->thread_info, TIF_NEED_RESCHED);
+ 	return 0;
+ }

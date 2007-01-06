@@ -1,0 +1,124 @@
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:55.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:56.000000000 +0100
+@@ -910,74 +910,58 @@
+ {
+ 	struct kcom_node *tmp;
+ 	struct kcom_task *tmp2;
+-	task_t *p;
++	int offset = 0;
++	int look_for_remote = where - 1;
+ 
+-	read_lock(&tasklist_lock);
+-	p = find_task_by_pid(pid);
+-	 read_unlock(&tasklist_lock);
+-	if (!p) {
+-		OMBUG("Unable to find pid %u\n", pid);
+-		return NULL;
++	if (0 == pid) {
++	    OMBUG("No task can be pid 0!\n");
++	    return NULL;
+ 	}
+ 
+-        // TODO: needs some cleanup (-- Florian Delizy)
+-	if (where == 0) {
++	/* Check if we are looking for a deputy or a remote ? */
++	if (0 == where) {
++
++		task_t *p;
++
++		look_for_remote = 0;
++
++		read_lock(&tasklist_lock);
++		p = find_task_by_pid(pid);
++		read_unlock(&tasklist_lock);
+ 
+-                read_lock(&kcom_nodes_lock);
++		if (!p) {
++		    OMBUG("Unable to find pid %u\n", pid);
++		    return NULL;
++		}
++
++		if (task_test_dflags(p, DREMOTE))
++		    look_for_remote = 1;
++	}
+ 
+-		list_for_each_entry(tmp, &kcom_nodes, list) {
+-
+-                        read_lock(&tmp->tasks_lock);
+-			list_for_each_entry(tmp2, &tmp->tasks, list) {
+-				/*
+-				 * One remote node, we're interested in rpid
+-				 * One home node, we're interested in hpid
+-				 */
+-				if (task_test_dflags(p, DREMOTE)) {
+-					if (tmp2->rpid == pid)
+-						return tmp2;
+-				} else {
+-					if (tmp2->hpid == pid)
+-						return tmp2;
+-				}
+-                        }
+-                        read_unlock(&tmp->tasks_lock);
+-                }
+-                read_unlock(&kcom_nodes_lock);
+-
+-	} else if (where == 1) { /* home */
+-
+-                read_lock(&kcom_nodes_lock);
+-		list_for_each_entry(tmp, &kcom_nodes, list) {
+-
+-                        read_lock(&tmp->tasks_lock);
+-
+-			list_for_each_entry(tmp2, &tmp->tasks, list) {
+-				if (tmp2->hpid == pid)
+-					return tmp2;
+-                        }
+-
+-                        read_unlock(&tmp->tasks_lock);
+-                }
+-                read_unlock(&kcom_nodes_lock);
+-
+-	} else if (where == 2) { /* remote */
+-
+-                read_lock(&kcom_nodes_lock);
+-		list_for_each_entry(tmp, &kcom_nodes, list) {
+-
+-                        read_lock(&tmp->tasks_lock);
+-
+-			list_for_each_entry(tmp2, &tmp->tasks, list) {
+-				if (tmp2->rpid == pid)
+-					return tmp2;
+-                        }
+-
+-                        read_unlock(&tmp->tasks_lock);
+-                }
+-                read_unlock(&kcom_nodes_lock);
++	/* Get the address of the field we are looking for */
+ 
++	if (0 == look_for_remote) {
++		offset = (int) &(((struct kcom_task*) 0)->hpid);
++	} else {
++		offset = (int) &(((struct kcom_task*) 0)->rpid);
+ 	}
++
++	/* Parse all the list! */
++
++	read_lock(&kcom_nodes_lock);
++	list_for_each_entry(tmp, &kcom_nodes, list) {
++
++		read_lock(&tmp->tasks_lock);
++
++		list_for_each_entry(tmp2, &tmp->tasks, list) {
++			if (pid == *((pid_t*)(((char*)tmp2)+offset)))
++				return tmp2;
++		}
++
++		read_unlock(&tmp->tasks_lock);
++	}
++	read_unlock(&kcom_nodes_lock);
++
+ 	return NULL;
+ }
+ 

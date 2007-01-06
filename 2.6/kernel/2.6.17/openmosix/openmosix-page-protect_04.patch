@@ -1,0 +1,39 @@
+Removed some commented code and fixed the page protection bits.
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:52:02.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:52:03.000000000 +0100
+@@ -241,7 +241,7 @@
+ 
+ 	OMDEBUG_MIG(2, "MIG_VMA [%lx, %ld]\n", a->vm_start, a->vm_size);
+ 
+-		/* FIXME : Temporary disabled */
++	/* FIXME : Temporary disabled */
+ 		if (0 && a->vm_file) {
+ 			file = (task_test_dflags(p, DREMOTE))
+ 				? task_rfiles_get(p, a->vm_file, -1, a->i_size)
+@@ -258,23 +258,9 @@
+ 		if (a->vm_flags & VM_EXECUTABLE)
+ 			flags |= MAP_EXECUTABLE;
+ 
+-	/* VM_GROWSDOWN =  0x0100*/
+-	/* VM_DENYWRITE =  0x0800*/
+-	/* VM_EXECUTABLE = 0x1000*/
+-
+-	/* MAP_GROWSDOWN =  0x0100*/
+-	/* MAP_DENYWRITE =  0x0800*/
+-	/* MAP_EXECUTABLE = 0x1000*/
+-
+-
+-	/* flags=a->vm_flags;*/
+-
+ 		/* copy VM_(READ|WRITE|EXEC) bits to prot */
+-		/* prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));*/
++		prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));
+ 		prot = (VM_READ | VM_WRITE | VM_EXEC);
+-		/* VM_READ =  0x1*/
+-		/* VM_WRITE = 0x2*/
+-		/* VM_EXEC =  0x4*/
+ 
+ 		/* mmap stuff */
+ 		down_write(&p->mm->mmap_sem);

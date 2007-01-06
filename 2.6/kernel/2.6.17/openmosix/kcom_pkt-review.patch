@@ -1,0 +1,6846 @@
+Subject: [patch @num@/@total@] @name@
+
+Quite a big patch :
+
+Review the packet header structure and usage, rewrite the protocol and co
+
+- *new protocol*
+- Reorganize packets, let them have more types
+- Add a dedicated 'flags' field
+- Add a magic number to differentiate wrong traffic
+- Rename of macros with KCOM_PKT_ prefix to prevent name collision
+- Plumbing with new values
+- file reordering
+- new packet dump
+- reorder prototypes.h move prototypes to appropriate places
+- add many const everywhere it was actually const ...
+- reformatting adding some commands and 80 char friendly files
+- killing the pkt->resp which was obviously bogus
+- added a task_struct pointer into the kcom_task to ease finding the process
+---
+ hpc/Makefile                |    2 
+ hpc/arch-x86_64.c           |   31 -
+ hpc/comm.c                  |  530 ------------------
+ hpc/copyuser.c              |  345 ++++++------
+ hpc/deputy.c                |  325 ++++-------
+ hpc/kcom.c                  | 1251 ++++++++++++++++++++++++++++----------------
+ hpc/kcomd.c                 |  681 ++++++++++++++++++-----
+ hpc/kernel.c                |   39 -
+ hpc/migctrl.c               |   26 
+ hpc/migrecv.c               |  467 +++++-----------
+ hpc/migsend.c               |  184 ++----
+ hpc/proc.c                  |   37 -
+ hpc/remote.c                |  218 ++-----
+ hpc/service.c               |   27 
+ hpc/task.c                  |   31 -
+ include/asm-generic/errno.h |    3 
+ include/hpc/debug.h         |   63 +-
+ include/hpc/hpc.h           |    5 
+ include/hpc/kcom.h          |  321 +++++++++--
+ include/hpc/protocol.h      |  233 ++++----
+ include/hpc/prototype.h     |   57 +-
+ include/hpc/task.h          |    4 
+ kernel/exit.c               |    2 
+ 23 files changed, 2539 insertions(+), 2343 deletions(-)
+
+Index: linux/include/hpc/kcom.h
+===================================================================
+--- linux.orig/include/hpc/kcom.h	2006-12-19 17:00:22.000000000 +0100
++++ linux/include/hpc/kcom.h	2006-12-22 21:37:17.000000000 +0100
+@@ -1,5 +1,6 @@
+ /*
+  *	Copyright (C) 2006 Matt Dew <matt@osource.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -51,14 +52,9 @@
+ 	EXPORT_SYMBOL(fd4);
+ 	EXPORT_SYMBOL(fd6);
+ 
+-	// pid_t kcom_pid;
+-	// EXPORT_SYMBOL(kcom_pid);
+-
+ 	task_t *kcomd_task=NULL;
+ 	EXPORT_SYMBOL(kcomd_task);
+ 
+-	unsigned int kcom_msgid=0;
+-	EXPORT_SYMBOL(kcom_msgid);
+ 
+ 	kmem_cache_t *kcom_data_cachep;
+ 	EXPORT_SYMBOL(kcom_data_cachep);
+@@ -97,65 +93,296 @@
+ 	extern kmem_cache_t *kcom_saddr_cachep;
+ #endif /* _HPC_KCOMC_H */
+ 
++/*******************************************************************************
++ * Packet exchanged between nodes :                                            *
++ ******************************************************************************/
+ 
+ struct kcom_pkt
+ {
+-	pid_t hpid;     		/* home pid of the this process */
+-	pid_t rpid;     		/* remote pid of 'that' other node process */
+-	int len;      			/* len of data */
+-	int type;     			/* type of data */
+-	unsigned long addr; 		/* used by mm pages */
+-	unsigned int msgid;		/* each message exchange share the same msgid */
++	/* Packet sanity fields                                               */
+ 
+-	/* Fields after that point are not sent neither received */
++	unsigned int magic;		/* Used to recognize oM traffic       */
++	int hdr_len;			/* size of packet header              */
+ 
+-	struct list_head list;		/* This field both marks the end of the "rsendable  */
+-					/* And is used for registering the packet in a list */
++	/* Dispatch fields and protocol fields                                */
+ 
+-	char *data;   			/* ptr of data */
+-	char *resp;   			/* ptr of response */
+-};
+-#define KCOM_PKT_NET_SIZE		((size_t)(&((struct kcom_pkt*)0)->list))
++	int type;  			/* type of command                    */
++	unsigned int flags;		/* communication type and flags       */
++	pid_t hpid;     		/* home pid of this process           */
++	pid_t rpid;     		/* remote pid of this process         */
++
++	/* Communication identification                                       */
++
++	unsigned int msgid;		/* msgid is shared between msg with   */
++					/* its answer/ack/...                 */
++
++	/* Data related fields                                                */
++
++	int data_len;  			/* len of data without header         */
++	unsigned long addr; 		/* used by mm pages                   */
++
++	/* Fields after this point are not sent neither received              */
++
++	struct list_head list;		/* This field both marks the end of   */
++					/* sendable data and is used for      */
++					/* linking packets together           */
++	char *data;   			/* data if new msg, response if not   */
++
++} __attribute__((packed)); /* structure sent as is, thus needs to be packed   */
++
++#define KCOM_PKT_NET_SIZE	((size_t)(&((struct kcom_pkt*)0)->list))
++#define KCOM_PKT_HDR_MAGIC_STOP	((size_t)(&((struct kcom_pkt*)0)->hdr_len))
++#define KCOM_PKT_HDR_LEN_STOP	((size_t)(&((struct kcom_pkt*)0)->type))
++
++struct kcom_task;
++extern int kcom_pkt_create(struct kcom_pkt** destpkt, int len, int type
++			  ,int flags,const char*const data, int hpid, int rpid
++			  ,struct kcom_task* task);
++
++extern void kcom_pkt_delete(struct kcom_pkt *);
++
++/*******************************************************************************
++ * Node data                                                                   *
++ ******************************************************************************/
+ 
+ struct kcom_node
+ {
+-	int fd;                 	/* fd to send packet */
+-	struct socket *sock;    	/* socket */
+-	struct sockaddr addr;  		/* addr of this node */
+-	rwlock_t tasks_lock;  	        /* lock for the list */
+-	struct list_head tasks; 	/* list of task */
+-	struct list_head list; 		/* list of nodes */
+-	struct list_head process_list;  /* list used internally by kcomd */
+-	/* Socket read/write error counts */
+-	int error_count;		/* Consecutive error count on this node */
+-	int error_total;		/* Total error count from the struct creation (stats only)*/
++	/* Network connectivity                                               */
++
++	int fd;                 	/* fd to send packet                  */
++	struct socket *sock;    	/* socket                             */
++	struct sockaddr addr;  		/* addr of this node                  */
++
++	/* task handling                                                      */
++
++	rwlock_t tasks_lock;  	        /* lock for the list                  */
++	struct list_head tasks; 	/* list of task                       */
++	struct list_head process_list;  /* list used internally by kcomd      */
++	int pkt_ready;			/* Is any packet ready on this node   */
++
++	/*  node linking                                                      */
++
++	struct list_head list; 		/* list of nodes                      */
++
++	/* Socket read/write error counts                                     */
++
++	int error_count;		/* Consecutive error count            */
++	int error_total;		/* Total error count (stats only)     */
+ };
+ 
++struct kcom_node *kcom_node_add(struct socket*);
++extern struct kcom_node *kcom_node_find(const struct sockaddr* const saddr);
++
++extern int kcom_node_del(struct sockaddr *);
++extern void kcom_node_sock_release(struct kcom_node *);
++
++extern int kcom_node_increment_error(struct kcom_node *);
++extern void kcom_node_clear_error(struct kcom_node *);
++
++struct kcom_oob_waitqueue
++{
++	unsigned int msgid;		/* msgid expected                     */
++	pid_t pid;			/* pid of the task waiting 	      */
++	struct list_head list;		/* list of kcom_oob_waitqueue         */
++};
++
++
++/*******************************************************************************
++ * Task data                                                                   *
++ ******************************************************************************/
++
+ struct kcom_task
+ {
+-        pid_t hpid;          /* pid of the home node process owning this struct */
+-        pid_t rpid;          /* pid of remote node process */
+-        struct kcom_node *node; /* node of the process to send/recv */
+-        struct list_head list;  /* list of process using some node */
+-
+-        struct list_head out_packs;
+-        // struct kcom_pkt in_packs;
+-        struct list_head in_packs;
++	/* Task identity                                                      */
++
++	struct task_struct *task; 	/* pointer to the process             */
++        pid_t hpid;          		/* pid on the home node		      */
++        pid_t rpid;          		/* pid of remote node process         */
++
++	/* Node relationship                                                  */
++
++        struct kcom_node *node; 	/* node of the process to send/recv   */
++        struct list_head list;  	/* list of task on the node           */
+ 
+-	rwlock_t out_packs_lock;	/* List structure locks ...*/
+-	rwlock_t in_packs_lock;
++	/* Task input from the peer node                                      */
+ 
+-	struct list_head process_list;	/* list used internally by kcomd */
+-	struct list_head egress_list;   /* list used internally by kcomd */
++        struct list_head in_packs;	/* input packets added by kcomd_thread*/
++	rwlock_t in_packs_lock;		/* input list lock                    */
++
++        struct list_head oob_packs;	/* input packets added by kcomd_thread*/
++	rwlock_t oob_packs_lock;	/* input list lock                    */
++
++	struct list_head oob_waitqueue; /* Waiting tasks kcom_oob_waitqueue   */
++	spinlock_t oob_waitqueue_lock;  /* lock for the waitqueue             */
++
++	/* Task output to the peer node                                       */
++
++        struct list_head out_packs;	/* packets ready to be sent           */
++	rwlock_t out_packs_lock;	/* output list lock                   */
++
++	/* kcomd_thread_handle_streams internal handling                      */
++
++	struct list_head process_list;	/* list used internally by kcomd      */
++	struct list_head egress_list;   /* list used internally by kcomd      */
++
++	/* msg id generation is based on the task itself                      */
++
++	unsigned int msgid;		/* Biggest id sent in this task comm  */
++	spinlock_t msgid_lock;		/* smp safe lock                      */
+ };
+ 
+-extern int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt);
+-extern int kcom_node_del(struct sockaddr *addr);
+-extern void kcom_node_sock_release(struct kcom_node *node);
+-extern struct kcom_node *__create_connection(struct sockaddr *saddr
+-				            ,struct kcom_node *node);
+ 
++extern struct kcom_task *kcom_task_create(struct kcom_node *, int);
++extern int kcom_task_delete(int);
++
++extern struct kcom_task *kcom_task_find(int);
++extern struct kcom_task *kcom_remote_task_find(int);
++extern struct kcom_task *kcom_home_task_find(int);
++extern struct kcom_task *__kcom_task_find(pid_t pid, int where);
++
++extern int __kcom_find_or_create_task(const struct sockaddr_in *const saddr
++				     ,struct kcom_task **tsk, pid_t pid);
++
++/*******************************************************************************
++ * Packet Handling related to layer communication                              *
++ ******************************************************************************/
++
++#define KCOM_NO_SIZE_CHECK	-1
++
++/* oM L1 layer */
++
++struct kcom_pkt_l1_handler {
++	const char *name; 	/* command name, for logging */
++
++	/* receiving part */
++	int (*handle_pkt)(struct kcom_node*, const struct kcom_pkt* const);
++        int recv_size;		/* Size exected to be received */
++
++	/* sending part */
++	int answer_size;	/* Size of the expected answer (if any) */
++	int cmd_flags; 		/*Used for sending this kind of pkt */
++};
++extern struct kcom_pkt_l1_handler kcomd_l1_handlers[KCOM_L1_CMD_MAX-KCOM_L1_CMD_START];
++static inline int __is_kcom_l1_pkt_type(int type)
++{
++	return type > KCOM_L1_CMD_START && type < KCOM_L1_CMD_MAX;
++}
++
++static inline int __is_kcom_l1_pkt(struct kcom_pkt *pkt)
++{
++	return __is_kcom_l1_pkt_type(pkt->type);
++}
++
++/* oM L2 layer */
++struct kcom_pkt_l2_handler {
++	const char *name;
++
++	/* receiving part */
++	int (*handle_pkt)(struct kcom_task*, const struct kcom_pkt* const);
++	int recv_size;
++	int perms;
++
++	/* sending part */
++	int cmd_flags;
++	int answer_size;
++};
++extern struct kcom_pkt_l2_handler kcomd_l2_handlers[KCOM_L2_CMD_MAX-KCOM_L2_CMD_START];
++extern int kcomd_do_l2_state_machine(struct kcom_task*, const struct kcom_pkt* const);
++
++static inline int __is_kcom_l2_pkt_type(int type)
++{
++	return type > KCOM_L2_CMD_START && type < KCOM_L2_CMD_MAX;
++}
++
++static inline int __is_kcom_l2_pkt(struct kcom_pkt *pkt)
++{
++	return __is_kcom_l2_pkt_type(pkt->type);
++}
++
++/**
++ * __get_default_flags - Get default communication flags for the given type
++ **/
++static inline unsigned int __get_default_flags(int type)
++{
++	if (__is_kcom_l1_pkt_type(type))
++		return kcomd_l1_handlers[KCOM_L1_CMD_INDEX(type)].cmd_flags;
++
++	if (__is_kcom_l2_pkt_type(type))
++		return kcomd_l2_handlers[KCOM_L2_CMD_INDEX(type)].cmd_flags;
++
++	return 0;
++}
++
++/**
++ * __get_default_flags - Get default communication flags for the given type
++ **/
++static inline const char* __get_packet_name(int type)
++{
++	if (__is_kcom_l1_pkt_type(type))
++		return kcomd_l1_handlers[KCOM_L1_CMD_INDEX(type)].name;
++
++	if (__is_kcom_l2_pkt_type(type))
++		return kcomd_l2_handlers[KCOM_L2_CMD_INDEX(type)].name;
++
++	return "Invalid Type";
++}
++static inline int __get_answer_size(int type)
++{
++	if (__is_kcom_l1_pkt_type(type))
++		return kcomd_l1_handlers[KCOM_L1_CMD_INDEX(type)].answer_size;
++
++	if (__is_kcom_l2_pkt_type(type))
++		return kcomd_l2_handlers[KCOM_L2_CMD_INDEX(type)].answer_size;
++
++	return -ENODEV;
++}
++static inline int __get_receive_size(int type)
++{
++	if (__is_kcom_l1_pkt_type(type))
++		return kcomd_l1_handlers[KCOM_L1_CMD_INDEX(type)].recv_size;
++
++	if (__is_kcom_l2_pkt_type(type))
++		return kcomd_l2_handlers[KCOM_L2_CMD_INDEX(type)].recv_size;
++
++	return -ENODEV;
++}
++
++/*******************************************************************************
++ * Communication primitives                                                    *
++ ******************************************************************************/
++
++extern int kcom_add_packet(struct kcom_task *tsk, struct kcom_pkt *pkt);
++
++extern int kcom_send(int type, int datasize, char *data, unsigned long addr
++	            ,const struct sockaddr_in * const saddr);
++extern int kcom_task_send(struct kcom_task *, int, int, const char* const,unsigned long);
++
++extern int kcom_send_ack(task_t *, const struct kcom_pkt *const);
++extern int kcom_send_ack_progress(task_t *p, const struct kcom_pkt *const);
++extern int kcom_send_nack(task_t *, const struct kcom_pkt * const);
++extern int kcom_send_resp(task_t *, int , char *, const struct kcom_pkt * const);
++
++extern int __kcom_wait_for_any_msg(struct kcom_task* tsk, struct kcom_pkt **answerpkt);
++extern int __kcom_wait_msg(struct kcom_task* tsk, struct kcom_pkt **answerpkt);
++extern struct kcom_node *__create_connection(struct sockaddr*
++					    ,struct kcom_node*);
++
++int __pkt_read(struct kcom_node *node, struct kcom_pkt **recv_kcom_pkt);
++extern int append_in_packs(struct kcom_pkt *, struct kcom_node*);
++
++
++/* Main interface to use for command sending outside of kcomd */
++int kcom_send_command(int type, int datasize, const char * const data
++		     ,unsigned long addr, const struct sockaddr_in * const saddr
++		     ,struct kcom_pkt ** answer);
++
++int __kcom_send_command(struct kcom_task* tsk, int type, int datasize
++			, const char * const data, unsigned long addr
++		        ,const struct sockaddr_in * const saddr
++		        , struct kcom_pkt ** answer);
++
++struct kcom_task * __find_task_for_packet(const struct kcom_pkt* const pkt
++					 ,struct kcom_node* node
++				         ,pid_t *pid);
+ 
+-extern int kcom_node_increment_error(struct kcom_node *node);
+-extern void kcom_node_clear_error(struct kcom_node *node);
+ #endif /* _HPC_KCOM_H */
+Index: linux/include/hpc/protocol.h
+===================================================================
+--- linux.orig/include/hpc/protocol.h	2006-12-19 16:56:06.000000000 +0100
++++ linux/include/hpc/protocol.h	2006-12-19 17:00:22.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006- Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -26,99 +27,148 @@
+ #include <asm/om-protocol.h>
+ #include <asm/om.h>
+ 
+-/* Migration handshake*/
+-struct omp_mig_handshake
+-{
+-	int type;		/* which type (look below) */
+-	long version;		/* openmosix version */
+-	int reason;		/* reason for mig or command */
+-	int personality;	/* of process to be sent */
+-};
+-/* handshake types */
+-
+-#define HSHAKE_MIG_REQUEST	0x01
+-#define HSHAKE_DEPUTY_PROBE	0x02
+-#define HSHAKE_REPLY		0x04
+-#define HSHAKE_NOTOK		0x08
+-
+-/* main structure for passing messages between
+- * DEPUTY and REMOTE. Denotes the type of request,
+- * and the length of it */
+-struct omp_req
+-{
+-	int type;
+-	int dlen;
+-};
+-// pkt type
+-
+-// bits 3:0 - ACK
+-#define MSG_MASK 		0xF
+-#define PKT_NEW_MSG	0x0
+-#define PKT_ACK		0x1
+-#define PKT_RESP		0x2
+-#define PKT_NACK		0x3
+-
+-#define NODE_MASK		0xF000
+-#define DEP_FLG		0x1000
+-#define MIG_FLG		0x2000
+-#define REM_FLG		0x4000
+-#define REPLY			0x8000
+-
+-#define DEP_PKT_NEW_MSG	(DEP_FLAG | PKT_NEW_MSG)
+-#define DEP_PKT_ACK		(DEP_FLAG | PKT_ACK)
+-#define DEP_PKT_RESP		(DEP_FLAG | PKT_RESP)
+-#define DEP_PKT_NACK		(DEP_FLAG | PKT_NACK)
+-
+-#define REM_PKT_NEW_MSG	(REM_FLAG | PKT_NEW_MSG)
+-#define REM_PKT_ACK		(REM_FLAG | PKT_ACK)
+-#define REM_PKT_RESP		(REM_FLAG | PKT_RESP)
+-#define REM_PKT_NACK		(REM_FLAG | PKT_NACK)
+-
+-/* commands sent during migration */
+-// #define MIG_MM		(MIG_FLG | 0x10)
+-// #define MIG_VMA		(MIG_FLG | 0x11)
+-// #define MIG_PAGE	(MIG_FLG | 0x12)
+-// #define MIG_FP		(MIG_FLG | 0x13)
+-// #define MIG_ARCH	(MIG_FLG | 0x14)
+-// #define MIG_TASK	(MIG_FLG | 0x15)
+-// #define MIG_ABORT	(MIG_FLG | 0x16)
+-
+-// PKT_TYPES
+-#define MIG_MASK	0xF0
+-#define MIG_PING	0x10
+-#define MIG_INIT	0x20
+-#define MIG_MM		0x30
+-#define MIG_VMA	0x40
+-#define MIG_PAGE	0x50
+-#define MIG_FP		0x60
+-#define MIG_ARCH	0x70
+-#define MIG_TASK	0x80
+-#define MIG_GO_HOME	0x90
+-#define MIG_COME_HOME	0xA0
+-#define MIG_ABORT	0xB0
+-#define MIG_SYSCALL	0xC0
++/* packet magic number : Blade Fad (1==l) */
++#define OM_PKT_MAGIC		0xB1adeFad
++
++/* pkt communication flags pkt->flags */
++
++#define __kcom_pkt_flags(pkt)	(pkt->flags)
++
++/* bits 3:0 - ACK related flags */
++#define KCOM_PKT_MSG_MASK 	0xF
++#define KCOM_PKT_NEW_MSG	0x0
++#define KCOM_PKT_ACK		0x1
++#define KCOM_PKT_ACK_PROGRESS	0x3
++#define KCOM_PKT_NACK		0x2
++#define KCOM_PKT_RESP		0x4
++
++#define __kcom_msg_flags(data)		((data)&KCOM_PKT_MSG_MASK)
++#define __kcom_pkt_msg_flags(pkt)	__kcom_msg_flags(__kcom_pkt_flags(pkt))
++
++/* bits 7:4 - Command Protocol type */
++
++#define KCOM_PKT_CMD_MASK	0xF0
++
++#define KCOM_PKT_ASYNC		0x00	/* Async messages don't care of any answer */
++#define KCOM_PKT_SYNC		0x10
++
++#define KCOM_PKT_SIMPLE		0x00
++#define KCOM_PKT_CPLX		0x20
++
++#define KCOM_PKT_NOTACKED	0x00
++#define KCOM_PKT_KCOMD_ACKED	0x00
++#define KCOM_PKT_TSK_ACKED	0x40
++
++#define KCOM_PKT_NOANSWER	0x00
++#define KCOM_PKT_ANSWERED	0x80
++
++
++#define __kcom_cmd_flags(data)		((data)&KCOM_PKT_CMD_MASK)
++#define __kcom_pkt_cmd_flags(pkt)	__kcom_cmd_flags((__kcom_pkt_flags(pkt)))
++
++/* Composed protocol messages flags : */
++
++#define KCOM_COMPLEX_MSG	(KCOM_PKT_SYNC |KCOM_PKT_CPLX  |KCOM_PKT_KCOMD_ACKED)
++#define KCOM_SYNC	        (KCOM_PKT_SYNC |KCOM_PKT_SIMPLE|KCOM_PKT_KCOMD_ACKED)
++#define KCOM_TSK_SYNC		(KCOM_PKT_SYNC |KCOM_PKT_SIMPLE|KCOM_PKT_TSK_ACKED)
++
++#define KCOM_ASYNC_SIMPLE	(KCOM_PKT_ASYNC|KCOM_PKT_SIMPLE\
++				|KCOM_PKT_NOTACKED|KCOM_PKT_NOANSWER)
++
++#define KCOM_TSK_ANSWERED	(KCOM_TSK_SYNC | KCOM_PKT_ANSWERED)
++
++/* bits 11:8 - node status */
++
++#define KCOM_PKT_NODE_MASK	0xF00
++#define KCOM_PKT_DEP_FLG	0x100
++#define KCOM_PKT_MIG_FLG	0x200
++#define KCOM_PKT_REM_FLG	0x400
++
++/* bit 12 : Out Of Band stream marker */
++
++#define KCOM_PKT_OOB		0x1000
++
++#define __kcom_node_flags(data)		((data)&KCOM_PKT_NODE_MASK)
++#define __kcom_pkt_node_flags(pkt)	__kcom_node_flags(__kcom_pkt_flags(pkt))
++
++/* Composed messages types */
++
++#define KCOM_ACK_FLAGS		(KCOM_PKT_ACK | KCOM_ASYNC_SIMPLE)
++#define KCOM_NACK_FLAGS	 	(KCOM_PKT_NACK| KCOM_ASYNC_SIMPLE)
++#define KCOM_ACK_PROGRESS_FLAGS	(KCOM_PKT_ACK_PROGRESS | KCOM_ASYNC_SIMPLE)
++#define KCOM_RESPONSE_FLAGS	(KCOM_PKT_RESP | KCOM_ASYNC_SIMPLE)
++
++/* Packet command types pkt->type */
++
++#define KCOM_CMD_NONE	0		/* Should never happen */
++enum {
++
++	/* Commands executed directly on packet read,                    */
++	/* hence in kcomd_thread context                                 */
++
++	KCOM_L1_CMD_START	= 0,
++	KCOM_L1_MIG_INIT,	       /* Send to initiate the migration */
++	KCOM_L1_MIG_COME_HOME,	       /* Ask the task to go home        */
++	KCOM_L1_DEP_SIGNAL,            /* Deputy send a signal to remote */
++	KCOM_L1_CMD_MAX,
++
++	/* Commands executed in the process context                      */
++	KCOM_L2_CMD_START 	= 1000,
++
++	/* Migration commands protocol                                   */
++
++	KCOM_L2_MIG_MM,		       /* mm struct send                 */
++	KCOM_L2_MIG_VMA,	       /* vma struct packet              */
++	KCOM_L2_MIG_PAGE,	       /* page struct packet             */
++	KCOM_L2_MIG_FP,	               /* Floating point struct packet   */
++	KCOM_L2_MIG_ARCH,	       /* arch specific packet           */
++	KCOM_L2_MIG_TASK,	       /* task struct packet             */
++
++	/* Commands occurring while task is running                      */
++
++	KCOM_L2_MIG_GO_HOME,	       /* remote task coming back home   */
++	KCOM_L2_MIG_SYSCALL,	       /* Syscall command                */
++	KCOM_L2_END_OF_PROCESS,	       /* Sent by remote to notify exit  */
++
++	/* Request during syscalls                                       */
++
++	KCOM_L2_REQ_COPY_FROM_USER,    /* Remote copy_from_user          */
++	KCOM_L2_REQ_COPY_TO_USER,      /* Remote copy_to_user            */
++	KCOM_L2_REQ_STRNCPY_FROM_USER, /* Remote strncpy_from_user       */
++	KCOM_L2_REQ_STRNLEN_USER,      /* Remote strnlen_user            */
++	KCOM_L2_REQ_GET_USER,          /* Remote get_user                */
++	KCOM_L2_REQ_PUT_USER,          /* Remote put_user                */
++
++	KCOM_L2_REQ_GET_PAGE,
++	KCOM_L2_REQ_DO_FORK,
++	KCOM_L2_REQ_MMAP,
++	KCOM_L2_REQ_DO_EXECVE,
++
++	KCOM_L2_CMD_MAX,
++
++        /* FIXME not handled yet : */
++
++	KCOM_L2_REQ_DO_SYSCALL,
++	KCOM_L2_REQ_COMING_HOME,
++	KCOM_L2_REQ_BRING_HOME,
++};
++
++/* Last known command type*/
++#define	KCOM_CMD_MAX	KCOM_CMD_ASY_MAX
+ 
+ #define MIG_HOME	MIG_GO_HOME
+ 
+-/* commands sent by deputy to remote */
+-#define SYSCALL_MASK 0xF00
+-#define DEP_COPY_FROM_USER	0x100
+-#define DEP_COPY_TO_USER	0x200
+-#define DEP_STRNCPY_FROM_USER	0x300
+-#define DEP_STRNLEN_USER	0x400
+-#define DEP_GET_USER		0x500
+-#define DEP_PUT_USER		0x600
+-#define DEP_SIGNAL		0x700
+-#define DEP_COMING_HOME		0x800
+-#define SYSCALL_DONE		0x900
+-
+-/* commands sent by remote to deputy */
+-#define REM_BRING_HOME	(REM_FLG | 0x10)
+-#define REM_PAGE	(REM_FLG | 0x11)
+-#define REM_SYSCALL	(REM_FLG | 0x12)
+-#define REM_FORK	(REM_FLG | 0x14)
+-#define REM_MMAP	(REM_FLG | 0x15)
+-#define REM_EXECVE	(REM_FLG | 0x16)
++#define KCOM_L1_CMD_INDEX(type)		(type-KCOM_L1_CMD_START)
++#define KCOM_L2_CMD_INDEX(type)		(type-KCOM_L2_CMD_START)
++
++
++/* Permissions for packet command execution in L2 */
++
++#define KCOM_PERM_MIGRATION		DPASSING
++#define KCOM_PERM_SYSCALL		DSYSCALL
++#define KCOM_PERM_NEVER			0x0
++#define KCOM_PERM_ANYTIME		0xFFFFFFFF
++
+ 
+ /* task_struct values that need to be passed */
+ struct omp_mig_task
+@@ -224,10 +274,11 @@
+ 
+ struct omp_execve_req
+ {
+-	int filelen;
+ 	int argc, envc;
+ 	int argvlen, envplen;
+ 	struct pt_regs regs;
++	int filelen;
++	char filename[PATH_MAX+1];
+ };
+ 
+ struct omp_execve_ret
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-12-19 17:00:22.000000000 +0100
++++ linux/hpc/kcom.c	2006-12-22 21:26:50.000000000 +0100
+@@ -24,6 +24,7 @@
+ #define _HPC_KCOMC_H 1
+ #include <hpc/kcom.h>
+ #include <hpc/prototype.h>
++#include <linux/jiffies.h>
+ 
+ #include <hpc/debug.h>
+ #include <linux/ctype.h>
+@@ -31,72 +32,53 @@
+ 
+ #ifdef CONFIG_OPENMOSIX_DEBUG
+ 
+-
+-/*
+- * Protocol debug, used to dump a packet
+- */
+-
++/*******************************************************************************
++ * Protocol debug, used to dump a packet                                       *
++ ******************************************************************************/
+ 
+ int om_debug_do_switch = 0;
++
+ /**
+  *
+- * om_format_type
++ * om_format_flags
+  *
+  * Description:
+- * format the type of a packet in a human readable
++ * format the flags of a packet in a human readable
+  * format
+- * @buffer the buffer to write to (need at least 50 chars)
++ * @buffer the buffer to write to (need at least 57 chars)
+  **/
+ 
+-void om_format_type(int type, char* buffer)
++void om_format_flags(unsigned int flags, char* buffer)
+ {
+-    char *msg_mask_names[] = {
+-			       "new "
+-			     , "ack "
+-			     , "resp"
+-			     , "nack"
+-			     };
+-    char *mig_mask_names[] = {
+-			       "uninited!"
+-			     , "ping     "
+-			     , "init     "
+-			     , "mm       "
+-			     , "vma      "
+-			     , "page     "
+-			     , "fp       "
+-			     , "arch     "
+-			     , "task     "
+-			     , "go_home  "
+-			     , "come_home"
+-			     , "abort    "
+-			     , "syscall  "
+-			     };
+-    char *sys_mask_names[] = {
+-			       " <not a syscall> "
+-			     , "copy_from_user   "
+-			     , "copy_to_user     "
+-			     , "strncpy_from_user"
+-			     , "strnlen_user     "
+-			     , "get_user         "
+-			     , "put_user         "
+-			     , "signal           "
+-			     , "coming_home      "
+-			     , "syscall_done     "
+-			     };
+-    char *dep_flg[] = { "dep", "DEP" };
+-    char *mig_flg[] = { "mig", "MIG" };
+-    char *rem_flg[] = { "rem", "REM" };
+-    char *rly_flg[] = { "rly", "RLY" };
+-
+-    sprintf(buffer, "%s.%s.%s.%s %s %s %s"
+-	   , rly_flg[ (type & REPLY)   >> 15 ]
+-	   , rem_flg[ (type & REM_FLG) >> 14 ]
+-	   , mig_flg[ (type & MIG_FLG) >> 13 ]
+-	   , dep_flg[ (type & DEP_FLG) >> 12 ]
+-	   , sys_mask_names[ (type & SYSCALL_MASK) >> 8 ]
+-	   , mig_mask_names[ (type & MIG_MASK)     >> 4 ]
+-	   , msg_mask_names[ (type & MSG_MASK)     >> 0 ]
+-	   );
++	char *msg_mask_names[] = {
++				[KCOM_PKT_NEW_MSG]	= "new",
++				[KCOM_PKT_ACK] 		= "ack",
++				[KCOM_PKT_ACK_PROGRESS]	= "ackp",
++				[KCOM_PKT_NACK]		= "nack",
++				[KCOM_PKT_RESP]		= "resp"};
++
++	char *syn_flg[] = {"async", "SYNC"};
++	char *cpl_flg[] = {"simple", "COMPLEX"};
++	char *ack_flg[] = {"kcom_acked", "TSK_ACKED"};
++
++	char *dep_flg[] = {"dep", "DEP" };
++	char *mig_flg[] = {"mig", "MIG" };
++	char *rem_flg[] = {"rem", "REM" };
++
++	char *oob_flg[] = {"inband", "OUTBAND"};
++
++	sprintf(buffer, "%s %s %s:%s:%s %s:%s:%s"
++			, oob_flg[ (flags&KCOM_PKT_OOB) ? 1 : 0 ]
++			, msg_mask_names[__kcom_msg_flags(flags) >> 0]
++
++			, syn_flg[(flags & KCOM_PKT_SYNC) ? 1 : 0]
++			, cpl_flg[(flags & KCOM_PKT_CPLX) ? 1 : 0]
++			, flags&KCOM_PKT_SYNC ? ack_flg[(flags & KCOM_PKT_TSK_ACKED) ? 1 : 0] : "not_acked"
++
++			, rem_flg[(flags & KCOM_PKT_REM_FLG) ? 1 : 0]
++			, mig_flg[(flags & KCOM_PKT_MIG_FLG) ? 1 : 0]
++			, dep_flg[(flags & KCOM_PKT_DEP_FLG) ? 1 : 0]
++	       );
+ }
+ 
+ 
+@@ -108,51 +90,48 @@
+  * @len : length to display
+  **/
+ 
+-void hexdump(const unsigned char* const buff, int len)
++void hexdump(const unsigned char* const const buff, int len)
+ {
+-    int i, dumped = 0;
+-    int h = 0, a = 0;
+-    int inc = 0;
+-
+-    char hexbuf[64];
+-    char asciibuf[64];
++	int i, dumped = 0;
++	int h = 0, a = 0;
++	int inc = 0;
+ 
+-    if (!buff || len <= 0) return;
++	char hexbuf[64];
++	char asciibuf[64];
+ 
+-    for (i = 0; i < len; i++) {
+-	dumped = 0;
++	if (!buff || len <= 0) return;
+ 
+-	h += sprintf(hexbuf + h, "%02X", buff[i]);
++	for (i = 0; i < len; i++) {
++		dumped = 0;
+ 
++		h += sprintf(hexbuf + h, "%02X", buff[i]);
+ 
++		if (0x20 <=buff[i] && 0x7f > buff[i]) asciibuf[a] = buff[i];
++		else asciibuf[a] = '.';
+ 
+-	if (isprint(buff[i])) asciibuf[a] = buff[i];
+-	else asciibuf[a] = '.';
++		a++;
+ 
+-	a++;
++		if (35==h) {
++			asciibuf[a] = 0;
++			hexbuf[h] = 0;
++			printk(KERN_DEBUG"[oM] dump |%s| |%s|\n", hexbuf, asciibuf);
++			dumped = 1;
++			a = 0;
++			h = 0;
++			inc = 0;
+ 
+-	if (0 != i && 0 == (i%16)) {
+-	    hexbuf[h] = 0;
+-	    asciibuf[a] = 0;
+-	    printk(KERN_DEBUG"[OM] pktdump |%35.35s| |%16.16s|\n", hexbuf, asciibuf);
+-	    dumped = 1;
+-	    a = 0;
+-	    h = 0;
+-	    inc = 0;
++		} else if (0 == ((h - inc)% 8)) {
++			hexbuf[h++] = ' ';
++			inc++ ;
++		}
+ 
+-	} else if (0 == ((h - inc)% 8) && h != 2) {
+-	    hexbuf[h++] = ' ';
+-	    inc++ ;
+ 	}
+ 
+-
+-    }
+-
+-    if (!dumped) {
+-	hexbuf[h] = 0;
+-	asciibuf[a] = 0;
+-	printk(KERN_DEBUG"[OM] pktdump |%-35.35s| |%-16.16s|\n", hexbuf, asciibuf);
+-    }
++	if (!dumped) {
++		hexbuf[h] = 0;
++		asciibuf[a] = 0;
++		printk(KERN_DEBUG"[oM] dump |%-35.35s| |%-16.16s|\n", hexbuf, asciibuf);
++	}
+ 
+ }
+ 
+@@ -165,45 +144,47 @@
+  * @param pkt : the packet to dump
+  **/
+ 
+-void om_dump_packet_hdr(struct kcom_pkt* pkt)
++void om_dump_packet_hdr(const struct kcom_pkt* const pkt)
+ {
+-    char buffer[64];
++	char buffer[64];
+ 
+-    if (!pkt) {
+-	OMBUG("packet is null, can't dump header\n");
+-	return;
+-    }
++	if (!pkt) {
++		OMBUG("packet is null, can't dump header\n");
++		return;
++	}
+ 
+-    om_format_type(pkt->type, buffer);
++	om_format_flags(pkt->flags, buffer);
+ 
+-    printk(KERN_DEBUG"[OM] pktdump type=0x%x: %s\n", (unsigned) pkt->type, buffer);
+-    printk(KERN_DEBUG"[OM] pktdump hpid: %5d rpid: %5d len: %d\n"
+-	  , pkt->hpid, pkt->rpid, pkt->len);
++	printk(KERN_DEBUG"[oM] pktdump magic:0x%x hdr_len:%d\n", pkt->magic, pkt->hdr_len);
++	printk(KERN_DEBUG"[oM] pktdump type=%d: %s\n", pkt->type, __get_packet_name(pkt->type));
++	printk(KERN_DEBUG"[oM] pktdump flgs=0x%x: %s\n", pkt->flags, buffer);
++	printk(KERN_DEBUG"[oM] pktdump hpid: %5d rpid: %5d msgid: %d len: %d\n"
++			, pkt->hpid, pkt->rpid, pkt->msgid, pkt->data_len);
+ 
+-    printk(KERN_DEBUG"[OM] pktdump addr: 0x%p msgid: %d\n"
+-	  , (void *) pkt->addr, pkt->msgid);
++	printk(KERN_DEBUG"[oM] pktdump addr: 0x%p msgid: %d\n"
++			, (void *) pkt->addr, pkt->msgid);
+ 
+-    printk(KERN_DEBUG"[OM] pktdump RAW header dump ----------------------------------------\n");
+-    hexdump((char*)pkt, KCOM_PKT_NET_SIZE);
+-    printk(KERN_DEBUG"[OM] pktdump RAW header dump ----------------------------------------\n");
++	printk(KERN_DEBUG"[oM] pktdump RAW header dump -------------------------------------\n");
++	hexdump((char*)pkt, KCOM_PKT_NET_SIZE);
++	printk(KERN_DEBUG"[oM] pktdump RAW header dump -------------------------------------\n");
+ 
+ }
+ 
+-void om_dump_packet_data(struct kcom_pkt* pkt)
++void om_dump_packet_data(const struct kcom_pkt* const pkt)
+ {
+-    if (!pkt) {
+-	OMBUG(KERN_DEBUG"packet is null, can't dump header\n");
+-	return;
+-    }
++	if (!pkt) {
++		OMBUG(KERN_DEBUG"packet is null, can't dump header\n");
++		return;
++	}
+ 
+-    if (!pkt->data) {
+-	OMBUG(KERN_DEBUG"packet data is NULL\n");
+-	return;
+-    }
++	if (!pkt->data) {
++		OMBUG(KERN_DEBUG"packet data is NULL\n");
++		return;
++	}
+ 
+-    printk(KERN_DEBUG"[OM] pktdump data RAW dump ------------------------------------------\n");
+-    hexdump(pkt->data, pkt->len);
+-    printk(KERN_DEBUG"[OM] pktdump data RAW dump ------------------------------------------\n");
++	printk(KERN_DEBUG"[oM] pktdump data RAW dump ---------------------------------------\n");
++	hexdump(pkt->data, pkt->data_len);
++	printk(KERN_DEBUG"[oM] pktdump data RAW dump ---------------------------------------\n");
+ }
+ 
+ /**
+@@ -214,19 +195,19 @@
+  * @pkt: the packet to dump
+  */
+ 
+-void om_dump_packet(struct kcom_pkt* pkt)
++void om_dump_packet(const struct kcom_pkt* const pkt)
+ {
+ 
+-    if (!pkt) {
+-	OMBUG("packet is NULL ... can't dump it \n");
+-	return;
+-    }
++	if (!pkt) {
++		OMBUG("packet is NULL ... can't dump it \n");
++		return;
++	}
+ 
+-    om_dump_packet_hdr(pkt);
++	om_dump_packet_hdr(pkt);
+ 
+-    if (om_debug_do_switch >= 4) {
+-	om_dump_packet_data(pkt);
+-    }
++	if (om_debug_do_switch >= 4) {
++		om_dump_packet_data(pkt);
++	}
+ 
+ }
+ 
+@@ -245,34 +226,51 @@
+ 
+ int kcom_add_packet(struct kcom_task *tsk, struct kcom_pkt *pkt)
+ {
+-    if (!tsk) {
+-	OMBUG("Can't add packet to a NULL task\n");
+-	return -ENODEV;
+-    }
+-
+-    if (!pkt) {
+-	OMBUG("Can't add a NULL packet\n");
+-	return -ENODEV;
+-    }
+-
+-
+-    OMDEBUG_PROTOCOL(2, "Adding packet to tsk pid=%d hpid=%d type=0x%x len=%d\n"
+-		     , tsk->hpid, tsk->rpid
+-		     , (unsigned) pkt->type, pkt->len);
+-    OMDEBUG_PROTOCOL_DO(3, om_dump_packet(pkt));
+-
+-    write_lock(&tsk->out_packs_lock);
+-    list_add_tail(&pkt->list, &tsk->out_packs);
+-    write_unlock(&tsk->out_packs_lock);
+-
+-    if (kcomd_task) {
+-	    send_sig(SIGHUP, kcomd_task, 0);
+-    } else {
+-	    OMBUG("Unable to signal kcomd\n");
+-	    return -ENOMEM;
+-    }
++	if (!tsk) {
++		OMBUG("Can't add packet to a NULL task\n");
++		return -ENODEV;
++	}
++
++	if (!pkt) {
++		OMBUG("Can't add a NULL packet\n");
++		return -ENODEV;
++	}
++
++	OMDEBUG_PROTOCOL(2, "Adding packet to tsk pid=%d hpid=%d type=%s flags=0x%x len=%d\n"
++			, tsk->hpid, tsk->rpid
++			, __get_packet_name(pkt->type), pkt->flags, pkt->data_len);
++	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(pkt));
++
++	/* out of band packet need special care */
++	if (KCOM_PKT_OOB&pkt->flags) {
++		struct kcom_oob_waitqueue *wait;
++		wait = (struct kcom_oob_waitqueue*) kmalloc(sizeof(*wait), GFP_KERNEL);
++		if (!wait) {
++			return -ENOMEM;
++		}
++		memset(wait, 0, sizeof(*wait));
++		wait->msgid = pkt->msgid;
++		wait->pid = current->pid;
++
++		spin_lock(&tsk->oob_waitqueue_lock);
++		list_add_tail(&wait->list, &tsk->oob_waitqueue);
++		spin_unlock(&tsk->oob_waitqueue_lock);
++	}
++
++	write_lock(&tsk->out_packs_lock);
++	list_add_tail(&pkt->list, &tsk->out_packs);
++	write_unlock(&tsk->out_packs_lock);
++
++	tsk->node->pkt_ready = 1;
++
++	if (kcomd_task) {
++		send_sig(SIGHUP, kcomd_task, 0);
++	} else {
++		OMBUG("Unable to signal kcomd\n");
++		return -ENODEV;
++	}
+ 
+-    return 0;
++	return 0;
+ }
+ 
+ /**
+@@ -283,15 +281,16 @@
+  * 	wait until all data has been read.
+  * 	The ->len field = size of the data in bytes.
+  **/
+-int pkt_data_read(struct kcom_node *node, struct kcom_pkt *pkt, int len, char *data)
++int pkt_data_read(const struct kcom_node* const node
++	         ,const struct kcom_pkt* const pkt
++	         ,int len, char *data)
+ {
+ 	struct socket *sock=node->sock;
+ 	struct iovec iov;
+ 	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
+ 	mm_segment_t oldfs;
+ 	int i;
+-	char buf[32];
+-	int nb_retries = 0;
++	unsigned long start_jiffies;
+ 
+ 	if (!sock)
+ 		return -ENOENT;
+@@ -300,27 +299,23 @@
+ 	iov.iov_len = len;
+ 
+ 	OMDEBUG_PROTOCOL(2, "KCOMD: reading data (%dB)... \n", len);
+-	// Too small of a packet gets delayed before being sent. Even with TCP_NODELAY
+-	if (len < 32) {
+-		iov.iov_base = &buf;
+-		iov.iov_len = 32;
+-	}
+ 
+ 	oldfs = get_fs();
+ 	set_fs(KERNEL_DS);
+ 
++	start_jiffies = jiffies;
+ 	while (iov.iov_len > 0) {
+ 
++		OMDEBUG_PROTOCOL(3, "KCOMD: (Re)Starting read loop\n");
+ 		i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
+ 		if ((i == -ENOSPC) || (i == -EAGAIN)) {
+ 
+ 			/* Prevent infinite loop 60s */
+-			if (60000 < nb_retries++) {
+-				printk(KERN_ERR "too many retries\n");
++			if (jiffies - start_jiffies >= 60*HZ) {
++				printk(KERN_ERR "read timeout");
+ 				len = -ETIMEDOUT;
+ 				goto read_exit;
+ 			}
+-
+ 			schedule_timeout(HZ/1000);
+ 			continue;
+ 		}
+@@ -333,10 +328,7 @@
+ 		iov.iov_base += i;
+  	}
+ 
+-
+-	if (len < 32) {
+-		memcpy(data, buf, len);
+-	}
++	OMDEBUG_PROTOCOL(3, "KCOMD: Exited read loop\n");
+ 
+ read_exit:
+ 	set_fs(oldfs);
+@@ -358,7 +350,8 @@
+  * 	All packet headers are the same size.
+  * 	The packet is allocated; caller must free it
+  **/
+-int pkt_hdr_read(struct kcom_node *node, struct kcom_pkt **recv_kcom_pkt)
++int pkt_hdr_read(const struct kcom_node* const node,
++		 struct kcom_pkt **recv_kcom_pkt)
+ {
+ 	struct iovec iov;
+ 	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
+@@ -367,8 +360,8 @@
+ 	struct socket *sock=node->sock;
+ 	int i;
+ 	int err = 0;
+- 	int retry = 0;
+  	int first_loop = 1;
++ 	long start_jiffies;
+ 
+ 	*recv_kcom_pkt = NULL;
+ 
+@@ -383,6 +376,7 @@
+  	}
+ 
+  	memset(recv_pkt, 0, sizeof(struct kcom_pkt));
++ 	INIT_LIST_HEAD(&recv_pkt->list);
+ 
+ 	iov.iov_base = recv_pkt;
+  	iov.iov_len = KCOM_PKT_NET_SIZE;
+@@ -392,6 +386,7 @@
+ 	set_fs(KERNEL_DS);
+ 
+ 
++	start_jiffies = jiffies;
+  receive_fragment:
+ 
+  	i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
+@@ -400,7 +395,7 @@
+  			return i;
+ 
+  		/* prevent infinite loop */
+- 		if (60000 > ++retry)
++ 		if (jiffies - start_jiffies > 60*HZ)
+ 	 		goto receive_timeout;
+ 
+ 		first_loop = 0;
+@@ -415,22 +410,25 @@
+ 		err = i;
+  		goto receive_error;
+  	}
+- 	iov.iov_base += i;
++ 	iov.iov_base +=i;
+ 
+  	/* sock_revmsg update the iov struct, and len */
+  	if (iov.iov_len > 0)
+  		goto receive_fragment;
+ 
+- 	if (iov.iov_len != 0)
+- 		goto receive_incomplete;
+-
+ 	set_fs(oldfs);
+ 
++	/* Check for magic and header length */
++	if (OM_PKT_MAGIC != recv_pkt->magic || KCOM_PKT_NET_SIZE != recv_pkt->hdr_len) {
++		printk(KERN_ERR "Corrupted packet header received\n");
++		goto exit_error;
++	}
++
+ 	*recv_kcom_pkt = recv_pkt;
+  	return 0;
+ 
+ receive_timeout:
+-	OMBUG("Can't receive header %d fragment, too many (%d) retries\n", i, retry);
++	printk(KERN_ERR"Can't receive header %d fragment, read timeout\n", i);
+ 	err = -ETIMEDOUT;
+  	goto exit_error;
+ 
+@@ -438,9 +436,6 @@
+ 	OMBUG("%d receiving header.\n", i);
+  	goto exit_error;
+ 
+-receive_incomplete:
+-	OMBUG("incomplete packet received\n");
+-
+ exit_error:
+ 
+  	kcom_pkt_delete(recv_pkt);
+@@ -449,6 +444,69 @@
+ }
+ EXPORT_SYMBOL_GPL(pkt_hdr_read);
+ 
++/**
++ *
++ * __pkt_read
++ *
++ * Description
++ *    Reads the packet header and, if exists, data,
++ *    Does the poorman job of receiving data itself,
++ *    if the node didn't hold a valid sock, __pkt_read
++ *    creates a new one
++ **/
++
++int __pkt_read(struct kcom_node *node, struct kcom_pkt **recv_kcom_pkt)
++{
++	int len;
++	int i;
++
++	/* In case of error, sockets may be deleted,
++	 * here we try to recover from this situation
++	 */
++	if (!node->sock)
++		__create_connection(&node->addr, node);
++
++	if (!node->sock)
++		return -ENODEV;
++
++	OMDEBUG_PROTOCOL(2, "KCOMD: Receiving packet \n");
++
++	/* read packet header first                   *
++	 * (pkt_hdr_read allocates the packet as well */
++	i = pkt_hdr_read(node, recv_kcom_pkt);
++
++	if (i<0)
++		return i;
++
++	if(NULL == *recv_kcom_pkt)
++		return -ENOENT;
++
++	/* read packet data if any */
++
++        (*recv_kcom_pkt)->data = NULL;
++	len = (*recv_kcom_pkt)->data_len;
++
++	if (len > 0) {
++
++		(*recv_kcom_pkt)->data = kzalloc(len, GFP_KERNEL);
++		i = pkt_data_read(node, *recv_kcom_pkt, len, (*recv_kcom_pkt)->data);
++
++		if (i < len) {
++			OMBUG("ERROR: incomplete data pkt\n");
++			goto error_delete_packet;
++		}
++	}
++	INIT_LIST_HEAD(&((*recv_kcom_pkt)->list));
++	return 0;
++
++error_delete_packet:
++	/* Since the list may contain junk, we must init it */
++	INIT_LIST_HEAD(&((*recv_kcom_pkt)->list));
++	kcom_pkt_delete(*recv_kcom_pkt);
++	*recv_kcom_pkt = NULL;
++
++	return -ENOENT;
++}
+ 
+ /**
+  * kcom_pkt_delete
+@@ -471,7 +529,8 @@
+ 		list_del(&pkt->list);
+ 	}
+ 
+-	if (pkt->len && pkt->data) kfree(pkt->data);
++	if (pkt->data_len && pkt->data)
++		kfree(pkt->data);
+ 
+ 	kmem_cache_free(kcom_pkt_cachep, pkt);
+ }
+@@ -498,7 +557,8 @@
+ 	n = max(fd,max(fd4, fd6));
+ 
+ 	read_lock(&kcom_nodes_lock);
+-	list_for_each_entry(node, &kcom_nodes, list) n = max(node->fd, n);
++	list_for_each_entry(node, &kcom_nodes, list)
++		n = max(node->fd, n);
+ 	read_unlock(&kcom_nodes_lock);
+ 
+ 
+@@ -523,58 +583,114 @@
+ }
+ EXPORT_SYMBOL_GPL(alloc_fd_bitmap);
+ 
++#ifdef CONFIG_OPENMOSIX_DEBUG
++
+ /**
+- * kcom_pkt_create
+- *
+- * Description:
+- * 	Allocate a kcom pkt from the slab.
+- * 	Initialize the pkt len,type and data ptr.
+- *    If this is a new packet, increment the global msgid counter.
++ * __kcom_pkt_check_flags - check that flags are appripriate, return 0 if ok
+  **/
+-struct kcom_pkt *kcom_pkt_create(int len, int type, int ack, char *data)
++
++static int __kcom_pkt_check_flags(int type, int flags)
++{
++	if (__kcom_cmd_flags(flags)&KCOM_PKT_CPLX
++	   && !(__kcom_cmd_flags(flags)&KCOM_PKT_SYNC)) {
++	   	OMBUG("Complex commands can not be asynchronous!\n");
++	   	return -EFAULT;
++	}
++
++	if (!__kcom_node_flags(flags)) {
++		OMBUG("Creating packet without dest flags\n");
++		return -EFAULT;
++	}
++
++	return 0;
++}
++
++#endif /*CONFIG_OPENMOSIX_DEBUG*/
++
++/**
++ * kcom_pkt_create - create a packet ready to be sent
++ **/
++
++int kcom_pkt_create(struct kcom_pkt** destpkt, int len, int type, int flags
++		   ,const char* const data, int hpid, int rpid
++		   ,struct kcom_task *task)
+ {
+ 	struct kcom_pkt *pkt;
+ 
+-	OMDEBUG_PROTOCOL(3, "KCOMD: creating packet (len %d type 0x%x ack %d)... \n"
+-			, len, (unsigned)type, ack);
+-	pkt=kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
+-	if (pkt) {
+-		pkt->len = 0;
+-		pkt->type = type;
+-		pkt->data = NULL;
+-
+-		if (len > 0) {
+-			pkt->data = kmalloc(len, GFP_KERNEL);
+-			if (! pkt->data)
+-			{
+-				OMBUG("Can't allocate temp space for storing packet !!\n");
+-				kcom_pkt_delete(pkt);
+-			}
+-			pkt->len = len;
++	#ifdef CONFIG_OPENMOSIX_DEBUG
++	int err;
+ 
+-			memcpy(pkt->data, data, len);
+-		}
++	/* flag sanity check is only usefull for debug */
++	err = __kcom_pkt_check_flags(type, flags);
++	if (err < 0)
++		return err;
++	#endif /*CONFIG_OPENMOSIX_DEBUG*/
++
++
++
++	OMDEBUG_PROTOCOL(3, "creating packet (len %d type 0x%x flags %d)... \n"
++			, len, (unsigned)type, flags);
++
++	*destpkt = NULL;
++	pkt=(struct kcom_pkt*) kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
++	if (!pkt) {
++		OMBUG("Can't allocate temp space for pkt header\n");
++		return -ENOMEM;
++	}
++
++	/* sanity fields */
++
++	memset(pkt, 0, sizeof(struct kcom_pkt));
++
++	pkt->magic = OM_PKT_MAGIC;
++	pkt->hdr_len = KCOM_PKT_NET_SIZE;
++	INIT_LIST_HEAD(&pkt->list);
++
++	/* Message ID depend on flags ... */
++	if (KCOM_PKT_NEW_MSG==__kcom_msg_flags(flags)) {
++		spin_lock(&task->msgid_lock);
+ 
++		++task->msgid;
+ 
+-		INIT_LIST_HEAD(&pkt->list);
++		pkt->msgid = task->msgid;
++		spin_unlock(&task->msgid_lock);
++	}
++
++	/* Types and stuffs */
++
++	pkt->type = type;
++	pkt->flags = flags;
++	pkt->rpid = rpid;
++	pkt->hpid = hpid;
+ 
++	/* packet data */
+ 
+-		/*
+-		 * SMP FIXME
+-		 * Florian Delizy:
+-		 * This is *NOT* the correct way to handle this in SMP !!
+-		 * we need to have a distinct msgid list or multiple processors
+-		 * may send packets with equal id => messup the stack
+-		 * SMP FIXME
+-		 */
+-		if ((type & MSG_MASK) == PKT_NEW_MSG)
+-			pkt->msgid = kcom_msgid++;
++	if (!len)
++		goto pkt_finished;
++
++	if (!data) {
++		OMBUG("Creating packet with NULL data, but len != 0\n");
++		kcom_pkt_delete(pkt);
++		return -EFAULT;
++	}
+ 
+-		return pkt;
++	pkt->data = kmalloc(len, GFP_KERNEL);
++	if (!pkt->data) {
++		OMBUG("Can't allocate temp space for storing packet data!!\n");
++		kcom_pkt_delete(pkt);
++		return -ENOMEM;
+ 	}
++	pkt->data_len = len;
++
++	memcpy(pkt->data, data, len);
++
++pkt_finished:
++	/* Fill the result */
+ 
+-	return NULL;
++	*destpkt = pkt;
++	return 0;
+ }
++
+ EXPORT_SYMBOL_GPL(kcom_pkt_create);
+ 
+ /**
+@@ -585,13 +701,14 @@
+  * 	an existing node connection.
+  *    The IP address is the determiner.
+  **/
+-struct kcom_node *__kcom_node_find(struct sockaddr *saddr)
++struct kcom_node *__kcom_node_find(const struct sockaddr* const saddr)
+ {
+ 	struct kcom_node *tmp;
+ 	struct sockaddr_in *saddr_tmp;
+ 	struct sockaddr_in *saddr_in=(struct sockaddr_in *)saddr;
+ 	unsigned long int node_addr, find_addr;
+ 
++
+ 	find_addr=saddr_in->sin_addr.s_addr;
+ 
+ 	read_lock(&kcom_nodes_lock);
+@@ -599,12 +716,15 @@
+ 		saddr_tmp=(struct sockaddr_in *)&tmp->addr;
+ 		node_addr=saddr_tmp->sin_addr.s_addr;
+ 
+-		if ((saddr_in->sin_family == saddr_tmp->sin_family) &&
+-			(find_addr == node_addr))
+-			return tmp;
++		if ((saddr_in->sin_family == saddr_tmp->sin_family)
++		   && (find_addr == node_addr))
++			goto return_unlock;
+ 	}
++	tmp = NULL;
++
++return_unlock:
+ 	read_unlock(&kcom_nodes_lock);
+-	return NULL;
++	return tmp;
+ }
+ 
+ 
+@@ -615,7 +735,7 @@
+  * 	calls __kcom_node_find
+  *    ,  which searches for a node
+  **/
+-struct kcom_node *kcom_node_find(struct sockaddr *saddr)
++struct kcom_node *kcom_node_find(const struct sockaddr* const saddr)
+ {
+ 	return __kcom_node_find(saddr);
+ }
+@@ -645,6 +765,7 @@
+ 	INIT_LIST_HEAD(&node->list);
+ 	INIT_LIST_HEAD(&node->tasks);
+ 	INIT_LIST_HEAD(&node->process_list);
++	node->pkt_ready = 0;
+ 
+ 	rwlock_init(&node->tasks_lock);
+ 
+@@ -791,6 +912,11 @@
+ 		return -1;
+ 	}
+ 	set_fs(oldfs);
++
++	/* Set timeout for send/recv */
++	sock->sk->sk_rcvtimeo = 60*HZ;
++	sock->sk->sk_sndtimeo = 60*HZ;
++
+ 	return 0;
+ 
+ }
+@@ -898,41 +1024,47 @@
+ struct kcom_task *kcom_task_create(struct kcom_node *node, int pid)
+ {
+ 	struct kcom_task *kctask;
+-	task_t *p;
++	task_t *p = NULL;
+ 
+ 	kctask=kmem_cache_alloc(kcom_task_cachep, SLAB_KERNEL);
+ 
+ 	if (kctask) {
+-		if (pid==0) { // this only occurs when remote node is creating new proc.
+-				kctask->rpid = 0;
+-				kctask->hpid = pid;
+-		} else {
+-			// read_lock(&tasklist_lock);
+-			p = find_task_by_pid(pid);
+-			// read_unlock(&tasklist_lock);
+-			if (p) {
+-				if (task_test_dflags(p, DREMOTE)) {
+-					kctask->rpid = pid;
+-					kctask->hpid = 0;
+-				} else {
+-					kctask->hpid = pid;
+-					kctask->rpid = 0;
+-				}
++		read_lock(&tasklist_lock);
++		p = find_task_by_pid(pid);
++		read_unlock(&tasklist_lock);
++
++		if (p) {
++			if (task_test_dflags(p, DREMOTE)) {
++				kctask->rpid = pid;
++				kctask->hpid = 0;
+ 			} else {
+-				OMBUG("ERROR creating kcom task.\n");
+-				return NULL;
++				kctask->hpid = pid;
++				kctask->rpid = 0;
+ 			}
++		} else {
++			OMBUG("ERROR creating kcom task.\n");
++			return NULL;
+ 		}
+ 
++		kctask->task = p;
+ 		kctask->node = node;
+ 		INIT_LIST_HEAD(&kctask->list);
+ 		INIT_LIST_HEAD(&kctask->out_packs);
+ 		INIT_LIST_HEAD(&kctask->in_packs);
+ 		INIT_LIST_HEAD(&kctask->process_list);
+ 		INIT_LIST_HEAD(&kctask->egress_list);
++		INIT_LIST_HEAD(&kctask->oob_packs);
++		INIT_LIST_HEAD(&kctask->oob_waitqueue);
++
++		rwlock_init(&kctask->oob_packs_lock);
+ 		rwlock_init(&kctask->in_packs_lock);
+ 		rwlock_init(&kctask->out_packs_lock);
+ 
++		spin_lock_init(&kctask->msgid_lock);
++		kctask->msgid = 0;
++
++		spin_lock_init(&kctask->oob_waitqueue_lock);
++
+ 		write_lock(&node->tasks_lock);
+ 		list_add_tail(&kctask->list, &node->tasks);
+ 		write_unlock(&node->tasks_lock);
+@@ -1011,6 +1143,7 @@
+ {
+ 	struct kcom_node *tmp;
+ 	struct kcom_task *tmp2;
++	struct kcom_task *tsk_ret = NULL;
+ 	int offset = 0;
+ 	int look_for_remote = where - 1;
+ 
+@@ -1055,15 +1188,21 @@
+ 		read_lock(&tmp->tasks_lock);
+ 
+ 		list_for_each_entry(tmp2, &tmp->tasks, list) {
+-			if (pid == *((pid_t*)(((char*)tmp2)+offset)))
+-				return tmp2;
++			if (pid == *((pid_t*)(((char*)tmp2)+offset))){
++				tsk_ret = tmp2;
++				read_unlock(&tmp->tasks_lock);
++				goto return_unlock;
++			}
+ 		}
+ 
+ 		read_unlock(&tmp->tasks_lock);
+ 	}
++
++
++return_unlock:
+ 	read_unlock(&kcom_nodes_lock);
++	return tsk_ret;
+ 
+-	return NULL;
+ }
+ 
+ /**
+@@ -1118,42 +1257,67 @@
+ }
+ EXPORT_SYMBOL_GPL(kcom_task_find);
+ 
++
++unsigned int __get_dest_flags(struct kcom_task *tsk)
++{
++	if (task_test_dflags(tsk->task, DDEPUTY))
++		return KCOM_PKT_DEP_FLG;
++
++	if (task_test_dflags(tsk->task, DREMOTE))
++		return KCOM_PKT_REM_FLG;
++
++	/* task is probably migrating, but just to be sure : */
++
++	if (0 == tsk->rpid)
++		return KCOM_PKT_MIG_FLG;
++
++	if (tsk->rpid == tsk->task->pid)
++		return KCOM_PKT_REM_FLG;
++
++	if (tsk->hpid == tsk->task->pid)
++		return KCOM_PKT_REM_FLG;
++
++	return 0;
++}
++
+ /**
+  * kcom_task_send
+  *
+  * Description:
+  * 	Creates a packet to send and adds it to the task's outbound list.
+- *    No acknowledgement or reply is expected.
+  **/
+-int kcom_task_send(struct kcom_task *tsk, int type, int datasize, char *data, char *resp, unsigned long addr)
++int kcom_task_send(struct kcom_task *tsk, int type, int datasize, const char* const data
++		  ,unsigned long addr)
+ {
+ 	struct kcom_pkt *pkt;
+ 	int ret;
++	unsigned int flags;
+ 
+ 	if (!tsk)
+ 		return -ENODEV;
+ 
+-	OMDEBUG_PROTOCOL(2, "sending task packet (type=0x%x, datasize=%d)\n"
+-			,(unsigned)type, datasize);
++	OMDEBUG_PROTOCOL(2, "sending task packet (type='%s', datasize=%d)\n"
++			,__get_packet_name(type), datasize);
++
++	flags = __get_default_flags(type) | __get_dest_flags(tsk);
++
++	/* Out of band packets need special care */
++	if (current != tsk->task)
++		flags |= KCOM_PKT_OOB;
+ 
+ 	/* put pkt in kcom_task */
+-	pkt = kcom_pkt_create(datasize, type, PKT_NEW_MSG, data);
+-	if (!pkt) {
+-		OMBUG("Can't create a packet!\n");
+-		return -ENOMEM;
++	ret = kcom_pkt_create(&pkt, datasize, type, flags | KCOM_PKT_NEW_MSG
++			     ,data, tsk->hpid, tsk->rpid, tsk);
++	if (ret<0) {
++		printk(KERN_ERR "[oM] Can't create packet\n");
++		return ret;
+ 	}
+ 
+-	if (!resp)
+-		pkt->resp=data;
+-	else
+-		pkt->resp=resp;
+-
+-	pkt->hpid=tsk->hpid;
+-	pkt->rpid=tsk->rpid;
+-	pkt->addr=addr; // used by vma_pages
++	pkt->addr = addr; // used by vma_pages
+ 
+-	if (0 != (ret=kcom_add_packet(tsk,pkt))) {
+-	    return ret;
++	if ((ret=kcom_add_packet(tsk,pkt)) < 0) {
++		kcom_pkt_delete(pkt);
++		return ret;
+ 	}
+ 
+ 	return pkt->msgid;
+@@ -1163,13 +1327,14 @@
+  * __kcom_find_or_create_task
+  *
+  * Description:
+- *    This function attempt to find the task for the corresponding address and pid
+- *    if not found, it creates it or return -ENODEV or -ENOMEM in case of problem
++ *   Attempts to find the task for the corresponding address and pid
++ *   if not found, it creates it or return -ENODEV or -ENOMEM in case of problem
+  *
+- *    The task is filled in *tsk
++ *   The task pointer is filled in *tsk
+  **/
+ 
+-int __kcom_find_or_create_task(struct sockaddr_in *saddr, struct kcom_task **tsk, pid_t pid)
++int __kcom_find_or_create_task(const struct sockaddr_in *const saddr
++			      ,struct kcom_task **tsk, pid_t pid)
+ {
+ 	struct kcom_node *node;
+ 
+@@ -1197,35 +1362,6 @@
+ }
+ 
+ /**
+- * kcom_send
+- *
+- * Description:
+- *    Tell this function what type of pkt, the data and where to send it and
+- *    it finds the corresponding node, creating a new connection if necessary
+- *    Finds the corresponding tsk, creating it if necessary.
+- * 	creates a packet to send and adds it to the task's outbound list.
+- *    No acknowledgement or reply is expected.
+- **/
+-int kcom_send(int type, int datasize, char *data, unsigned long addr, struct sockaddr_in *saddr)
+-{
+-
+-	struct kcom_task *tsk;
+-	unsigned int msgid;
+-	int ret;
+-
+-	OMDEBUG_PROTOCOL(1, "protocol: send packet (type=0x%x datasize=%d)\n"
+-			,(unsigned)type, datasize);
+-
+-	ret = __kcom_find_or_create_task(saddr, &tsk, current->pid);
+-	if (0!=ret)
+-		return ret;
+-
+-	msgid=kcom_task_send(tsk, type, datasize, data, NULL, addr);
+-
+-	return 0;
+-}
+-
+-/**
+  * __kcom_send_answer
+  *
+  * Description
+@@ -1235,54 +1371,48 @@
+  **/
+ 
+ int __kcom_send_answer(task_t *p, const struct kcom_pkt *const recv_pkt
+-		      ,int flags_type, int len, char *buf) {
++		      ,unsigned int flags, int len, char *buf) {
+ 
+-	int mig_flag;
+-	int syscall_flag;
+ 	int node_flag;
+ 	struct kcom_pkt *send_pkt;
+ 	struct kcom_task *send_tsk;
++	int err;
++	int oob_flag = 0;
+ 
+-	OMDEBUG_PROTOCOL(2, "protocol: send answering packet (len=%d)\n"
+-			, len);
++	OMDEBUG_PROTOCOL(2, "protocol: send answering packet (len=%d)\n", len);
+ 
+ 	if(!p) {
+ 	    	OMBUG("Null task!\n");
+ 	    	return -ENODEV;
+ 	}
+ 
+-	if(len && !buf) {
+-		OMBUG("Null data, but not 0 len...\n");
+-		return -EFAULT;
+-	}
+-
+-	mig_flag=recv_pkt->type & MIG_MASK;
+-	syscall_flag=recv_pkt->type & SYSCALL_MASK;
+-
+ 	send_tsk=kcom_task_find(p->pid);
+ 
+ 	if (!send_tsk) {
+-	    OMBUG("Can't locate task for %d\n", p->pid);
+-	    return -ENODEV;
++		OMBUG("Can't locate task for %d\n", p->pid);
++		return -ENODEV;
+ 	}
+ 
+-	if (task_test_dflags(p, DREMOTE))
+-		node_flag = REM_FLG;
+-	else
+-		node_flag = DEP_FLG;
++	oob_flag = KCOM_PKT_OOB&recv_pkt->flags;
+ 
+-	send_pkt=kcom_pkt_create(len, mig_flag | syscall_flag | node_flag | flags_type
+-			        , flags_type, buf);
++	node_flag = __get_dest_flags(send_tsk);
+ 
++	err=kcom_pkt_create(&send_pkt, len, recv_pkt->type, node_flag | flags | oob_flag
++			   ,buf, recv_pkt->hpid, recv_pkt->rpid, send_tsk);
+ 	if (!send_pkt) {
+-	    OMBUG("Can't create packet\n");
+-	    return -ENODEV;
++		printk(KERN_ERR"Can't create packet\n");
++		return err;
+ 	}
+ 
++	/* On early packets hpid/rpid are not set correctly, so answer
++	 * can have corrupted [rh]pid */
++	if (!send_pkt->rpid)
++		send_pkt->rpid = send_tsk->rpid;
++
++	if (!send_pkt->hpid)
++		send_pkt->hpid = send_tsk->hpid;
++
+ 	send_pkt->msgid=recv_pkt->msgid;
+-	send_pkt->hpid=send_tsk->hpid;
+-	send_pkt->rpid=send_tsk->rpid;
+-	send_pkt->resp=recv_pkt->resp;
+ 
+ 	return kcom_add_packet(send_tsk, send_pkt);
+ 
+@@ -1294,10 +1424,10 @@
+  *    Send an ack to the other node.  This is the matching function for kcom_send_with_ack.
+  *    An ack is the acknowledgement that the kcom pkt was received correctly.
+  **/
+-int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt)
++int kcom_send_nack(task_t *p, const struct kcom_pkt * const recv_pkt)
+ {
+ 	OMDEBUG_PROTOCOL(1, "protocol: sending NACK packet\n");
+-	return __kcom_send_answer(p, recv_pkt, PKT_NACK, 0, NULL);
++	return __kcom_send_answer(p, recv_pkt, KCOM_NACK_FLAGS, 0, NULL);
+ }
+ EXPORT_SYMBOL(kcom_send_nack);
+ 
+@@ -1309,14 +1439,29 @@
+  *    Send an ack to the other node.  This is the matching function for kcom_send_with_ack.
+  *    An ack is the acknowledgement that the kcom pkt was received correctly.
+  **/
+-int kcom_send_ack(task_t *p, struct kcom_pkt *recv_pkt)
++int kcom_send_ack(task_t *p, const struct kcom_pkt * const recv_pkt)
+ {
+ 	OMDEBUG_PROTOCOL(1, "protocol: sending ACK packet\n");
+-	return __kcom_send_answer(p, recv_pkt, PKT_ACK, 0, NULL);
++	return __kcom_send_answer(p, recv_pkt, KCOM_ACK_FLAGS, 0, NULL);
+ }
+ EXPORT_SYMBOL(kcom_send_ack);
+ 
+ /**
++ * kcom_send_ack
++ *
++ * Description:
++ *    Send an ack to the other node.  This is the matching function for kcom_send_with_ack.
++ *    An ack is the acknowledgement that the kcom pkt was received correctly.
++ **/
++int kcom_send_ack_progress(task_t *p, const struct kcom_pkt * const recv_pkt)
++{
++	OMDEBUG_PROTOCOL(1, "protocol: sending ACK packet\n");
++	return __kcom_send_answer(p, recv_pkt, KCOM_ACK_PROGRESS_FLAGS, 0, NULL);
++}
++EXPORT_SYMBOL(kcom_send_ack_progress);
++
++
++/**
+  * kcom_send_resp
+  *
+  * Description:
+@@ -1324,195 +1469,411 @@
+  *    A response is both the acknowledgement that the kcom pkt was received correctly (or not) and
+  *    the expected response data.
+  **/
+-int kcom_send_resp(task_t *p, int len, char *buf, struct kcom_pkt *recv_pkt)
++int kcom_send_resp(task_t *p, int len, char *buf, const struct kcom_pkt * const recv_pkt)
+ {
+ 	OMDEBUG_PROTOCOL(1, "protocol: send response (len=%d)\n", len);
+-	return __kcom_send_answer(p, recv_pkt, PKT_ACK, len, buf);
++	return __kcom_send_answer(p, recv_pkt, KCOM_RESPONSE_FLAGS, len, buf);
+ }
+ EXPORT_SYMBOL(kcom_send_resp);
+ 
++
+ /**
+- * wait_for_ack
+- *
+- * Description:
+- *    This actually checks the task's incoming pkt list for the matching msgid.
+- *    If the matching pkt is found, it is removed from the list and the function
+- *    returns success, else returns -1 if nothing, and -2 if NACK.
++ * __kcom_wait_msg- wait for the next message comming on the task list
++ * this function does not trigger timeout only wait for inband packet
+  **/
+-int kcomd_wait_for_ack(struct kcom_task *task, unsigned int msgid)
++int __kcom_wait_msg(struct kcom_task* tsk, struct kcom_pkt **answerpkt)
+ {
+-	struct kcom_pkt *pkt, *pkt_next;
+-	int ret = -1;
++	int ret;
+ 
++	if (!tsk)
++		return -ENODEV;
+ 
+-	if (!task || list_empty(&task->in_packs))  {
+-		return -1;
++retry_wait:
++	read_lock(&tsk->in_packs_lock);
++	if (!list_empty(&tsk->in_packs)){
++		*answerpkt = list_entry(tsk->in_packs.next, struct kcom_pkt, list);
++		ret = 1;
++		goto return_value_unlock;
+ 	}
++	read_unlock(&tsk->in_packs_lock);
+ 
+- 	write_lock(&task->in_packs_lock);
+-
+-	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
++	set_current_state(TASK_INTERRUPTIBLE);
++	schedule();
++	set_current_state(TASK_INTERRUPTIBLE);
+ 
+-		if ((msgid==pkt->msgid)) {
++	spin_lock(&current->sighand->siglock);
++	if (signal_pending(current))
++	{
++		spin_unlock(&current->sighand->siglock);
++		return -EAGAIN;
++	}
++	spin_unlock(&current->sighand->siglock);
+ 
+-			int type = (pkt->type & MSG_MASK);
++	goto retry_wait;
+ 
++return_value_unlock:
++	read_unlock(&tsk->in_packs_lock);
++	return ret;
+ 
+-			/*
+-			 * TODO, this is not really clean, when a response
+-			 * to the MIG_INIT is done, the rpid is set here ...
+-			 * should be some place else -- Florian
+-			 */
+-			if (MIG_INIT == (pkt->type & MIG_MASK)) {
+-				task->rpid = pkt->rpid;
+-				OMDEBUG_PROTOCOL(2, "Setting rpid to %d for pid %d\n"
+-					        , task->rpid, task->hpid);
+-			}
++}
+ 
+-			kcom_pkt_delete(pkt);
++/**
++ * __kcom_wait_any_msg - wait for the next message comming on the task list
++ **/
+ 
+-			if (PKT_ACK == type) {
+-				ret = 0;
+-				goto return_value_unlock;
+-			} else if (PKT_NACK == type) {
+-				ret = -2;
+-				goto return_value_unlock;
+-			} else continue;
++int __kcom_wait_for_any_msg(struct kcom_task* tsk, struct kcom_pkt **answerpkt)
++{
++	int ret;
++	int nbretries = 0;
+ 
++	rwlock_t *lock;
++	struct list_head *watchedList;
+ 
+-		}
++	if (current == tsk->task) {
++	    /* inband packet waiting */
++	    lock = &tsk->in_packs_lock;
++	    watchedList = &tsk->in_packs;
++	} else {
++	    /* outband packet waiting */
++	    lock = &tsk->oob_packs_lock;
++	    watchedList = &tsk->oob_packs;
++	}
+ 
++retry_wait:
++	read_lock(lock);
++	if (!list_empty(watchedList)){
++		*answerpkt = list_entry(watchedList->next, struct kcom_pkt, list);
++		ret = 0;
++		goto return_value_unlock;
+ 	}
++	read_unlock(lock);
+ 
+-return_value_unlock:
++	set_current_state(TASK_INTERRUPTIBLE);
++	schedule_timeout(HZ);
++	set_current_state(TASK_INTERRUPTIBLE);
++
++	if (60>++nbretries)
++		goto retry_wait;
++
++	ret = -ETIMEDOUT;
++	printk(KERN_ERR "[oM] pid[%d] wait for message timeout\n", tsk->task->pid);
++
++	#ifdef CONFIG_OPENMOSIX
++	dump_stack();
++	#endif
+ 
+- 	write_unlock(&task->in_packs_lock);
+ 	return ret;
+ 
+-}
++return_value_unlock:
++	read_unlock(lock);
++	return ret;
+ 
++}
+ /**
+- * wait_for_response
++ * __kcom_wait_next_msg - wait for the next message comming with the given id
+  *
+- * Description:
+- *    This actually checks the task's incoming pkt list for the matching msgid.
+- *    If the matching pkt is found, it is removed from the list and the function
+- *    returns success, else returns failure.
++ * Can timeout ...
+  **/
+-int wait_for_response(struct kcom_task *task, unsigned int msgid)
++int __kcom_wait_for_next_msg(struct kcom_task* tsk, int msgid, struct kcom_pkt **answerpkt)
+ {
+-	struct kcom_pkt *pkt, *pkt_next;
+-	int ret = -1;
+-
+-	/* Sanity check */
+-	if (!task || list_empty(&task->in_packs)) {
+-	    return -1;
++	struct kcom_pkt *pkt;
++	int ret = 0;
++	int nbretries = 0;
++	rwlock_t *lock;
++	struct list_head *watchedList;
++	*answerpkt = NULL;
++
++	if (current == tsk->task) {
++	    /* inband packet waiting */
++	    lock = &tsk->in_packs_lock;
++	    watchedList = &tsk->in_packs;
++	} else {
++	    /* outband packet waiting */
++	    lock = &tsk->oob_packs_lock;
++	    watchedList = &tsk->oob_packs;
+ 	}
+ 
++retry_wait:
++	read_lock(lock);
++	list_for_each_entry(pkt, watchedList, list) {
+ 
+- 	write_lock(&task->in_packs_lock);
+-	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+-		/* FIXME:  check for resp or ack, too. */
+-		if (msgid == pkt->msgid) {
+-			ret = pkt->len;
+-			kcom_pkt_delete(pkt);
++		if ((msgid==pkt->msgid)) {
++			*answerpkt = pkt;
++			ret = 0;
+ 			goto return_value_unlock;
+ 		}
+ 	}
++	read_unlock(lock);
++
++	set_current_state(TASK_INTERRUPTIBLE);
++	schedule_timeout(HZ);
++	set_current_state(TASK_INTERRUPTIBLE);
++
++	if (60>++nbretries)
++		goto retry_wait;
++
++	ret = -ETIMEDOUT;
++	printk(KERN_ERR "[oM] pid[%d] wait for next message timeout\n", tsk->task->pid);
++
++	#ifdef CONFIG_OPENMOSIX_DEBUG
++	dump_stack();
++	#endif /*CONFIG_OPENMOSIX_DEBUG*/
++
++	return ret;
+ 
+ return_value_unlock:
+- 	write_unlock(&task->in_packs_lock);
++	read_unlock(lock);
+ 	return ret;
+ 
+ }
+ 
+ 
+ /**
+- * kcom_send_with_ack
+- *
+- * Description:
+- *    Same as kcom_send except this function waits until an (n)ack is received.
++ * __kcom_wait_for_ack - wait for an 'ACK' or 'NACK' on the misgid
++ * Returns 0 if ok, -ENACKED if NACK and something negative if
++ * error
+  **/
+-int kcom_send_with_ack(int type, int datasize, char *data, unsigned long addr, struct sockaddr_in *saddr)
++
++int __kcom_wait_for_ack(struct kcom_task *tsk, int msgid)
+ {
+-	struct kcom_task *tsk = NULL;
+-	unsigned int msgid;
+-	int ret;
+-	int ack;
++	struct kcom_pkt* pkt = NULL;
++	int err;
++	unsigned int msgflags;
+ 
+-	OMDEBUG_PROTOCOL(2, "sending packet with ack (type=0x%x, datasize=%d)\n"
+-			,(unsigned)type, datasize);
++get_packet:
+ 
+-	ret = __kcom_find_or_create_task(saddr, &tsk, current->pid);
+-	if (0!=ret)
+-		return ret;
++	err = __kcom_wait_for_next_msg(tsk, msgid, &pkt);
+ 
+-	// FIXME:  what if tsk is deleted between kcom_task_send and wait_for_ack ?
+-	msgid = kcom_task_send(tsk, type, datasize, data, NULL, addr);
++	if (err < 0 || !pkt)
++		return err;
+ 
+-	if (kcomd_task)
+-		send_sig(SIGHUP, kcomd_task, 0);
+-	else {
+-		OMBUG("Unable to find kcomd daemon.\n");
+-		return -ENODEV;
++	msgflags = __kcom_pkt_msg_flags(pkt);
++
++	switch (msgflags) {
++		case KCOM_PKT_ACK :
++			kcom_pkt_delete(pkt);
++			return 0;
++		case KCOM_PKT_NACK :
++			kcom_pkt_delete(pkt);
++			return -ENACKED;
++		default:
++			printk(KERN_ERR"[oM] receieved unexpected packet ... dropping\n");
++			kcom_pkt_delete(pkt);
++			break;
+ 	}
+ 
+-	set_current_state(TASK_INTERRUPTIBLE);
++	goto get_packet;
++}
+ 
+-	while (-1 == (ack =  kcomd_wait_for_ack(tsk, msgid))) {
+-		schedule();
+-		set_current_state(TASK_INTERRUPTIBLE);
++/**
++ * __kcom_wait_for_answer - wait for any RESP packet or NACK check for answer size
++ **/
++
++int __kcom_wait_for_answer(struct kcom_task *tsk, int type, int msgid, struct kcom_pkt** answer)
++{
++	struct kcom_pkt* pkt = NULL;
++	int err;
++	unsigned int msgflags;
++	int size;
++
++	if (answer)
++		*answer = NULL;
++get_packet:
++
++	err = __kcom_wait_for_next_msg(tsk, msgid, &pkt);
++
++	if (err < 0 || !pkt)
++		return err;
++
++	msgflags = __kcom_pkt_msg_flags(pkt);
++
++	switch (msgflags) {
++		case KCOM_PKT_RESP :
++			size = __get_answer_size(type);
++			if (KCOM_NO_SIZE_CHECK != size && size != pkt->data_len) {
++				kcom_pkt_delete(pkt);
++				return -EINVAL;
++			}
++			if (answer) {
++				*answer = pkt;
++			} else {
++				OMBUG( "answer received, but no place to store it ...\n");
++			}
++			return 0;
++
++		case KCOM_PKT_NACK :
++			kcom_pkt_delete(pkt);
++			return -ENACKED;
++
++		default:
++			printk(KERN_ERR"[oM] receieved unexpected packet ... dropping\n");
++			kcom_pkt_delete(pkt);
++			break;
+ 	}
+ 
+-	set_current_state(TASK_RUNNING);
++	goto get_packet;
++	/* Not reached */
++	return -EFAULT;
++}
++
++int __kcom_wait_for_answer_cplx(struct kcom_task* tsk, int type, int msgid, struct kcom_pkt** answer)
++{
++	struct kcom_pkt* pkt = NULL;
++	int err;
++	unsigned int msgflags;
++	int size;
++
++	if (answer)
++		*answer = NULL;
++
++	/* Wait for a ACK_PROGRESS or ACK/NACK to continue or terminate : */
++get_packet:
++
++	err = __kcom_wait_for_next_msg(tsk, msgid, &pkt);
++
++	if (err < 0 || !pkt)
++		return err;
++
++	msgflags = __kcom_pkt_msg_flags(pkt);
+ 
+-	if (ack == -2) {
+-	    OMBUG("Got NACK !! \n");
+-	    return -1;
++	switch (msgflags) {
++		case KCOM_PKT_ACK_PROGRESS:
++			kcom_pkt_delete(pkt);
++			goto get_any_packet;
++			break;
++
++		case KCOM_PKT_ACK:
++			kcom_pkt_delete(pkt);
++			return 0;
++
++		case KCOM_PKT_NACK:
++			kcom_pkt_delete(pkt);
++			return -ENACKED;
++
++		default:
++			printk(KERN_ERR"[oM] receieved unexpected packet ... dropping\n");
++			kcom_pkt_delete(pkt);
++			break;
+ 	}
+-	return 0;
++	goto get_packet;
++
++	/* We got a KCOM_PKT_ACK_PROGRESS ..., we can now activate the complex command */
++get_any_packet:
++
++	err = __kcom_wait_for_any_msg(tsk, &pkt);
+ 
++	if (err < 0 || !pkt)
++		return err;
++
++	msgflags = __kcom_pkt_msg_flags(pkt);
++
++	if (pkt->msgid == msgid) {
++		/* Message is related to the initial communication */
++		switch (msgflags) {
++			case KCOM_PKT_ACK:
++				kcom_pkt_delete(pkt);
++				return 0;
++
++			case KCOM_PKT_RESP:
++				size = __get_answer_size(type);
++				if (KCOM_NO_SIZE_CHECK != size && size != pkt->data_len) {
++					kcom_pkt_delete(pkt);
++					return -EINVAL;
++				}
++				if (answer) {
++					*answer = pkt;
++				} else {
++					OMBUG( "answer received, but no place to store it ...\n");
++				}
++				return 0;
++
++			case KCOM_PKT_NACK:
++				kcom_pkt_delete(pkt);
++				return -ENACKED;
++
++			default:
++				printk(KERN_ERR"[oM] receieved unexpected packet ... dropping\n");
++				kcom_pkt_delete(pkt);
++				break;
++		}
++	} else {
++		/* Package is not linked to this id, new command ? */
++		if (KCOM_PKT_NEW_MSG == msgflags) {
++
++			if (__is_kcom_l2_pkt_type(pkt->type))
++				kcomd_do_l2_state_machine(tsk, pkt);
++			else
++				printk(KERN_ERR"[oM] received unexpected new message ... dropping\n");
++
++			kcom_pkt_delete(pkt);
++		} else {
++			printk(KERN_ERR"[oM] receieved unexpected packet ... dropping\n");
++			kcom_pkt_delete(pkt);
++		}
++	}
++	goto get_any_packet;
++
++	/* Not reached */
++	return -EFAULT;
+ }
+ 
++
+ /**
+- * kcom_send_with_response
++ * kcom_send_command
+  *
+  * Description:
+- *    Same as kcom_send except this function waits until an response is received.
++ *    Send the command and execute the packet processing loop according to the
++ *    command flags. return 0 in case of success, something negative if error
++ *    If the packet involves an answer, the ack goes to to the 'answer' pointer
+  **/
+-int kcom_send_with_response(int type, int datasize, char *data, unsigned long addr, char *resp, struct sockaddr_in *saddr)
++int __kcom_send_command(struct kcom_task* tsk, int type, int datasize
++			, const char * const data, unsigned long addr
++		        ,const struct sockaddr_in * const saddr
++		        , struct kcom_pkt ** answer)
+ {
+-	struct kcom_task *tsk;
+ 	unsigned int msgid;
+-	int i=-1;
+-	int ret;
++	unsigned int cmdflags;
+ 
+-	OMDEBUG_PROTOCOL(1, "Sending packet with response (type=0x%x, datasize=%d)\n"
+-			,(unsigned)type, datasize);
++	OMDEBUG_PROTOCOL(1, "Sending packet with response (type='%s', datasize=%d)\n"
++			, __get_packet_name(type), datasize);
+ 
+-	ret = __kcom_find_or_create_task(saddr, &tsk, current->pid);
+-	if (0!=ret)
+-		return ret;
++	msgid = kcom_task_send(tsk, type, datasize, data, addr);
+ 
+-	msgid=kcom_task_send(tsk, type, datasize, data, resp, addr);
++	if (msgid<0)
++		return msgid;
+ 
+-	if (kcomd_task)
+-		send_sig(SIGHUP,kcomd_task,0);
+-	else {
+-		OMBUG("Unable to find kcomd daemon.\n");
+-		return -1;
+-	}
++	/* Now we have multiple choices, depending on the command cmds */
+ 
+-	set_current_state(TASK_INTERRUPTIBLE);
+-retry:
+-	i=wait_for_response(tsk, msgid);
+-	if (i < 0) {
+-		set_current_state(TASK_INTERRUPTIBLE); // Not the correct packet. go back to sleep
+-		schedule();
+-		goto retry;
+-	}
++	cmdflags = __get_default_flags(type);
++
++	if (KCOM_ASYNC_SIMPLE == cmdflags)
++		return 0;
++
++	if (KCOM_PKT_CPLX&cmdflags)
++		return __kcom_wait_for_answer_cplx(tsk, type, msgid, answer);
++
++	if (KCOM_PKT_ANSWERED&cmdflags)
++		return __kcom_wait_for_answer(tsk, type, msgid, answer);
++
++	if (KCOM_PKT_SYNC&cmdflags)
++		return __kcom_wait_for_ack(tsk, msgid);
++
++	return -EFAULT;
+ 
+-	return i;
++}
++
++int kcom_send_command(int type, int datasize, const char * const data, unsigned long addr
++		     ,const struct sockaddr_in * const saddr, struct kcom_pkt ** answer)
++{
++	int ret;
++	struct kcom_task *tsk;
++
++	/* Send the command first ... */
++	ret = __kcom_find_or_create_task(saddr, &tsk, current->pid);
++	if (ret<0)
++		return ret;
++
++	return __kcom_send_command(tsk, type, datasize, data, addr, saddr, answer);
+ }
+ 
+ /**
+@@ -1536,7 +1897,11 @@
+ 	node->error_count++;
+ 	node->error_total++;
+ 
+-	if (60 > node->error_count) {
++	#if CONFIG_OPENMOSIX_DEBUG
++	dump_stack();
++	#endif /*CONFIG_OPENMOSIX_DEBUG*/
++
++	if (60 < node->error_count) {
+ 		/*FIXME This should expel all tasks, and delete the node ... should be ...*/
+ 		OMBUG( "FIXME: A node had reached a critical error count level,"
+ 		       "but we don't delete it yet :(\n");
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-12-19 17:00:22.000000000 +0100
++++ linux/hpc/kcomd.c	2006-12-22 21:36:29.000000000 +0100
+@@ -30,8 +30,12 @@
+ #include <hpc/prototype.h>
+ #include <hpc/debug.h>
+ 
+-static int kcomd_done = 0;
+-static int kcomd_module_exit = 0;
++
++
++/*******************************************************************************
++ * Socket handling                                                             *
++ ******************************************************************************/
++
+ 
+ /**
+  * socket_listen - Creates the network socket and maps it to a file descriptor
+@@ -90,6 +94,9 @@
+ 	return socket_listen((struct sockaddr *) &saddr6, res);
+ }
+ 
++/*******************************************************************************
++ * Connection handling                                                         *
++ ******************************************************************************/
+ 
+ /**
+  * accept_connection
+@@ -154,6 +161,10 @@
+ 	return -1;
+ }
+ 
++/*******************************************************************************
++ * Stream Handling handling                                                    *
++ ******************************************************************************/
++
+ /**
+  * data_send
+  *
+@@ -184,8 +195,8 @@
+ 	    return -EFAULT;
+ 	}
+ 
+-	OMDEBUG_KCOMD(3, "KCOMD: send packet type=0x%x len=%d\n"
+-			,(unsigned)pkt->type, pkt->len);
++	OMDEBUG_KCOMD(3, "KCOMD: send packet type=%s len=%d\n"
++			,__get_packet_name(pkt->type), pkt->data_len);
+ 
+ 	OMDEBUG_KCOMD_DO(4, om_dump_packet(pkt));
+ 
+@@ -197,13 +208,13 @@
+ 	packet[0].iov_base = pkt;
+ 	packet[0].iov_len = KCOM_PKT_NET_SIZE;
+ 
+-	if (pkt->len) {
++	if (pkt->data_len) {
+ 		if(!pkt->data) {
+ 			OMBUG("Paket has data, but no data pointer");
+ 			return -EFAULT;
+ 		}
+ 		packet[1].iov_base = pkt->data;
+-		packet[1].iov_len = pkt->len;
++		packet[1].iov_len = pkt->data_len;
+ 		nvec++;
+ 
+ 	}
+@@ -222,13 +233,13 @@
+ 
+ 			first_loop = 0;
+ 
+-			if (60000 < ++nb_retries)
++			if (60*HZ < ++nb_retries)
+ 				return -ETIMEDOUT;
+ 
+-			if (0==nb_retries%1000)
++			if (0==nb_retries%HZ)
+ 				printk(KERN_WARNING"Can not send packet for now, retrying\n");
+ 
+-			schedule_timeout(HZ/1000);
++			schedule_timeout(1);
+ 			continue;
+ 		}
+ 		first_loop = 0;
+@@ -270,6 +281,7 @@
+ 
+ }
+ 
++
+ /**
+  * data_exception
+  *
+@@ -291,187 +303,517 @@
+ 	return 0;
+ }
+ 
++/*******************************************************************************
++ * L1 Protocol Automat definition :                                            *
++ ******************************************************************************/
++
++/* FIXME/
++ * Out of band packets shall be ASYNC since the ACK/ANSWER will not wake up the
++ * right task ... (the task sending the packet is not the one issuing the command
++ */
++
++struct kcom_pkt_l1_handler kcomd_l1_handlers[KCOM_L1_CMD_INDEX(KCOM_L1_CMD_MAX)] = {
++	[0] = { .handle_pkt = mig_do_l1_error },
++
++        /* Initiate a process migration */
++	[KCOM_L1_CMD_INDEX(KCOM_L1_MIG_INIT)] = {
++		.handle_pkt = mig_do_receive_init,
++    	        .cmd_flags = KCOM_TSK_ANSWERED,
++    	        .answer_size = sizeof(pid_t),
++    	        .name = "Migration Init" },
++
++        /* Ask the remote to come home */
++	[KCOM_L1_CMD_INDEX(KCOM_L1_MIG_COME_HOME)] = {
++		.handle_pkt = mig_do_come_home,
++		.cmd_flags = KCOM_SYNC,
++		.name = "Come Home Request"},
++
++        /* Send a signal to the remote */
++	[KCOM_L1_CMD_INDEX(KCOM_L1_DEP_SIGNAL)] = {
++		.handle_pkt = remote_do_signal,
++		.cmd_flags = KCOM_ASYNC_SIMPLE,
++                .recv_size = sizeof(struct omp_signal),
++		.name = "Signal"},
++
++};
++EXPORT_SYMBOL_GPL(kcomd_l1_handlers);
++
++
++
+ /**
+- * append_in_packs
+- *
+- * Description:
+- *    Packets are either new pkts, or responses or (n)acks to new pkts.
+- *    If a pkt isn't new, a function is waiting on it (wait_for_ack/response),
+- *    so we can just add this pkt to the task in_packs list.
++ * __find_task_for_packet - Finds the kcom_task for the given packet
+  **/
+-int append_in_packs(struct kcom_pkt *recv_kcom_pkt)
+-{
+-	struct kcom_task *tsk;
+-	task_t *sltsk;
+-	pid_t pid = 0;
+-	char *typename[] = { "", "home", "remote"};
+-	int type = 1;
+ 
++struct kcom_task * __find_task_for_packet(const struct kcom_pkt* const pkt
++					 ,struct kcom_node* node
++				         ,pid_t *dpid)
++{
++	struct kcom_task* tsk, *tskret=NULL;
++	int offset;
++	pid_t pid;
+ 
+-	if ((recv_kcom_pkt->type & NODE_MASK) == DEP_FLG) {
++	if (KCOM_PKT_DEP_FLG == __kcom_pkt_node_flags(pkt)) {
+ 		/* command from dep to remote? */
+-		pid = recv_kcom_pkt->rpid;
+-		type = 2;
++		pid = pkt->rpid;
++		offset = (int) &(((struct kcom_task*) 0)->rpid);
+ 	} else {
+-		pid = recv_kcom_pkt->hpid;
+-		type = 1;
++		pid = pkt->hpid;
++		offset = (int) &(((struct kcom_task*) 0)->hpid);
+ 	}
+ 
+-	tsk = __kcom_task_find(pid, type );
++	read_lock(&node->tasks_lock);
+ 
+-	if (!tsk) {
+-	    OMBUG("unable to find %s pid %u\n", typename[type],  recv_kcom_pkt->hpid);
+-	    return -ENODEV;
++	list_for_each_entry(tsk, &node->tasks, list) {
++		if (pid == *((pid_t*)(((char*)tsk)+offset))) {
++			tskret = tsk;
++			goto return_unlock;
++		}
+ 	}
+ 
+-	/* append the packet */
++return_unlock:
++	read_unlock(&node->tasks_lock);
+ 
+-	write_lock(&tsk->in_packs_lock);
+-	list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
+-	write_unlock(&tsk->in_packs_lock);
++	if (dpid)
++		*dpid = pid;
++	return tskret;
++}
+ 
+-	/* Find the real task */
++/**
++ * update_task_msgid
++ **/
+ 
+-	read_lock(&tasklist_lock);
+-	sltsk = find_task_by_pid(pid);
+-	read_unlock(&tasklist_lock);
++void update_task_msg_id(const struct kcom_pkt* const pkt, struct kcom_node* node)
++{
++	struct kcom_task *tsk = NULL;
+ 
+-	/* Waking up the task */
++	tsk = __find_task_for_packet(pkt, node, NULL);
+ 
+-	if (sltsk) {
+-	    wake_up_process(sltsk);
+-	} else {
+-	    OMBUG("Unable to find %s pid %u to wake up\n", typename[type], recv_kcom_pkt->hpid);
+-	    return -ENODEV;
+-	}
+-	return 0;
++	if (!tsk)
++		return;
++
++	spin_lock(&tsk->msgid_lock);
++
++	if(pkt->msgid > tsk->msgid)
++		tsk->msgid = pkt->msgid;
++
++	spin_unlock(&tsk->msgid_lock);
+ }
+ 
+ /**
++ * pkt_read
+  *
+- * __pkt_read
+- *
+- * Description
+- *    Reads the packet header and, if exists, data,
+- *    Does the poorman job of receiving data itself,
+- *    if the node didn't hold a valid sock, __pkt_read
+- *    creates a new one
++ * Description:
++ *      and put in appropriate task's
++ *    in_pack list.
++ *    All but 3 pkts an be handled by the task itself.
++ *    MIG_INIT creates a new process and task
++ *    MIG_GO/COME_HOME - migration command.
+  **/
+-
+-int __pkt_read(struct kcom_node *node, struct kcom_pkt **recv_kcom_pkt)
++int pkt_read(struct kcom_node *node)
+ {
+-	int len;
+-	int i;
+-
+-	/* In case of error, sockets may be deleted,
+-	 * here we try to recover from this situation
+-	 */
+-	if (!node->sock)
+-		__create_connection(&node->addr, node);
+-
+-	if (!node->sock)
+-		return -ENODEV;
++	struct kcom_pkt *pkt;
++	int i = 0;
+ 
+-	OMDEBUG_PROTOCOL(2, "KCOMD: Receiving packet \n");
+-	// read in hdr
+-	i = pkt_hdr_read(node, recv_kcom_pkt);
++	i = __pkt_read( node, &pkt);
+ 
+ 	if (i<0)
+ 		return i;
+ 
+-	if(NULL == *recv_kcom_pkt)
+-		return -ENOENT;
++	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(pkt));
++
++	if (KCOM_PKT_NEW_MSG == __kcom_pkt_msg_flags(pkt)) {
++		struct kcom_task* tsk;
++		struct task_struct* p;
++		int pid;
++		int size;
+ 
+-	// read in any data
+-        (*recv_kcom_pkt)->data = NULL;
+-	len = (*recv_kcom_pkt)->len;
+-	if (len > 0) {
+-		if (((*recv_kcom_pkt)->type & MSG_MASK) == PKT_NEW_MSG) {
++		update_task_msg_id(pkt, node);
+ 
+-			(*recv_kcom_pkt)->data = kzalloc(len, GFP_KERNEL);
++		/* Handle the automatic ack for new messages */
+ 
+-			i = pkt_data_read(node, *recv_kcom_pkt, len, (*recv_kcom_pkt)->data);
++		if (!(KCOM_PKT_SYNC&__kcom_pkt_cmd_flags(pkt)))
++			goto no_ack;
++
++		if (KCOM_PKT_TSK_ACKED&__kcom_pkt_cmd_flags(pkt)
++		   && !(KCOM_PKT_CPLX&__kcom_pkt_cmd_flags(pkt)))
++			goto no_ack;
++
++		tsk = __find_task_for_packet(pkt, node, &pid);
++
++		if(!tsk) {
++			printk(KERN_ERR"[oM] Can't find task[%d] for packet...dropping\n", pid);
++			/* FIXME Should NACK here */
++			kcom_pkt_delete(pkt);
++			return -ENODEV;
++		}
++
++		p = tsk->task;
++
++		size = __get_receive_size(pkt->type);
++
++		if(!p) {
++			printk(KERN_ERR"[oM] Unable to find task[%d], dropping related packet\n", pid);
++			kcom_pkt_delete(pkt);
++			return -ENODEV;
++		}
++
++		if (KCOM_NO_SIZE_CHECK != size && size != pkt->data_len) {
++			printk(KERN_ERR"[oM] received corrupted packet \n");
++			kcom_send_nack(p, pkt);
++			goto no_ack;
++		}
++
++		if (KCOM_PKT_CPLX&__kcom_pkt_cmd_flags(pkt)) {
++			kcom_send_ack_progress(p, pkt);
+ 		} else {
+-			i = pkt_data_read(node, *recv_kcom_pkt, len, (*recv_kcom_pkt)->resp);
++			kcom_send_ack(p, pkt);
+ 		}
++	}
+ 
+-		if (i < len) {
+-			OMBUG("ERROR: incomplete data pkt\n");
+-			goto error_delete_packet;
++no_ack:
++	/* Check if we must send the ack right away */
++
++	if (__is_kcom_l1_pkt(pkt) && __kcom_pkt_msg_flags(pkt) == KCOM_PKT_NEW_MSG) {
++		int err;
++		OMDEBUG_PROTOCOL(2, "KCOMD L1 packet '%s' received\n",
++				__get_packet_name(pkt->type));
++
++		err = kcomd_l1_handlers[KCOM_L1_CMD_INDEX(pkt->type)].handle_pkt(node, pkt);
++
++		if (err < 0 && KCOM_PKT_SYNC&__kcom_pkt_cmd_flags(pkt)) {
++			printk(KERN_ERR "[oM] kcomd L1: command %s failed\n"
++			      , __get_packet_name(pkt->type));
+ 		}
++
++		kcom_pkt_delete(pkt);
++		return 0;
++	} else {
++		append_in_packs(pkt, node);
+ 	}
+-	INIT_LIST_HEAD(&((*recv_kcom_pkt)->list));
+-	return 0;
+ 
+-error_delete_packet:
+-	/* Since the list may contain junk, we must init it */
+-	INIT_LIST_HEAD(&((*recv_kcom_pkt)->list));
+-	kcom_pkt_delete(*recv_kcom_pkt);
+-	*recv_kcom_pkt = NULL;
++	return 0;
+ 
+-	return -ENOENT;
+ }
+ 
++/*******************************************************************************
++ * L1 layer to L2 interface                                                    *
++ ******************************************************************************/
++
++
+ /**
+- * pkt_read
++ * append_in_packs
+  *
+  * Description:
+- *      and put in appropriate task's
+- *    in_pack list.
+- *    All but 3 pkts an be handled by the task itself.
+- *    MIG_INIT creates a new process and task
+- *    MIG_GO/COME_HOME - migration command.
++ *    Packets are either new pkts, or responses or (n)acks to new pkts.
++ *    If a pkt isn't new, a function is waiting on it (wait_for_ack/response),
++ *    so we can just add this pkt to the task in_packs list.
+  **/
+-int pkt_read(struct kcom_node *node)
++int append_in_packs(struct kcom_pkt *pkt, struct kcom_node* node)
+ {
+-	struct kcom_pkt *recv_kcom_pkt;
+-	int i = 0;
++	struct kcom_task *tsk;
++	task_t *sltsk;
++	pid_t pid;
++	rwlock_t *lock;
++	struct list_head *watchedList;
+ 
+-	i = __pkt_read( node, &recv_kcom_pkt);
++	struct kcom_oob_waitqueue *wait;
+ 
+-	if (i<0)
+-		return i;
+ 
+-	OMDEBUG_PROTOCOL_DO(3, om_dump_packet(recv_kcom_pkt));
++	tsk = __find_task_for_packet(pkt, node, &pid);
+ 
++	if (!tsk) {
++		printk(KERN_ERR"[oM] Unable to find task[%u] for packet...dropping\n",  pid);
++		kcom_pkt_delete(pkt);
++		return 0;
++	}
+ 
+-	if ((recv_kcom_pkt->type & MSG_MASK) == PKT_NEW_MSG) {
+-		switch (recv_kcom_pkt->type & MIG_MASK) {
+-			case MIG_INIT:
+-				OMDEBUG_PROTOCOL(2, "KCOMD: it's a MIG_INIT packet ... \n");
+-				mig_do_receive_init(node, recv_kcom_pkt);
+-				kcom_pkt_delete(recv_kcom_pkt);
+-				break;
+-			case MIG_GO_HOME:
+-				OMDEBUG_PROTOCOL(2, "KCOMD: it's a MIG_GO_HOME packet ... \n");
+-				mig_do_receive_home(node, recv_kcom_pkt);
+-				kcom_pkt_delete(recv_kcom_pkt);
+-				break;
+-			case MIG_COME_HOME:
+-			{
+-				task_t *sltsk;
+-				OMDEBUG_PROTOCOL(2, "KCOMD: it's a MIG_COME_HOME packet ... \n");
+-				sltsk = find_task_by_pid(recv_kcom_pkt->rpid);
+-				if (!sltsk) {
+- 				    OMBUG("openMosix: Unable to find the task %d\n", recv_kcom_pkt->rpid);
+- 				    kcom_pkt_delete(recv_kcom_pkt);
+- 				    return -ENODEV;
+-				}
+-				task_register_migration(sltsk);
+-				break;
+-			}
+-			default:
+-				append_in_packs(recv_kcom_pkt);
+-				break;
++	if (KCOM_PKT_OOB & pkt->flags) {
++		/* outband packet waiting */
++		lock = &tsk->oob_packs_lock;
++		watchedList = &tsk->oob_packs;
++
++		if (list_empty(&tsk->oob_waitqueue))
++		{
++			printk(KERN_ERR"[oM] [%d] Out of Band packet received, but no listener ... dropping\n", pid);
++			kcom_pkt_delete(pkt);
++			return 0;
+ 		}
+-	} else { /* PKT_ACK and PKT_RESP go straight to in_packs */
+-		append_in_packs(recv_kcom_pkt);
++
++		pid = 0;
++		spin_lock(&tsk->oob_waitqueue_lock);
++		list_for_each_entry(wait, &tsk->oob_waitqueue, list) {
++			if (pkt->msgid != wait->msgid)
++				continue;
++
++			pid = wait->pid;
++			list_del(&wait->list);
++			kfree(wait);
++			break;
++		}
++		spin_unlock(&tsk->oob_waitqueue_lock);
++
++		if (!pid) {
++			printk(KERN_ERR "[oM] received unexpected OOB answer ... dropping\n");
++			kcom_pkt_delete(pkt);
++			return 0;
++		}
++
++	} else {
++	    /* inband packet waiting */
++	    lock = &tsk->in_packs_lock;
++	    watchedList = &tsk->in_packs;
+ 	}
+ 
++	/* append the packet */
++	write_lock(lock);
++	list_add_tail(&pkt->list, watchedList);
++	write_unlock(lock);
++
++	/* Find the real task */
++
++	read_lock(&tasklist_lock);
++	sltsk = find_task_by_pid(pid);
++	read_unlock(&tasklist_lock);
++	/* Waking up the task */
++
++	if (sltsk) {
++	    wake_up_process(sltsk);
++	} else {
++	    OMBUG("Unable to find task [%u] to wake up\n", pid);
++	    return -ENODEV;
++	}
+ 	return 0;
++}
++
++/*******************************************************************************
++ * L2 protocol interface 	 					       *
++ ******************************************************************************/
++
++/*
++ * kcomd_do_l2_state_machine - execute the packet handler after checking
++ * permissions
++ **/
++
++int kcomd_do_l2_state_machine(struct kcom_task* tsk, const struct kcom_pkt* const pkt)
++{
++	int index;
++	int size;
++	int err = 0;
++
++	if(!pkt)
++		return -EFAULT;
++
++	if (!__is_kcom_l2_pkt_type(pkt->type))
++		return -EINVAL;
++
++	index = KCOM_L2_CMD_INDEX(pkt->type);
++
++	if (!kcomd_l2_handlers[index].perms&current->om.dflags) {
++		printk(KERN_ERR "Pid[%d] Received unallowed packet, sending NACK!\n", tsk->task->pid);
++		err = -EPERM;
++		goto error;
++	}
++
++	size = __get_receive_size(pkt->type);
++
++	if (KCOM_NO_SIZE_CHECK != size && size != pkt->data_len) {
++		printk(KERN_ERR "Pid[%d] Received corrupted packet, sending NACK!\n", tsk->task->pid);
++		err = -EINVAL;
++		goto error;
++	}
++
++	return kcomd_l2_handlers[index].handle_pkt(tsk, pkt);
++
++error:
++	kcom_send_nack(tsk->task, pkt);
++	return err;
++
+ 
+ }
+ 
++
++struct kcom_pkt_l2_handler kcomd_l2_handlers[KCOM_L2_CMD_MAX-KCOM_L2_CMD_START]= {
++
++	/************************************/
++	/*        Migration commands        */
++	/************************************/
++
++
++	/* Send the mm struct of a process */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_MM)] = {
++		.handle_pkt = mig_do_receive_mm,
++		.cmd_flags = KCOM_SYNC,
++		.perms = KCOM_PERM_MIGRATION,
++		.recv_size = sizeof(struct omp_mig_mm),
++		.name = "Migration Send MM"},
++
++	/* Send the vma struct of a process */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_VMA)] = {
++		.handle_pkt = mig_do_receive_vma,
++		.cmd_flags = KCOM_SYNC,
++		.perms = KCOM_PERM_MIGRATION,
++		.recv_size = sizeof(struct omp_mig_vma),
++		.name = "Migration Send VMA"},
++
++	/* Send a page of a struct          */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_PAGE)] = {
++		.handle_pkt = mig_do_receive_page,
++		.cmd_flags = KCOM_SYNC,
++		.perms = KCOM_PERM_MIGRATION,
++		.recv_size = PAGE_SIZE,
++		.name = "Migration Send Page"},
++
++	/* Send the floating point struct */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_FP)] = {
++		.handle_pkt = mig_do_receive_fp,
++		.cmd_flags = KCOM_SYNC,
++		.recv_size = sizeof(struct omp_mig_fp),
++		.perms = KCOM_PERM_MIGRATION,
++		.name = "Migration Send FP"},
++
++#if 0
++	/* Send arch specific data          */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_ARCH)] = {
++		.handle_pkt = mig_do_receive_arch,
++		.cmd_flags = KCOM_SYNC,
++		.recv_size =  0,
++		.perms = KCOM_PERM_MIGRATION,
++		.name = "Migration Send Arch"},
++#endif
++
++	/* Send the task struct info        */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_TASK)] = {
++		.handle_pkt = mig_do_receive_proc_context,
++		.cmd_flags = KCOM_TSK_SYNC,
++		.recv_size = sizeof(struct omp_mig_task),
++		.perms = KCOM_PERM_MIGRATION,
++		.name = "Migration Send Task"},
++
++	/************************************/
++	/*       Processing commands        */
++	/************************************/
++
++        /* Tell the deputy that the remote is coming home */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_GO_HOME)] = {
++		.handle_pkt = mig_do_receive_home,
++		.cmd_flags = KCOM_SYNC,
++		.perms = DDEPUTY,
++		.name = "Coming Back Home"},
++
++        /* Tell the deputy that the remote is exiting */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_END_OF_PROCESS)] = {
++		.handle_pkt = mig_do_end_of_process,
++		.cmd_flags = KCOM_ASYNC_SIMPLE,
++		.recv_size = sizeof(long),
++		.perms = DDEPUTY,
++		.name = "End Of Process"},
++
++        /* Remote syscall, deputy <-> remote */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_MIG_SYSCALL)] = {
++		.handle_pkt = deputy_do_syscall,
++		.cmd_flags = KCOM_COMPLEX_MSG | KCOM_PKT_ANSWERED,
++                .recv_size = sizeof(struct omp_syscall_req),
++                .answer_size = sizeof(struct omp_syscall_ret),
++		.perms = DDEPUTY | DREMOTE,
++		.name = "Remote Syscall"},
++
++        /* Remote strncopy from user */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_STRNCPY_FROM_USER)] = {
++		.handle_pkt = remote_strncpy_from_user,
++		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.perms = KCOM_PERM_SYSCALL,
++                .recv_size = sizeof(struct omp_usercopy_req),
++                .answer_size = KCOM_NO_SIZE_CHECK,
++		.name = "Remote strncpy"},
++
++        /* Remote copy from user */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_COPY_FROM_USER)] = {
++		.handle_pkt = remote_copy_from_user,
++		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.perms = KCOM_PERM_SYSCALL,
++                .recv_size =sizeof(struct omp_usercopy_req),
++                .answer_size =KCOM_NO_SIZE_CHECK,
++		.name = "Remote copy_from_user"},
++
++        /* Remote get_user */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_GET_USER)] = {
++		.handle_pkt = remote_get_user,
++		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.perms = KCOM_PERM_SYSCALL,
++                .recv_size =sizeof(struct omp_usercopy_req),
++                .answer_size =sizeof(s64),
++		.name = "Remote get_user"},
++
++	/* Request during syscalls */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_COPY_TO_USER)] = {
++		.handle_pkt =remote_copy_to_user,
++		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.perms = KCOM_PERM_SYSCALL,
++                .recv_size = KCOM_NO_SIZE_CHECK,
++                .answer_size =0,
++		.name = "Remote copy_to_user"},
++
++        /* Remote put_user */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_PUT_USER)] = {
++		.handle_pkt = remote_put_user,
++		.cmd_flags = KCOM_PKT_SYNC,
++		.perms = KCOM_PERM_SYSCALL,
++                .recv_size =sizeof(struct omp_usercopy_emb),
++		.name = "Remote put_user"},
++
++        /* Remote asked for a fork */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_DO_FORK)] = {
++		.handle_pkt = deputy_do_fork,
++		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.perms = DDEPUTY,
++                .recv_size =sizeof(struct omp_fork_req),
++                .answer_size =sizeof(struct omp_fork_ret),
++		.name = "Remote Fork"},
++
++        /* Read a page on the deputy and send it back */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_GET_PAGE)] = {
++		.handle_pkt = deputy_do_readpage,
++		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.perms = DDEPUTY,
++                .recv_size =sizeof(struct omp_page_req),
++                .answer_size = PAGE_SIZE,
++		.name = "Remote Read Page"},
++
++        /* Remote ask an mmap to its deputy */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_MMAP)] = {
++		.handle_pkt = deputy_do_mmap,
++		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.perms = DDEPUTY,
++                .recv_size = sizeof(struct omp_mmap_req),
++                .answer_size = sizeof(struct omp_mmap_ret),
++		.name = "Remote mmap"},
++
++        /* Remote informs ask execve */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_DO_EXECVE)] = {
++		.handle_pkt = deputy_do_execve,
++		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.perms = DDEPUTY,
++                .recv_size = sizeof(struct omp_execve_req),
++                .answer_size = sizeof(struct omp_execve_ret),
++		.name = "Remote execve"},
++
++        /* remote strlen user */
++	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_STRNLEN_USER)] = {
++		.handle_pkt = remote_strnlen_user,
++		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.perms = DDEPUTY | DREMOTE,
++                .recv_size =sizeof(struct omp_usercopy_req),
++                .answer_size = sizeof(long),
++		.name = "Remote strlen_user"},
++};
++
++
++/*******************************************************************************
++ * kcomd_thread daemon face                                                    *
++ ******************************************************************************/
++
++static int kcomd_done = 0;
++static int kcomd_module_exit = 0;
+ static void kcomd_thread_free_ressources(void);
+ 
+ /**
+@@ -483,10 +825,20 @@
+ 
+ static void kcomd_thread_initialize(void)
+ {
+-	kcom_pkt_cachep =kmem_cache_create("kcom_pkt_cache", sizeof(struct kcom_pkt), 0, 0, NULL, NULL);
+-	kcom_task_cachep=kmem_cache_create("kcom_task_cache", sizeof(struct kcom_task), 0, 0, NULL, NULL);
+-	kcom_node_cachep=kmem_cache_create("kcom_node_cache", sizeof(struct kcom_node), 0, 0, NULL, NULL);
+-	/* kcom_saddr_cachep=kmem_cache_create("kcom_saddr_cache", sizeof(struct sockaddr), 0, 0, NULL, NULL);*/
++	/* pkt are allocated with SLAB for performance reasons */
++	kcom_pkt_cachep =kmem_cache_create("kcom_pkt_cache"
++					  ,sizeof(struct kcom_pkt)
++					  ,0, 0, NULL, NULL);
++
++	/* task descriptions are allocated by SLAB too */
++	kcom_task_cachep=kmem_cache_create("kcom_task_cache"
++					  , sizeof(struct kcom_task)
++					  , 0, 0, NULL, NULL);
++
++	/* FIXME This should not be allocated by SLAB */
++	kcom_node_cachep=kmem_cache_create("kcom_node_cache"
++					  , sizeof(struct kcom_node)
++					  , 0, 0, NULL, NULL);
+ }
+ 
+ 
+@@ -621,11 +973,11 @@
+ 	}
+ 	if (!list_empty(process_list)) {
+ 		/* Prevent infinite loop 60s */
+-		if (60000 < ++nb_retries) {
++		if (60*HZ < ++nb_retries) {
+ 			OMBUG("too many retries\n");
+ 			goto clear_list_exit;
+ 		}
+-		schedule_timeout(HZ/1000);
++		schedule_timeout(1);
+ 		goto do_process_list;
+ 	}
+ 
+@@ -723,11 +1075,11 @@
+ 
+ 	if (!list_empty(process_list)) {
+ 		/* Prevent infinite loop 60s */
+-		if (60000 < ++nb_retries) {
++		if (60*HZ < ++nb_retries) {
+ 			OMBUG("too many retries\n");
+ 			goto clear_list_exit;
+ 		}
+-		schedule_timeout(HZ/1000);
++		schedule_timeout(1);
+ 		goto do_process_list;
+ 	}
+ 
+@@ -776,7 +1128,11 @@
+ 	struct kcom_task *task;
+ 	struct list_head process_list;
+ 	struct list_head write_process_list;
++	int loop_again;
++
++do_it_again:
+ 
++	loop_again = 0;
+ 	INIT_LIST_HEAD(&process_list);
+ 	INIT_LIST_HEAD(&write_process_list);
+ 
+@@ -796,10 +1152,12 @@
+ 		if (test_bit(node->fd, sockets_fds.res_in)) {
+ 			OMDEBUG_KCOMD( 3, "KCOMD: receiving on fd %d\n", node->fd );
+ 			list_add_tail( &node->process_list, &process_list );
++			clear_bit(node->fd, sockets_fds.res_in);
++			loop_again = 1;
+ 		}
+ 
+ 		/* Build write list */
+-		if (node->fd!=-1 && test_bit(node->fd, sockets_fds.res_out)) {
++		if (node->fd!=-1 && (node->pkt_ready || test_bit(node->fd, sockets_fds.res_out))) {
+ 			OMDEBUG_KCOMD( 3, "KCOMD: sending on fd %d\n", node->fd );
+ 			read_lock(&node->tasks_lock);
+ 			list_for_each_entry(task, &node->tasks, list){
+@@ -810,21 +1168,29 @@
+ 				   || !list_empty(&task->egress_list)) {
+ 					list_add_tail(&task->process_list, &write_process_list);
+ 					__kcomd_thread_prepare_task(task);
++					loop_again = 1;
+ 				}
+ 			}
+ 			read_unlock(&node->tasks_lock);
++			node->pkt_ready = 0;
+ 		}
+ 	}
+ 	read_unlock(&kcom_nodes_lock);
+ 
++	if (!loop_again)
++		return;
++
+ 	/* Since the above function may schedule or hold locks, we need
+ 	 * separate lists */
+-	if (!list_empty(&process_list))
+-		__kcomd_thread_do_read(&process_list);
+-
+ 	if (!list_empty(&write_process_list))
+ 		__kcomd_thread_do_write(&write_process_list);
+ 
++	if (!list_empty(&process_list))
++		__kcomd_thread_do_read(&process_list);
++	/* Since some packets may generate other packets,
++	 * we must make sure that all packet list are sent */
++
++	goto do_it_again;
+ }
+ 
+ /**
+@@ -975,7 +1341,6 @@
+  */
+ static void kcomd_thread_free_ressources(void)
+ {
+-	struct kcom_pkt *pkt, *pkt_next;
+ 	struct kcom_task *task, *task_next;
+ 	struct kcom_node *node, *node_next;
+ 
+@@ -986,32 +1351,28 @@
+ 		list_for_each_entry_safe(task, task_next, &node->tasks, list) {
+ 
+  			write_lock(&task->in_packs_lock);
+-			list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+-				if ((pkt->len) > 0)
+-					kfree(pkt->data);
+-				kmem_cache_free(kcom_pkt_cachep, pkt);
+-				list_del(&pkt->list);
+-			}
++
++ 			while(!list_empty(&task->in_packs)){
++ 				kcom_pkt_delete(list_entry(task->in_packs.next
++ 							  , struct kcom_pkt, list));
++ 			}
++
+  			write_unlock(&task->in_packs_lock);
+ 
+  			write_lock(&task->out_packs_lock);
+-			list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
+-				if ((pkt->len) > 0)
+-					kfree(pkt->data);
+-				kcom_pkt_delete(pkt);
++ 			while(!list_empty(&task->out_packs)){
++ 				kcom_pkt_delete(list_entry(task->out_packs.next
++ 							  , struct kcom_pkt, list));
+ 			}
+  			write_unlock(&task->out_packs_lock);
+ 
+-				kcom_pkt_delete(pkt);
+ 		}
+ 		write_unlock(&node->tasks_lock);
+ 
+ 		sock_release(node->sock);
+ 		sys_close(node->fd);
+-		/* kfree(node->sock);*/
+ 		list_del(&node->list);
+ 		kmem_cache_free(kcom_node_cachep, node);
+-		/* kfree(node);*/
+ 	}
+ 	write_unlock(&kcom_nodes_lock);
+ 
+Index: linux/include/hpc/task.h
+===================================================================
+--- linux.orig/include/hpc/task.h	2006-12-19 16:56:06.000000000 +0100
++++ linux/include/hpc/task.h	2006-12-19 17:00:23.000000000 +0100
+@@ -39,11 +39,15 @@
+ /*
+  * distributed flags (dflags):
+  * that are *ONLY* set by the process itself, but may be read by others:
++ * Those flags are used in L2 of kcomd to check if a packet can be executed
+  */
+ #define	DDEPUTY		0x00000001	/* process is a DEPUTY stub */
+ #define	DREMOTE		0x00000002	/* process is running remotely */
++
++#define DSYSCALL	0x00000010	/* task is executing remote syscall */
+ #define	DINCOMING	0x00000040	/* process coming here */
+ #define	DPASSING	0x00000080	/* process is in migration */
++
+ #define	DFINISHED	0x00000200	/* wants to become zombie */
+ #define	DREMOTEDAEMON	0x00000400	/* set DREMOTE on "fork" */
+ 
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- linux.orig/include/hpc/prototype.h	2006-12-19 16:56:06.000000000 +0100
++++ linux/include/hpc/prototype.h	2006-12-19 17:00:23.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -94,38 +95,38 @@
+ 
+ int alloc_fd_bitmap(int);
+ 
+-struct kcom_pkt *kcom_pkt_create(int, int, int, char *);
+-void kcom_pkt_delete(struct kcom_pkt *pkt);
+-
+-int kcom_add_packet(struct kcom_task *tsk, struct kcom_pkt *pkt);
+-int kcom_send(int, int, char *, unsigned long, struct sockaddr_in *);
+-int kcom_send_with_ack(int, int, char *, unsigned long, struct sockaddr_in *);
+-int kcom_send_with_response(int, int, char *, unsigned long, char *, struct sockaddr_in *);
+-int wait_for_ack(struct kcom_task *, unsigned int);
+-int wait_for_response(struct kcom_task *, unsigned int);
+-int kcom_send_ack(task_t *, struct kcom_pkt *);
+-int kcom_send_resp(task_t *, int , char *, struct kcom_pkt *);
+-
+-struct kcom_node *kcom_node_add(struct socket *);
+-struct kcom_node *kcom_node_find(struct sockaddr *);
+-
+-struct kcom_task *kcom_task_create(struct kcom_node *, int);
+-struct kcom_task *kcom_task_find(int);
+-int kcom_task_send(struct kcom_task *, int, int, char *, char *, unsigned long);
+-int kcom_task_delete(int);
+-
+ int mig_handle_migration(void *);
+ int user_thread(int (*fn)(void *), void * arg, unsigned long flags);
+ int mig_init(struct kcom_node *,struct kcom_pkt *);
+ 
+-int pkt_hdr_read(struct kcom_node *, struct kcom_pkt **);
+-int pkt_data_read(struct kcom_node *, struct kcom_pkt *, int, char *);
++/* L1 packet handlers : */
+ 
+-struct kcom_task *kcom_remote_task_find(int);
+-struct kcom_task *kcom_home_task_find(int);
+-struct kcom_task *__kcom_task_find(pid_t pid, int where);
+-int mig_do_receive_home(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt);
+-int mig_do_receive_init(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt);
++extern int mig_do_receive_init(struct kcom_node*, const struct kcom_pkt* const);
++extern int mig_do_come_home(struct kcom_node*, const struct kcom_pkt* const);
++extern int mig_do_l1_error(struct kcom_node*, const struct kcom_pkt* const);
++int remote_do_signal(struct kcom_node*, const struct kcom_pkt * const);
++
++/* L2 packet handlers */
++
++extern int mig_do_receive_home(struct kcom_task*, const struct kcom_pkt* const);
++extern int mig_do_end_of_process(struct kcom_task *tsk, const struct kcom_pkt * const pkt);
++extern int mig_do_receive_mm(struct kcom_task *, const struct kcom_pkt *const);
++extern int mig_do_receive_proc_context(struct kcom_task *, const struct kcom_pkt * const);
++extern int mig_do_receive_fp(struct kcom_task *, const struct kcom_pkt *const);
++extern int mig_do_receive_page(struct kcom_task *, const struct kcom_pkt *const);
++extern int mig_do_receive_vma(struct kcom_task *, const struct kcom_pkt * const);
++
++extern int deputy_do_syscall(struct kcom_task *, const struct kcom_pkt *const);
++extern int deputy_do_fork(struct kcom_task *, const struct kcom_pkt *const);
++extern int deputy_do_readpage(struct kcom_task *, const struct kcom_pkt * const);
++
++extern int remote_strncpy_from_user(struct kcom_task *, const struct kcom_pkt * const);
++extern int remote_copy_from_user(struct kcom_task *,const struct kcom_pkt *const);
++extern int remote_get_user(struct kcom_task *, const struct kcom_pkt *const);
++extern int remote_copy_to_user(struct kcom_task *, const struct kcom_pkt * const);
++extern int remote_put_user(struct kcom_task*, const struct kcom_pkt *const);
++extern int deputy_do_mmap(struct kcom_task *, const struct kcom_pkt *const);
++extern int deputy_do_execve(struct kcom_task*, const struct kcom_pkt *const);
++extern int remote_strnlen_user(struct kcom_task*, const struct kcom_pkt *const);
+ 
+-int remote_do_signal(task_t *,  struct kcom_pkt *);
+ #endif /* _HPC_PROTOTYPE_H */
+Index: linux/include/hpc/debug.h
+===================================================================
+--- linux.orig/include/hpc/debug.h	2006-12-19 16:56:06.000000000 +0100
++++ linux/include/hpc/debug.h	2006-12-19 17:00:23.000000000 +0100
+@@ -21,39 +21,52 @@
+ #ifndef _HPC_DEBUG_H
+ #define _HPC_DEBUG_H
+ 
++#include <linux/config.h>
++
+ #include <hpc/protocol.h>
+ #include <hpc/comm.h>
+ #include <hpc/hpc.h>
+ #include <hpc/kcom.h>
+ 
+-int proc_debug_get_loadinfo(char *value, size_t size);
+-int proc_debug_get_admin(char *value, size_t size);
+-
+-int proc_debug_get_lfree_mem(char *value, size_t size);
+-int proc_debug_get_pkeep_free(char *value, size_t size);
++extern int proc_debug_get_loadinfo(char *value, size_t size);
++extern int proc_debug_get_admin(char *value, size_t size);
+ 
+-int proc_debug_get_nodes(char *value, size_t size);
++extern int proc_debug_get_lfree_mem(char *value, size_t size);
++extern int proc_debug_get_pkeep_free(char *value, size_t size);
+ 
++extern int proc_debug_get_nodes(char *value, size_t size);
+ 
+-/* for packets */
+-extern void om_format_type(int type, char* buffer);
+-extern void om_dump_packet(struct kcom_pkt* pkt);
+-extern void om_dump_packet_hdr(struct kcom_pkt* pkt);
+-extern void om_dump_packet_data(struct kcom_pkt* pkt);
+ 
+-extern int om_debug_do_switch;
++/*******************************************************************************
++ * General debug informations 					 	       *
++ ******************************************************************************/
+ 
+-void om_debug_regs(struct pt_regs *);
+-void debug_mlink(struct socket *);
++extern void om_debug_regs(struct pt_regs *);
++extern void debug_mlink(struct socket *);
+ 
+-void debug_page(unsigned long);
+-void debug_regs(void);
+-void debug_vmas(struct mm_struct *);
++extern void debug_page(unsigned long);
++extern void debug_regs(void);
++extern void debug_vmas(struct mm_struct *);
+ 
+ #ifdef CONFIG_OPENMOSIX_DEBUG
++/*******************************************************************************
++ * Packet dump (only compiled when debug)			 	       *
++ ******************************************************************************/
++
++extern void om_dump_packet(const struct kcom_pkt* const pkt);
++
++extern int om_debug_do_switch;
++
++/*******************************************************************************
++ * Debug macros, to be used as much as possible			 	       *
++ ******************************************************************************/
+ #define OMDEBUG(var, lim, fmt...)	{ if (var >= lim) \
+-						printk(KERN_DEBUG "[OMDBG] %s:%d ", __FUNCTION__,  __LINE__); \
++ 						printk(KERN_DEBUG \
++ 						      "[OMDBG] %s:%d " \
++ 						      , __FUNCTION__ \
++ 						      ,  __LINE__); \
+ 						printk(fmt); }
++
+ #define OMDEBUG_DO(var, lim, action)	do { \
+ 					    if (var >= lim) { \
+ 						om_debug_do_switch = var;  \
+@@ -65,14 +78,20 @@
+ #define OMDEBUG_DO(var, lim, action)
+ #endif
+ 
++/*******************************************************************************
++ * Log Debug macros, to be used as much as possible for logging                *
++ ******************************************************************************/
++
+ #define OMDEBUG_MIG(lim, fmt...)	OMDEBUG(om_opts.debug_mig, lim, fmt)
+ #define OMDEBUG_SYS(lim, fmt...)	OMDEBUG(om_opts.debug_sys, lim, fmt)
+ #define OMDEBUG_RINO(lim, fmt...)	OMDEBUG(om_opts.debug_rino, lim, fmt)
+-#define OMDEBUG_CPYUSER(lim, fmt...)	OMDEBUG(om_opts.debug_copyuser, lim, fmt)
++#define OMDEBUG_CPYUSER(lim, fmt...)	OMDEBUG(om_opts.debug_copyuser, lim,fmt)
+ #define OMDEBUG_KCOMD(lim, fmt...)	OMDEBUG(om_opts.debug_kcomd, lim, fmt)
+-#define OMDEBUG_PROTOCOL(lim, fmt...)	OMDEBUG(om_opts.debug_protocol, lim, fmt)
++#define OMDEBUG_PROTOCOL(lim, fmt...)	OMDEBUG(om_opts.debug_protocol,lim,fmt)
+ 
+-#define OMDEBUG_PROTOCOL_DO(lim, action) OMDEBUG_DO(om_opts.debug_protocol, lim, action)
+-#define OMDEBUG_KCOMD_DO(lim, action)    OMDEBUG_DO(om_opts.debug_kcomd, lim, action)
++#define OMDEBUG_PROTOCOL_DO(lim, action) OMDEBUG_DO(om_opts.debug_protocol, \
++                                         lim, action)
++#define OMDEBUG_KCOMD_DO(lim, action)   OMDEBUG_DO(om_opts.debug_kcomd, \
++                                        lim, action)
+ 
+ #endif /* _HPC_DEBUG_H */
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/copyuser.c	2006-12-19 17:00:23.000000000 +0100
+@@ -1,5 +1,6 @@
+ /*
+  *	Copyright (C) 2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -20,7 +21,9 @@
+ #include <hpc/prototype.h>
+ #include <hpc/hpc.h>
+ 
+-/********** DEPUTY PART **********/
++/*******************************************************************************
++ * Deputy command part                                                         *
++ ******************************************************************************/
+ 
+ /**
+  * deputy_copy_from_user - Copy from remote when running on deputy
+@@ -28,12 +31,14 @@
+  * @from:   userspace address to copy from
+  * @n:      size of data to copy
+  **/
+-unsigned long deputy_copy_from_user(void *to, const void __user *from, unsigned long n)
++unsigned long deputy_copy_from_user(void *to, const void __user *from
++                                   , unsigned long n)
+ {
+ 	struct omp_usercopy_req u;
+ 	task_t *p=current;
++        struct kcom_pkt *pkt;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+-	int i;
++	int err;
+ 
+ 	if (in_atomic())
+ 		return n;
+@@ -41,12 +46,28 @@
+ 	u.addr = (unsigned long) from;
+ 	u.len = n;
+ 
+-	OMDEBUG_CPYUSER(1, "copy user[0x%p]->[0x%p][%ld]\n", from, to, n);
++	OMDEBUG_CPYUSER(1, "copy user[0x%p]->[0x%p][%ld]\n",from, to, n);
+ 
+-	i=kcom_send_with_response(DEP_COPY_FROM_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, (char *)to, dest_ptr);
++        err = kcom_send_command(KCOM_L2_REQ_COPY_FROM_USER, sizeof(u), (char*)&u, 0
++                               ,dest_ptr, &pkt);
+ 
++        if (err<0)
++                return err;
++
++	if (pkt->data_len != n)
++	    goto error;
++
++	OMDEBUG_CPYUSER(3, "copy_from_user answered from remote\n");
++
++	memcpy(to, pkt->data, n);
++        kcom_pkt_delete(pkt);
+ 
+ 	return 0;
++
++error:
++	printk(KERN_ERR "[oM] remote copy_from_user unexpected data size\n");
++	kcom_pkt_delete(pkt);
++	return -EINVAL;
+ }
+ EXPORT_SYMBOL(deputy_copy_from_user);
+ 
+@@ -56,24 +77,37 @@
+  * @src:   userspace address to copy from
+  * @count:      size of data to copy
+  **/
+-unsigned long deputy_strncpy_from_user(char *dst, const char __user *src,
+-							long count)
++unsigned long deputy_strncpy_from_user(char *dst, const char __user *src
++				      ,long count)
+ {
+-	task_t *p=current;
++        struct kcom_pkt *pkt;
+ 	struct omp_usercopy_req *u;
+-	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+-	int i;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)current->om.whereto;
++	int err;
+ 
+ 	OMDEBUG_CPYUSER(1, "strcpy user[0x%p]->[0x%p][%ld]\n", src, dst, count);
+-	u=kzalloc(sizeof(*u), GFP_KERNEL);
+ 
+ 	u->addr = (unsigned long) src;
+ 	u->len = count;
+ 
+-	i=kcom_send_with_response(DEP_STRNCPY_FROM_USER | PKT_NEW_MSG | DEP_FLG, sizeof(*u), (char *)u, 0, dst, dest_ptr);
++        err = kcom_send_command(KCOM_L2_REQ_STRNCPY_FROM_USER, sizeof(u)
++			       ,(char*)&u, 0,dest_ptr, &pkt);
++
++        if (err<0)
++                return err;
++
++	if (pkt->data_len != count)
++		goto error;
+ 
++        memcpy(dst, pkt->data, count);
++
++        kcom_pkt_delete(pkt);
+ 	return 0;
+ 
++error:
++	printk(KERN_ERR "[oM] [deputy] strncpy_from_user unexpected data size\n");
++	kcom_pkt_delete(pkt);
++	return -EINVAL;
+ }
+ 
+ /**
+@@ -84,7 +118,7 @@
+  **/
+ unsigned long deputy_copy_to_user(void __user *to, const void *from, unsigned long n)
+ {
+-	int i;
++	int err;
+ 	char *buf;
+ 	task_t *p=current;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+@@ -92,13 +126,17 @@
+ 	if (in_atomic())
+ 		return n;
+ 
+-	// Instead of sending two packets, we create one larger packet and send it.
++	OMDEBUG_CPYUSER(1, "sending copy_to_user to remote\n");
++
+ 	buf=kzalloc(n, GFP_KERNEL);
+ 	memcpy(buf, from, n);
+ 
+-	i=kcom_send_with_ack(DEP_COPY_TO_USER | PKT_NEW_MSG | DEP_FLG, n, buf, (unsigned long) to, dest_ptr);
++        err = kcom_send_command(KCOM_L2_REQ_COPY_TO_USER, n, buf, (unsigned long) to
++			       ,dest_ptr, NULL);
+ 
+-	return 0;
++        kfree(buf);
++
++        return err;
+ 
+ }
+ EXPORT_SYMBOL(deputy_copy_to_user);
+@@ -110,17 +148,25 @@
+ {
+ 	struct omp_usercopy_req u;
+ 	long ret;
+-	int i;
+-	task_t *p=current;
+-	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
++	int err;
++        struct kcom_pkt *pkt;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)current->om.whereto;
+ 
+ 	OMDEBUG_CPYUSER(1, "strlen user[0x%p][%ld]\n", s, n);
+ 	u.addr = (unsigned long) s;
+ 	u.len = n;
+ 
+-	i=kcom_send_with_response(DEP_STRNLEN_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, (char *)&ret, dest_ptr);
++        err = kcom_send_command(KCOM_L2_REQ_STRNLEN_USER, sizeof(u)
++			       ,(char*)&u, 0, dest_ptr, &pkt);
++        if (err < 0)
++                return err;
+ 
+-	return ret;
++	OMDEBUG_CPYUSER(3, "strlen remote answered %ld\n", *(long*)pkt->data);
++
++        ret = *(long *)pkt->data;
++        kcom_pkt_delete(pkt);
++
++        return ret;
+ }
+ EXPORT_SYMBOL(deputy_strnlen_user);
+ 
+@@ -130,7 +176,6 @@
+ static inline long deputy_put_userX(s64 value, const void *addr, size_t size)
+ {
+ 	struct omp_usercopy_emb u;
+-	int i;
+ 	task_t *p=current;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+ 
+@@ -140,9 +185,8 @@
+ 	u.len = size;
+ 	u.val = value;
+ 
+-	i=kcom_send_with_ack(DEP_PUT_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, dest_ptr);
+-
+-	return 0;
++        return kcom_send_command(KCOM_L2_REQ_PUT_USER, sizeof(u)
++				,(char*)&u, 0, dest_ptr, NULL);
+ }
+ 
+ /**
+@@ -173,19 +217,25 @@
+ {
+ 	task_t *p=current;
+ 	struct omp_usercopy_req u;
+-	s64 ret;
++        struct kcom_pkt *pkt;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+-	int i;
++	int err;
+ 
+ 	OMDEBUG_CPYUSER(1, "get user[0x%p][%zd]\n", addr, size);
+ 	u.addr = (unsigned long) addr;
+ 	u.len = size;
+ 
+-	i=kcom_send_with_response(DEP_GET_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, (void *)&ret, dest_ptr);
++        err = kcom_send_command(KCOM_L2_REQ_GET_USER, sizeof(u)
++			       ,(char*)&u, 0, dest_ptr, &pkt);
+ 
+-	*value=ret;
++        if (err<0)
++                return err;
+ 
+-	return 0;
++	OMDEBUG_CPYUSER(3, "get user answered from remote\n");
++        *value = * (s64 *) pkt->data;
++
++        kcom_pkt_delete(pkt);
++        return 0;
+ }
+ 
+ /**
+@@ -209,113 +259,127 @@
+ EXPORT_SYMBOL(deputy_get_user64);
+ #endif
+ 
+-/********** REMOTE PART **********/
++/*******************************************************************************
++ * Remote handling part                                                        *
++ ******************************************************************************/
+ 
+ /**
+- * remote_copy_user - Copy to or from user for deputy
++ * remote_copy_from_user - Copy to or from user for deputy
+  **/
+-static int remote_copy_from_user(task_t *p, struct kcom_pkt *pkt)
++int remote_copy_from_user(struct kcom_task *tsk
++                                ,const struct kcom_pkt *const pkt)
+ {
++        task_t *p = tsk->task;
+ 	struct omp_usercopy_req u;
+ 	void *buf = NULL;
+ 	int ret;
+ 
+-	memcpy(&u, pkt->data, pkt->len);
++        OMDEBUG_CPYUSER(1, "[remote] received copy_from_user request\n");
++	memcpy(&u, pkt->data, pkt->data_len);
+ 
+ 	buf = kmalloc(u.len, GFP_KERNEL);
+ 	if (!buf)
+ 		goto out;
+ 
+-	ret=copy_from_user(buf, (const void __user *) u.addr, u.len);
+-
+-	kcom_send_resp(p, u.len, buf, pkt);
++	ret = copy_from_user(buf, (const void __user *) u.addr, u.len);
+ 
+-	return ret;
++	ret = kcom_send_resp(p, u.len, buf, pkt);
++        kfree(buf);
++        return ret;
+ 
+ out:
++	OMBUG("Can't allocate answer space\n");
++        kcom_send_nack(p, pkt);
+ 	kfree(buf);
+-	return -1;
++	return -ENOMEM;
+ }
+ 
+-static int remote_copy_to_user(task_t *p, struct kcom_pkt *pkt)
++int remote_copy_to_user(struct kcom_task *tsk __attribute__((unused))
++		       ,const struct kcom_pkt * const pkt)
+ {
+ 	int ret;
+-	ret=copy_to_user((void __user *) pkt->addr, pkt->data, pkt->len);
+-
+-	kcom_send_ack(p, pkt);
+ 
++	OMDEBUG_CPYUSER(1, "[remote] received copy_to_user request\n");
++	ret=copy_to_user((void __user *) pkt->addr, pkt->data, pkt->data_len);
+ 	return ret;
+ 
+ }
++
+ /**
+  * remote_strncpy_from_user - strncpy from user for deputy
+  **/
+-static int remote_strncpy_from_user(task_t *p, struct kcom_pkt *pkt)
++int remote_strncpy_from_user(struct kcom_task *tsk, const struct kcom_pkt * const pkt)
+ {
+-	struct omp_usercopy_req u;
++        task_t *p = tsk->task;
++	const struct omp_usercopy_req * const u = (struct omp_usercopy_req*) pkt->data;
+ 	void *buf = NULL;
+ 	int ret;
+ 
+-	memcpy(&u, pkt->data, sizeof(u));
++	OMDEBUG_CPYUSER(1, "[remote] received copy_to_user request\n");
+ 
+-	buf = kmalloc(u.len, GFP_KERNEL);
++	buf = kmalloc(u->len, GFP_KERNEL);
+ 	if (!buf)
+ 		goto out;
+ 
+-	ret=strncpy_from_user(buf, (const char __user *) u.addr, u.len);
++	ret = strncpy_from_user(buf, (const char __user *) u->addr, u->len);
+ 
+-	kcom_send_resp(p, u.len, buf, pkt);
++	ret = kcom_send_resp(p, u->len, buf, pkt);
+ 
++        kfree(buf);
+ 	return ret;
+ 
+ out:
+-	return -1;
++	OMBUG("Can't allocate answer space\n");
++	kcom_send_nack(p, pkt);
++	return -ENOMEM;
+ 
+ }
+ 
+ /**
+- * remote_strnlen_from_user - strnlen from user for deputy
++ * remote_strnlen_user - strnlen from user for deputy
+  **/
+-#if 0
+-static int remote_strnlen_user(task_t *p, struct kcom_pkt *pkt)
++int remote_strnlen_user(struct kcom_task* tsk, const struct kcom_pkt *const pkt)
+ {
+-	struct omp_usercopy_req u;
+-	long *ret_ptr;
++	long ret_ptr;
++	const struct omp_usercopy_req * const u = (struct omp_usercopy_req*) pkt->data;
+ 
+-	memcpy(&u, pkt->data, pkt->len);
++	OMDEBUG_CPYUSER(1, "[remote] received copy_to_user request\n");
+ 
+-	ret_ptr=kzalloc(sizeof(long), GFP_KERNEL);
++	ret_ptr = (u->len)
++		? strnlen_user((const char __user *) u->addr, u->len)
++		: strlen_user((const char __user *) u->addr);
+ 
+-	*ret_ptr = (u.len)
+-		? strnlen_user((const char __user *) u.addr, u.len)
+-		: strlen_user((const char __user *) u.addr);
+-
+-	kcom_send_resp(p, sizeof(*ret_ptr), (char *)ret_ptr, pkt);
+-
+-	return 0;
++	return kcom_send_resp(tsk->task, sizeof(ret_ptr), (char *)&ret_ptr, pkt);
+ }
+ 
+-#endif
+-
+ /**
+  * remote_put_user - put user for deputy
+  **/
+-static int remote_put_user(task_t *p, struct kcom_pkt *pkt)
++int remote_put_user(struct kcom_task* tsk __attribute__((unused))
++			  ,const struct kcom_pkt *const pkt)
+ {
+-	struct omp_usercopy_emb u;
+ 	long ret;
++	const struct omp_usercopy_emb * const u = (struct omp_usercopy_emb*) pkt->data;;
+ 
+-	memcpy(&u, pkt->data, pkt->len);
++	OMDEBUG_CPYUSER(1, "[remote] received put_user request\n");
+ 
+-	switch (u.len) {
+-	case 1: ret = put_user(u.val, (u8 *) u.addr); break;
+-	case 2: ret = put_user(u.val, (u16 *) u.addr); break;
+-	case 4: ret = put_user(u.val, (u32 *) u.addr); break;
+-	case 8: ret = put_user(u.val, (u64 *) u.addr); break;
+-	default: ret = -EFAULT;
+-	}
+-
+-	kcom_send_ack(p, pkt);
++        switch (u->len) {
++                case 1:
++                        ret = put_user(u->val, (u8 *) u->addr);
++                        break;
++                case 2:
++                        ret = put_user(u->val, (u16 *) u->addr);
++                        break;
++                case 4:
++                        ret = put_user(u->val, (u32 *) u->addr);
++                        break;
++                case 8:
++                        ret = put_user(u->val, (u64 *) u->addr);
++                        break;
++                default:
++			ret = -EFAULT;
++			break;
++        }
+ 
+ 	return ret;
+ }
+@@ -323,94 +387,43 @@
+ /**
+  * remote_get_user - get user for deputy
+  **/
+-static int remote_get_user(task_t *p, struct kcom_pkt *pkt)
++int remote_get_user(struct kcom_task *tsk, const struct kcom_pkt *const pkt)
+ {
+-	struct omp_usercopy_req u;
+-	s64 *ret;
+-
+-	memcpy(&u, pkt->data, sizeof(struct omp_usercopy_req));
+-	ret=kzalloc(sizeof(*ret), GFP_KERNEL);
+-
+-
+-	switch (u.len) {
+-	case 1: get_user(*ret, (u8 *) u.addr); break;
+-	case 2: get_user(*ret, (u16 *) u.addr); break;
+-	case 4: get_user(*ret, (u32 *) u.addr); break;
+-#if BITS_PER_LONG == 64
+-	case 8: get_user(*ret, (u64 *) u.addr); break;
+-#endif
+-	}
+-
+-	kcom_send_resp(p, sizeof(*ret), (char *)ret, pkt);
+-return 0;
++        int err = 0;
++	s64 ret = 0;
++	const struct omp_usercopy_req * const u = (struct omp_usercopy_req*) pkt->data;
++
++	OMDEBUG_CPYUSER(1, "[remote] received put_user request\n");
++
++        switch (u->len) {
++                case 1:
++                        err = get_user(ret, (u8 *) u->addr);
++                        break;
++                case 2:
++                        err = get_user(ret, (u16 *) u->addr);
++                        break;
++                case 4:
++                        err = get_user(ret, (u32 *) u->addr);
++                        break;
++        #if BITS_PER_LONG == 64
++                case 8:
++                        err = get_user(ret, (u64 *) u->addr);
++                        break;
++        #endif
++		default:
++			err = -EFAULT;
++			break;
++        }
++
++        if (err < 0)
++                goto error;
++
++	return kcom_send_resp(tsk->task, sizeof(ret), (char *)&ret, pkt);
++        return err;
++
++error:
++	printk("[oM] get_user returned an error %d\n", err);
++        kcom_send_nack(tsk->task, pkt);
++        return err;
+ }
+ 
+-/**
+- * remote_handle_user - Handle user copy until receiving @endtype
+- **/
+-int remote_handle_user(task_t *p, int endtype)
+-{
+-	int ret = 0;
+-	struct kcom_pkt *pkt, *pkt_next, *send_pkt;
+-	struct kcom_task *task;
+-
+-	task=kcom_task_find(p->pid);
+-
+-	while (1) {
+-
+-		set_current_state(TASK_INTERRUPTIBLE);
+-		list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
+-
+-			switch (pkt->type & SYSCALL_MASK) {
+-
+-				case DEP_STRNCPY_FROM_USER :
+-					remote_strncpy_from_user(p, pkt);
+-					break;
+-
+-			 	case DEP_GET_USER :
+-					remote_get_user(p, pkt);
+-					break;
+-
+-				case DEP_COPY_FROM_USER :
+-					remote_copy_from_user(p, pkt);
+-					break;
+-
+-				case DEP_COPY_TO_USER :
+-					remote_copy_to_user(p, pkt);
+-					break;
+-
+-				case DEP_PUT_USER :
+-					remote_put_user(p, pkt);
+-					break;
+-
+-			 	case SYSCALL_DONE :
+-					send_pkt=kcom_pkt_create(0, MIG_SYSCALL | PKT_ACK | SYSCALL_DONE | REM_FLG, PKT_ACK, NULL);
+-					send_pkt->msgid=pkt->msgid;
+-					send_pkt->hpid=task->hpid;
+-					send_pkt->rpid=task->rpid;
+-					send_pkt->resp=pkt->resp;
+-
+-					kcom_add_packet(task, send_pkt);
+-
+-					ret=pkt->addr;  /* the return value is stored in the addr field */
+-					kcom_pkt_delete(pkt);
+-					schedule();
+-					return ret;
+-					break;
+-
+-			}
+-			kcom_pkt_delete(pkt);
+-		}
+-
+-		if (list_empty(&task->in_packs)) {
+-			schedule();
+-		}
+-
+-	}
+-
+-	printk(KERN_ERR "openMosix: %s is not supposed to end that way ! (%s:%d)\n"
+-	      , __FUNCTION__, __FILE__, __LINE__);
+-
+-	return -1;
+-
+-}
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/migrecv.c	2006-12-19 17:00:23.000000000 +0100
+@@ -44,32 +44,45 @@
+ #include <hpc/arch.h>
+ 
+ #include <linux/inet.h>  /* in_aton*/
+-/* handshake with the remote part */
+-int mig_recv_hshake(struct socket *mlink)
++
++int mig_do_l1_error(struct kcom_node* node __attribute__((unused))
++		   ,const struct kcom_pkt* const pkt __attribute__((unused)))
+ {
+-	int error;
+-	struct omp_mig_handshake hshake;
++	OMBUG("Invalid L1 packet!\n");
++	return -EFAULT;
++}
++
++int mig_do_come_home(struct kcom_node *node, const struct kcom_pkt * const pkt)
++{
++	struct kcom_task *tsk;
++	OMDEBUG_PROTOCOL(2, "KCOMD: it's a MIG_COME_HOME packet ... \n");
++
++	tsk = __find_task_for_packet(pkt, node, NULL);
++	if (!tsk) {
++		OMBUG("[oM] Unable to find task %d\n", pkt->rpid);
++		return -ENODEV;
++	}
+ 
+-	OMDEBUG_MIG(3, "receiving handshake ^^\n");
+-	/* receive request of whatever */
+-	error = comm_recv(mlink, &hshake, sizeof(hshake));
+-	if (error < 0) {
+-		OMBUG("recv failed %d\n", error);
+-		return -1;
+-	}
+-
+-	/* FIXME: sanity checks here */
+-
+-	/* reply of mig_requests */
+-	hshake.type = hshake.type | HSHAKE_REPLY;
+-	hshake.version = OPENMOSIX_VERSION;
+-
+-	error = comm_send(mlink, &hshake, sizeof(hshake));
+-	if (error < 0) {
+-		OMBUG("send failed %d\n", error);
+-		return -1;
++	if (!task_test_dflags(tsk->task, DREMOTE)) {
++		printk(KERN_ERR "[oM] Can not bring task [%d] home, it's not a remote process\n", tsk->rpid);
++		return -EPERM;
+ 	}
+ 
++	task_register_migration(tsk->task);
++	return 0;
++}
++
++/* Since this command does not return, it deletes the packet */
++int mig_do_end_of_process(struct kcom_task *tsk, const struct kcom_pkt * const pkt)
++{
++
++	struct kcom_pkt *hack;
++	hack = (struct kcom_pkt *) pkt;
++	kcom_pkt_delete(hack);
++
++	do_exit(*(long*)pkt->data);
++
++	OMBUG("[oM] do_exit is not supposed to return !\n");
+ 	return 0;
+ }
+ 
+@@ -81,45 +94,11 @@
+  *    Task_register_migration is called to inform the process that the
+  *    remote process is coming home.
+  **/
+-int mig_do_receive_home(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt)
++int mig_do_receive_home(struct kcom_task *tsk, const struct kcom_pkt * const pkt)
+ {
+-	struct kcom_task *recv_tsk;
+-	struct kcom_pkt *send_pkt;
+-	task_t *sltsk;
+-	int ret;
++	OMDEBUG_MIG(2, "receiving program home (home sweet home) ^^\n");
+ 
+-
+-	OMDEBUG_MIG(2, "receiving program home (home sweat home) ^^\n");
+-
+-	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {
+-
+-		recv_tsk=kcom_task_find(recv_kcom_pkt->hpid);
+-		if (!recv_tsk) {
+-			printk(KERN_ERR "Unable to find home pid %u\n", recv_kcom_pkt->hpid);
+-			return -1;
+-		}
+-
+-		send_pkt=kcom_pkt_create(0, MIG_GO_HOME | PKT_ACK | DEP_FLG, 0,  NULL);
+-
+-		send_pkt->msgid=recv_kcom_pkt->msgid; /* responses have same msg id as pkt they are responding to.*/
+-		send_pkt->hpid=recv_kcom_pkt->hpid;
+-		send_pkt->rpid=recv_kcom_pkt->rpid;;
+-		send_pkt->resp=recv_kcom_pkt->resp;
+-
+-		if (0 != (ret =kcom_add_packet(recv_tsk,send_pkt))) {
+-		    return ret;
+-		}
+-
+-		/* Ok, tell task migration is coming*/
+-		sltsk=find_task_by_pid(recv_kcom_pkt->hpid); /* only home node will receive MIG_GO_HOME NEW_MSG*/
+-		if (sltsk) {
+-			task_register_migration(sltsk);
+-		} else {
+-			printk(KERN_ERR "Failed to register task migration\n");
+-			return -1;
+-		}
+-
+-	}
++	task_register_migration(tsk->task);
+ 
+ 	return 0;
+ }
+@@ -130,70 +109,34 @@
+  *
+  * Description:
+  *    Called by kcomd when it receives a MIG_INIT pkt.
+- *    Creates a new process and sets up the associated task.
++ *    Creates a new process and then answer the deputy node
+  **/
+-int mig_do_receive_init(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt)
++int mig_do_receive_init(struct kcom_node *node, const struct kcom_pkt * const pkt)
+ {
+-	struct kcom_task *send_tsk;
+-	struct kcom_pkt *send_pkt;
+-
+-	pid_t rpid;
+-	struct sockaddr_in *saddr;
+-	const unsigned int LO_IP=in_aton("127.0.0.1");
++	pid_t rpid = 0;
++	struct kcom_task *tsk;
+ 
+ 	OMDEBUG_MIG(3, "receiving init packet\n");
+ 
+-	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {	 /* incoming process*/
+-		rpid=0;
+-
+-		send_pkt=kcom_pkt_create(0, MIG_INIT | PKT_ACK | REM_FLG, 0,  NULL);
++	user_thread(mig_handle_migration, &rpid, 0);
+ 
+-		if (!send_pkt) {
+-			printk(KERN_ERR "ERROR creating pkt in mig_do_receive_init\n");
+-			return -1;
+-		}
+-		/* responses have same msg id as pkt they are responding to.*/
+-		send_pkt->msgid=recv_kcom_pkt->msgid;
+-
+-		send_pkt->hpid=recv_kcom_pkt->hpid;
+-		send_pkt->resp=recv_kcom_pkt->resp;
+-
+-		/* spin_lock();*/
+-		saddr=(struct sockaddr_in *)&node->addr;
+-		if (saddr->sin_addr.s_addr==LO_IP) { /* this allows loopback migration to work.*/
+-			send_tsk=kcom_home_task_find(recv_kcom_pkt->hpid);
+-		} else {
+-			send_tsk=kcom_task_create(node, 0);
+-			/* spin_unlock();*/
+-			if (!send_tsk) {
+-				printk(KERN_ERR "ERROR: creating new kcom_task.\n");
+-				return -1;
+-			}
+-			send_tsk->hpid=recv_kcom_pkt->hpid;
+-		}
+-
+-		/* send_pkt->rpid=0; // set this to 0 or if same process migrates second time here, it'll keep old rpid*/
+-		user_thread(mig_handle_migration, &rpid, 0);
+-
+-		while (rpid==0) {
+-			schedule_timeout_interruptible(HZ/1000);
+-		}
++	while (0 == rpid)
++		schedule_timeout_interruptible(1);
+ 
+-		if (rpid < 0) {
+-			printk(KERN_ERR "Error creating new process.\n");
+-			send_pkt->type=MIG_INIT | PKT_NACK | REM_FLG;
++	if (rpid < 0)
++		return rpid;
+ 
+-			kcom_add_packet(send_tsk, send_pkt);
+-			return -ENOMEM;
+-
+-		}
++	tsk=kcom_task_create(node, rpid);
++	if (!tsk) {
++	    OMBUG("ERROR: Unable to create task.\n");
++	    return -ENOMEM;
++	}
+ 
+-		send_pkt->rpid=rpid;
+-		send_tsk->rpid=rpid;
++	tsk->hpid = pkt->hpid;
++	tsk->rpid = rpid;
+ 
+-		kcom_add_packet(send_tsk, send_pkt);
++	kcom_send_resp(tsk->task, sizeof(pid_t), (char *)&rpid, pkt);
+ 
+-	}
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(mig_do_receive_init);
+@@ -207,29 +150,17 @@
+  * Description:
+  *    Receives the process mmap info.
+  **/
+-KCOMD_NSTATIC int mig_do_receive_mm(task_t *p, struct kcom_pkt *pkt)
++int mig_do_receive_mm(struct kcom_task *tsk, const struct kcom_pkt * const pkt)
+ {
+-
++	struct task_struct *p = tsk->task;
+ 	OMDEBUG_MIG(3, "pid %d receiving mm struct packet\n", p->pid);
+ 
+-
+-	if (!pkt || sizeof(struct omp_mig_mm) != pkt->len) goto error_packet;
+-
+ 	down_write(&p->mm->mmap_sem);
+-	memcpy(&p->mm->start_code, pkt->data, pkt->len);
++	memcpy(&p->mm->start_code, pkt->data, pkt->data_len);
+ 	p->mm->exec_vm=0; /* MSD debug*/
+ 	up_write(&p->mm->mmap_sem);
+ 
+-
+-
+-	kcom_send_ack(p, pkt);
+ 	return 0;
+-
+-error_packet:
+-	printk(KERN_ERR "openMosix: (mm receive) packet NULL or size mismatched\n");
+-	kcom_send_nack(p, pkt);
+-	return -1;
+-
+ }
+ EXPORT_SYMBOL_GPL(mig_do_receive_mm);
+ 
+@@ -239,8 +170,9 @@
+  * Description:
+  *    Receives the process vma info.
+  **/
+-KCOMD_NSTATIC int mig_do_receive_vma(task_t *p, struct kcom_pkt *pkt)
++int mig_do_receive_vma(struct kcom_task *tsk, const struct kcom_pkt * const pkt)
+ {
++	task_t *p = tsk->task;
+ 	struct omp_mig_vma *a;
+ 	unsigned long result, prot, flags;
+ 	struct file *file = NULL;
+@@ -250,60 +182,53 @@
+ 
+  	OMDEBUG_MIG(3, "pid %d receiving vmas struct packet\n", p->pid);
+ 
+-	if (!pkt || sizeof(struct omp_mig_vma) != pkt->len) goto error_packet;
+-
+ 	a = (struct omp_mig_vma *)pkt->data;
+ 
+-	/* FIXME : Temporary disabled */
+-		if (0 && a->vm_file) {
+-			file = (task_test_dflags(p, DREMOTE))
+-				? task_rfiles_get(p, a->vm_file, -1, a->i_size)
+-				: a->vm_file;
+-		}
++	if (a->vm_file) {
++		file = (task_test_dflags(p, DREMOTE))
++			? task_rfiles_get(p, a->vm_file, -1, a->i_size)
++			: a->vm_file;
++	}
+ 
+-		/* unconvert prot+flags: */
+-		flags = MAP_FIXED | MAP_PRIVATE;
+-		prot = 0;
+-		if (a->vm_flags & VM_GROWSDOWN)
+-			flags |= MAP_GROWSDOWN;
+-		if (a->vm_flags & VM_DENYWRITE)
+-			flags |= MAP_DENYWRITE;
+-		if (a->vm_flags & VM_EXECUTABLE)
+-			flags |= MAP_EXECUTABLE;
+-
+-		/* copy VM_(READ|WRITE|EXEC) bits to prot */
+-		prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));
+-		prot = (VM_READ | VM_WRITE | VM_EXEC);
+-
+-		/* mmap stuff */
+-		down_write(&p->mm->mmap_sem);
+-		result = do_mmap_pgoff(file, a->vm_start, a->vm_size, prot,
+-							flags, a->vm_pgoff);
+-		up_write(&p->mm->mmap_sem);
+-
+-		if (IS_ERR((const void *) result)) {
+-			ret = PTR_ERR((const void *) result);
+-			goto error_packet;
+-		}
++	/* unconvert prot+flags: */
++	flags = MAP_FIXED | MAP_PRIVATE;
++	prot = 0;
++	if (a->vm_flags & VM_GROWSDOWN)
++		flags |= MAP_GROWSDOWN;
++	if (a->vm_flags & VM_DENYWRITE)
++		flags |= MAP_DENYWRITE;
++	if (a->vm_flags & VM_EXECUTABLE)
++		flags |= MAP_EXECUTABLE;
++
++	/* copy VM_(READ|WRITE|EXEC) bits to prot */
++	prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));
++	prot = (VM_READ | VM_WRITE | VM_EXEC);
+ 
+-		if (a->vm_flags & VM_READHINTMASK) {
++	/* mmap stuff */
++	down_write(&p->mm->mmap_sem);
++	result = do_mmap_pgoff(file, a->vm_start, a->vm_size, prot,
++			flags, a->vm_pgoff);
++	up_write(&p->mm->mmap_sem);
+ 
+-			int behavior = (a->vm_flags & VM_SEQ_READ)
+-					? MADV_RANDOM
+-					: MADV_SEQUENTIAL;
++	if (IS_ERR((const void *) result)) {
++		ret = PTR_ERR((const void *) result);
++		OMBUG("Can't mmap on process[%u]\n", p->pid);
++		return ret;
++	}
+ 
+-			ret=sys_madvise(a->vm_start, a->vm_size, behavior);
+-			if (result) goto error_packet;
++	if (a->vm_flags & VM_READHINTMASK) {
+ 
+-		}
++		int behavior = (a->vm_flags & VM_SEQ_READ)
++			? MADV_RANDOM
++			: MADV_SEQUENTIAL;
++
++		ret=sys_madvise(a->vm_start, a->vm_size, behavior);
++		if (ret < 0)
++			OMBUG("sys_madvise returned an error\n");
++	}
+ 
+-	kcom_send_ack(p, pkt);
+ 	return ret;
+ 
+-error_packet:
+-	printk(KERN_ERR "openMosix:(vma receive) packet NULL, size mismatched, or corrupted\n");
+-	kcom_send_nack(p, pkt);
+-	return ret;
+ }
+ EXPORT_SYMBOL_GPL(mig_do_receive_vma);
+ 
+@@ -313,11 +238,10 @@
+  *
+  * Description:
+  *    Receives one process memory page.
+- *    FIXME:   remote node segfaults on system calls because
+- *    of a bug in this function.   HELP!!!
+  **/
+-KCOMD_NSTATIC int mig_do_receive_page(task_t *p, struct kcom_pkt *pkt)
++int mig_do_receive_page(struct kcom_task *tsk, const struct kcom_pkt *const pkt)
+ {
++	task_t *p = tsk->task;
+ 	struct mm_struct *mm = p->mm;
+ 	struct vm_area_struct *vma;
+ 	struct page *recv_page = NULL;
+@@ -325,48 +249,29 @@
+ 	void *kmpage;
+ 
+  	/*
+- 	FIXME:   another way?
+- 	Must be done from process context.
++ 	FIXME:   the 'addr' is kind of a hack ...
+  	*/
+ 
+  	OMDEBUG_MIG(3, "pid %d receiving pages struct packet\n", p->pid);
+-	if (!pkt || PAGE_SIZE != pkt->len) goto error_packet_size;
+ 
+ 	addr=pkt->addr;
+ 	vma = find_vma(mm, addr);
+ 	if (!vma) {
+ 		OMBUG("vma not found (addr: %p)\n", (void *) addr);
+-		goto error_packet;
++		return -ENODEV;
+ 	}
+ 
+ 	recv_page=alloc_zeroed_user_highpage(vma, addr);
+ 	kmpage=kmap(recv_page);
+-	memcpy(kmpage, pkt->data, pkt->len);
++	memcpy(kmpage, pkt->data, pkt->data_len);
+ 	kunmap(recv_page);
+ 
+ 	/* add the page at correct place */
+-
+-
+ 	down_write(&mm->mmap_sem);
+ 	install_arg_page(vma, recv_page, pkt->addr);
+ 	up_write(&mm->mmap_sem);
+ 
+-	kcom_send_ack(p, pkt);
+ 	return 0;
+-
+-error_packet_size:
+-	printk(KERN_ERR "openMosix: (page receive) packet NULL or size mismatch\n");
+-
+-error_packet:
+-
+-	printk(KERN_ERR "receive page failed at addr %p\n", (void *) addr);
+-	OMBUG("receive page failed at addr %p\n", (void *) addr);
+-	if (recv_page) __free_page(recv_page);
+-
+-	kcom_send_nack(p, pkt);
+-
+-	return -1;
+-
+ }
+ 
+ /**
+@@ -377,30 +282,21 @@
+  * Description:
+  *    Receive floating points registers
+  **/
+-KCOMD_NSTATIC int mig_do_receive_fp(task_t *p, struct kcom_pkt *pkt)
++int mig_do_receive_fp(struct kcom_task *tsk, const struct kcom_pkt *const pkt)
+ {
++	task_t *p = tsk->task;
+ 	struct omp_mig_fp *fp;
+ 
+  	OMDEBUG_MIG(3, "pid %d receiving fp struct packet\n", p->pid);
+ 
+-	if (!pkt || sizeof(struct omp_mig_fp) != pkt->len) goto error_packet;
+-
+-	fp=(void *)pkt->data;
++	fp = (struct omp_mig_fp *)pkt->data;
+ 
+ 	OMDEBUG_MIG(2, "MIG_FP\n");
+ 	set_used_math();
+ 
+ 	arch_mig_receive_fp(p, fp);
+ 
+-	kcom_send_ack(p, pkt);
+-
+-
+ 	return 0;
+-
+-error_packet:
+-	printk(KERN_ERR "openMosix:(fp receive) packet NULL or size mismatched\n");
+-	kcom_send_nack(p, pkt);
+-	return -1;
+ }
+ 
+ /**
+@@ -414,16 +310,15 @@
+  * Description:
+  *    Receive normal registers, limits
+  **/
+-KCOMD_NSTATIC int mig_do_receive_proc_context(task_t *p, struct kcom_pkt *pkt)
++int mig_do_receive_proc_context(struct kcom_task *tsk, const struct kcom_pkt * const pkt)
+ {
+ 	struct omp_mig_task *m;
++	task_t *p = tsk->task;
+ 
+  	OMDEBUG_MIG(3, "pid %d receiving proc_context\n", p->pid);
+-	if (!pkt || sizeof(struct omp_mig_task) != pkt->len) goto error_packet;
+ 
+ 	m=(struct omp_mig_task *)pkt->data;
+ 
+-	OMDEBUG_MIG(1, "MIG_TASK\n");
+ 	/* arch specific proc receive context */
+ 	arch_mig_receive_proc_context(p, m);
+ 
+@@ -455,14 +350,13 @@
+  	p->personality = m->personality;
+ 	arch_pick_mmap_layout(p->mm);
+ 
+-	kcom_send_ack(p, pkt);
++	task_clear_dflags(p, DINCOMING);
++	flush_tlb_mm(p->mm); /* for all the new pages */
+ 
+-	return 0;
++	set_current_state(TASK_RUNNING);
+ 
+-error_packet:
+-	printk(KERN_ERR "openMosix:(proc_context receive) packet NULL or size mismatched\n");
+-	kcom_send_nack(p, pkt);
+-	return -1;
++	kcom_send_ack(p, pkt);
++	return 0;
+ }
+ 
+ /**
+@@ -475,116 +369,76 @@
+ int mig_do_receive(task_t *p)
+ {
+ 	struct kcom_task *mytsk=NULL;
+-	struct kcom_pkt *pkt, *pkt_next;
++	struct kcom_pkt *pkt;
+ 	int ret = 0;
+-	int waiting_time = 0;
++	int retries = 0;
+ 
++	/* Sanity Check */
+ 	if (!p) {
+ 	    OMBUG("Null task !\n");
+ 	    return -ENODEV;
+ 	}
++wait_for_task:
+ 
+-	OMDEBUG_MIG(2, "pid %d receiving process ??\n", p->pid);
+-
+-	task_set_dflags(p, DINCOMING);
+-	/* clear_used_math();*/
++	mytsk = kcom_task_find(p->pid);
+ 
+-	/* Wait for kcomd to set up the kcom_task struct*/
+-	while (mytsk==NULL) {
+-		waiting_time++;
+-		schedule_timeout_interruptible(HZ/1000);
+-		mytsk=kcom_task_find(p->pid);
+-		#ifdef OPENMOSIX_DEBUG
+-		if (0 == (waiting_time%1000)) {
+-		    OMDEBUG_MIG(3, "pid %d waiting kcomd to do his work ! %d HZ\n", p->pid, waiting_time);
++	if (!mytsk) {
++		if (60*HZ<retries++) {
++			OMBUG("task not created... \n");
++			return -ETIMEDOUT;
+ 		}
+-		#endif
+-		/* Preventing infinite loops */
+-		if (60000 < waiting_time) {
+- 			OMBUG("kcomd task creation timeout exceeded, dying ... \n");
+-			ret = -1;
+-			goto protocol_exit;
++
++		if (0 == retries % 1000) {
++			printk(KERN_WARNING"[oM] waiting for kcomd_thread task creation... %ds\n", retries%1000);
+ 		}
++		set_task_state(p, TASK_INTERRUPTIBLE);
++		schedule_timeout(1);
++		goto wait_for_task;
+ 	}
+ 
+-	ret = 0;
++
++	task_set_dflags(p, DINCOMING);
++	OMDEBUG_MIG(2, "pid %d receiving process ??\n", p->pid);
++
+ 	/* Initialize remote proc's whereto*/
+ 	if (task_test_dflags(p, DREMOTE)) {
+ 		memcpy(p->om.whereto, &mytsk->node->addr, sizeof(mytsk->node->addr));
+ 	}
+ 
+ 	OMDEBUG_MIG(3, "pid %d kcomd did his work, all fine !\n", p->pid);
+-	set_current_state(TASK_INTERRUPTIBLE);
+-
+-	write_lock(&mytsk->in_packs_lock);
+-	while (1) {
+-
+-		if (list_empty(&mytsk->in_packs)) goto protocol_sleep;
+-
+-		list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+-
+-			ret = 0;
+-			OMDEBUG_PROTOCOL(2, "receving packet type=0x%d\n", pkt->type);
+-			switch (pkt->type & MIG_MASK) {
+-
+-				case MIG_MM:
+-					ret = mig_do_receive_mm(p, pkt);
+-					break;
+-
+-				case MIG_VMA:
+-					ret = mig_do_receive_vma(p, pkt);
+-					break;
+-
+-				case MIG_PAGE:
+-					ret = mig_do_receive_page(p, pkt);
+-					break;
+-
+-				case MIG_FP:
+-					ret = mig_do_receive_fp(p, pkt);
+-					break;
+-
+-				/* this is the last thing we do in the chain of receiving,
+-				 * so return 0 after we're done */
+-				case MIG_TASK:
+-					OMDEBUG_MIG(3, "pid %d last packet received (context)!\n", p->pid);
+-					ret=mig_do_receive_proc_context(p, pkt);
+-
+-					task_clear_dflags(p, DINCOMING);
+-					flush_tlb_mm(p->mm); /* for all the new pages */
+-					kcom_pkt_delete(pkt);
+-
+-					if (!ret) set_current_state(TASK_RUNNING);
+ 
+-					goto protocol_exit;
++	/* Handle the migration protocol */
+ 
+-					break;
+-
+-				default:
+-					OMBUG("(receive) [pid: %u] Unknown packet type 0x%x received.\n", p->pid, pkt->type);
+-
+-					ret = -1; /* Should exit on unknown packet !! */
+-					break;
+-
+-			}
+-			kcom_pkt_delete(pkt);
+-			if (ret)
+-				goto protocol_exit;
+-
+-		}
++handle_migration:
++	set_current_state(TASK_INTERRUPTIBLE);
+ 
+-	/* This label is inside the while, yes, but it allows much more readability ... */
+-	protocol_sleep:
+-		set_current_state(TASK_INTERRUPTIBLE);
+-		schedule();
++	/* Receiving packet */
++	ret = __kcom_wait_for_any_msg(mytsk, &pkt);
++	if (ret < 0) {
++		printk(KERN_ERR "pid[%d] Error %d while waiting for migration packet\n", p->pid, ret);
++		return ret;
++	}
++	/* Executing packet */
++	if (__is_kcom_l2_pkt_type(pkt->type))
++		ret = kcomd_do_l2_state_machine(mytsk, pkt);
++	else
++		printk(KERN_ERR"[oM] received unexpected message ... dropping\n");
++
++	/* Deleting packet */
++	kcom_pkt_delete(pkt);
++
++	/* Checking error */
++	if (ret<0) {
++		printk(KERN_ERR"[oM] pid[%d] can not execute pkt request ... aborting\n", p->pid);
++		return ret;
+ 	}
+ 
++	/* Looping till the process has migrated */
++	if(task_test_dflags(p, DINCOMING))
++		goto handle_migration;
+ 
+-protocol_exit:
+-	write_unlock(&mytsk->in_packs_lock);
+- 	OMDEBUG_MIG(3, "pid %d returning, ret=%d!\n", p->pid, ret);
+-
+-	return ret;
+-
++ 	OMDEBUG_MIG(3, "Process[%d] received\n", p->pid);
++	return 0;
+ }
+ 
+ /**
+@@ -613,7 +467,7 @@
+ 	task_set_dflags(p, DREMOTE);
+ 	*pid=p->pid;
+ 
+-	OM_VERBOSE_MIG("[OM] receiving new process\n");
++	OM_VERBOSE_MIG("[oM] receiving new process\n");
+ 
+ 	error = mig_do_receive(p);
+ 	if (error)
+@@ -639,8 +493,7 @@
+ 
+ 
+ fail:
+-	OMBUG(KERN_ERR "mig_handle_migration failed with %d\n", error);
+-	OMBUG("failed\n");
++	printk(KERN_ERR "pid[%d] mig_handle_migration failed with %d\n", p->pid, error);
+ 	do_exit(SIGKILL);
+ 	/*NOTREACHED*/
+ }
+Index: linux/hpc/remote.c
+===================================================================
+--- linux.orig/hpc/remote.c	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/remote.c	2006-12-19 17:00:23.000000000 +0100
+@@ -36,12 +36,6 @@
+ #include <asm/unistd.h>
+ 
+ 
+-NORET_TYPE void remote_disappear(void)
+-{
+-	do_exit(SIGKILL);
+-	/*NOTREACHED*/
+-}
+-
+ struct vm_operations_struct remote_inode_mmap =
+ {
+ 	.nopage = filemap_nopage,
+@@ -62,20 +56,23 @@
+ 	int error;
+ 	void *kmpage;
+ 	struct omp_page_req m;
++	struct kcom_pkt *pkt;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)current->om.whereto;
+ 
+ 	kmpage = kmap(page);
+ 
+ 	m.file = rfiles_inode_get_file(file->f_dentry->d_inode);
+ 	m.offset = page->index << PAGE_CACHE_SHIFT;
+ 
+-	error = comm_send_hd(current->om.contact, REM_PAGE, &m, sizeof(m));
+-	if (error < 0)
+-		goto error;
++	error = kcom_send_command(KCOM_L2_REQ_GET_PAGE, sizeof(m)
++				 ,(char *)&m, 0, dest_ptr, &pkt);
+ 
+-	error = comm_recv(current->om.contact, kmpage, PAGE_SIZE);
+ 	if (error < 0)
+ 		goto error;
+-	
++
++	memcpy(kmpage, pkt->data, PAGE_SIZE);
++	kcom_pkt_delete(pkt);
++
+ 	SetPageUptodate(page);
+ 	kunmap(page);
+ 	return 0;
+@@ -91,9 +88,11 @@
+ 		unsigned long fd, unsigned long pgoff)
+ {
+ 	struct omp_mmap_req m;
+-	struct omp_mmap_ret r;
++	struct omp_mmap_ret *r;
++	struct kcom_pkt *pkt;
+ 	struct file *file;
+ 	long error;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)current->om.whereto;
+ 
+ 	m.addr = addr;
+ 	m.len = len;
+@@ -102,116 +101,55 @@
+ 	m.fd = fd;
+ 	m.pgoff = pgoff;
+ 
+-	error = comm_send_hd(current->om.contact, REM_MMAP, &m, sizeof(m));
+-	if (error < 0)
+-		goto out;
++	error = kcom_send_command(KCOM_L2_REQ_MMAP, sizeof(m), (char*)&m, 0, dest_ptr, &pkt);
+ 
+-	error = comm_recv(current->om.contact, &r, sizeof(r));
+ 	if (error < 0)
+ 		goto out;
+ 
+-	file = task_rfiles_get(current, r.file, -1, r.isize);
++	r = (struct omp_mmap_ret*) pkt->data;
++
++	file = task_rfiles_get(current, r->file, -1, r->isize);
+ 
+ 	down_write(&current->mm->mmap_sem);
+ 	error = do_mmap_pgoff(file, addr, len, prot, flags, pgoff);
+ 	up_write(&current->mm->mmap_sem);
+ 
++	kcom_pkt_delete(pkt);
++
+ out:
+ 	return error;
+ }
+ 
+ /**
+- * remote_wait - wait @expect packet from deputy
++ * remote_do_signal - Handles signals from deputy to remote
+  **/
+-int remote_wait(task_t *p, int expect, void *data, int len)
+-{
+-	int error;
+-	struct omp_req req;
+ 
+-	error = comm_recv(p->om.contact, &req, sizeof(req));
+-	if (error < 0)
+-		goto comm_error;
+-
+-	if (req.type != expect) {
+-		OMBUG("unexpected [%x] expecting [%x]\n", req.type, expect);
+-		return -1;
+-	}
+-
+-	if (req.dlen != len) {
+-		OMBUG("unexpected size\n");
+-		return -1;
+-	}
+-
+-	error = comm_recv(p->om.contact, data, len);
+-	if (error < 0)
+-		goto comm_error;
+-	return 0;
+-comm_error:
+-	OMBUG("unexpected error %d\n", error);
+-	return -1;
+-}
+-
+-int remote_do_signal(task_t *p,  struct kcom_pkt *pkt)
++int remote_do_signal(struct kcom_node* node, const struct kcom_pkt * const pkt)
+ {
+-	struct omp_signal s;
+-	unsigned long flags;
++        task_t *p;
++	struct omp_signal *s;
+ 	int error;
+-	struct kcom_pkt *send_pkt;
+-	struct kcom_task *send_tsk;
+-	// task_t *kcomd_task;
+ 
+-	memcpy(&s, pkt->data, pkt->len);
+-	// error = comm_recv(p->om.contact, &s, sizeof(s));
++        struct kcom_task *tsk;
+ 
++        s = (struct omp_signal*) pkt->data;
++        OMDEBUG_KCOMD(1, "Received Signal %d From deputy\n", s->signr);
+ 
+-	spin_lock_irqsave(&p->sighand->siglock, flags);
+-	error = __group_send_sig_info(s.signr, &s.siginfo, p);
+-	spin_unlock_irqrestore(&p->sighand->siglock, flags);
++        tsk = __find_task_for_packet(pkt, node, NULL);
+ 
++        if (!tsk)
++                return -ENODEV;
+ 
+-	send_tsk=kcom_task_find(p->pid);
+-	send_pkt=kcom_pkt_create(0, MIG_SYSCALL | PKT_ACK | DEP_SIGNAL | REM_FLG, PKT_ACK, NULL);
+-	send_pkt->msgid=pkt->msgid;
+-	send_pkt->hpid=send_tsk->hpid;
+-	send_pkt->rpid=send_tsk->rpid;
+-	send_pkt->resp=pkt->resp;
+-
+-	return kcom_add_packet(send_tsk, send_pkt);
+-}
+-
+-/**
+- * remote_do_comm - process a communication
+- **/
+-int remote_do_comm(task_t *p)
+-{
+-	int error;
+-	struct omp_req req;
+-
+-	error = comm_recv(p->om.contact, &req, sizeof(req));
+-	if (error < 0)
+-		goto fail;
++        p = tsk->task;
+ 
+-	switch (req.type) {
+-	case DEP_SIGNAL:
+-		#if 0
+-		error = remote_do_signal(p);
+-		#endif
+-		break;
+-	case DEP_COMING_HOME:
+-		error = task_remote_expel(p);
+-		break;
+-	default:
+-		printk(KERN_ERR "remote_do_comm(): got default\n");
+-		goto fail;
+-	}
++	spin_lock(&p->sighand->siglock);
++	error = __group_send_sig_info(s->signr, &s->siginfo, p);
++	spin_unlock(&p->sighand->siglock);
+ 
+-	return 0;
+-fail:
+-	OMBUG("failed\n");
+-	do_exit(-1);
+-	return -1;
++	return error;
+ }
+ 
++
+ /**
+  * remote_do_syscall - process a remote syscall
+  * @n:		the syscall number
+@@ -224,36 +162,40 @@
+ 	struct omp_syscall_ret r;
+ 	int i;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
++        struct kcom_pkt* pkt;
++        int ret;
+ 
+ 
+ 	OMDEBUG_SYS(1, "[remote] remote syscall %d\n", n);
+ 
++	task_set_dflags(current, DSYSCALL);
++
+ 	s.n = n;
+ 	for (i = 0; i < NR_MAX_SYSCALL_ARG; i++)
+ 		s.arg[i] = arch_get_sys_arg(i, regs);
+ 
+-	kcom_send_with_ack(MIG_SYSCALL | REM_FLG, sizeof(s), (char *)&s, 0, dest_ptr);
+-
+-	// Set interruptible so we can sleep, but if the remote sends syscall info requests (COPY_TO/FROM_USER, etc), then we have to answer those before sleeping.
+-	set_current_state(TASK_INTERRUPTIBLE);
++        ret = kcom_send_command(KCOM_L2_MIG_SYSCALL, sizeof(s), (char *)&s, 0, dest_ptr, &pkt);
+ 
+-	OMDEBUG_SYS(3, "[remote] waiting deputy answer\n");
++        if (ret < 0)
++                goto error;
+ 
+-	// if exitting, no need for remote_handle_user
+-	if ((n != __NR_exit_group) && (n != __NR_exit))
+-		r.ret = remote_handle_user(p, REM_SYSCALL|REPLY);
+-	else { // exit
+-		goto error;
+-	}
++        memcpy(&r, pkt->data, sizeof(struct omp_syscall_ret));
++        kcom_pkt_delete(pkt);
+ 
++        OMDEBUG_SYS(2, "[remote] got syscall answer %ld\n", r.ret);
+ 
+-	// OMDEBUG_SYS(2, "[remote] sys[%d] = %ld\n", n, r.ret);
++        /* FIXME, __NR_exit_group and __NR_exit are special cases !! */
++	if (__NR_exit_group == n || __NR_exit == n) {
++		do_exit(s.arg[0]);
++	}
+ 
++	task_clear_dflags(current, DSYSCALL);
+ 	return r.ret;
+ 
+ error:
+-	remote_disappear();
+-	return -1;
++	task_clear_dflags(current, DSYSCALL);
++        printk(KERN_ERR "Error %d while executing remote syscall %d\n", ret, n);
++	return ret;
+ }
+ 
+ /**
+@@ -264,50 +206,43 @@
+ 	      int __user *parent_tidptr, int __user *child_tidptr)
+ {
+ 	task_t *child;
+-	struct socket *childsock;
+ 	struct omp_fork_req m;
+-	struct omp_fork_ret r;
++	struct omp_fork_ret *r;
+ 	int error, ret;
+-	struct sockaddr sa;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)current->om.whereto;
++        struct kcom_pkt *pkt;
+ 
+ 	printk(KERN_ERR "[REMOTE] do_fork\n");
+ 
+-	sockaddr_inherit(current->om.contact, &sa);
+-
+ 	m.clone_flags = clone_flags;
+ 	m.stack_start = stack_start;
+ 	m.stack_size = stack_size;
+ 	memcpy(&m.regs, regs, sizeof(struct pt_regs));
+ 
+-	childsock = comm_setup_listen(&sa);
+-	if (!childsock)
+-		goto fail;
++        error = kcom_send_command(KCOM_L2_REQ_DO_FORK, sizeof(m), (char*)&m, 0, dest_ptr, &pkt);
+ 
+-	if (comm_getname(childsock, &sa, 0) < 0)
++	if (error < 0)
+ 		goto fail;
+ 
+-	memcpy(&m.sockaddr, &sa, sizeof(struct sockaddr));
++        r = (struct omp_fork_ret*) pkt->data;
+ 
+-	error = comm_send_hd(current->om.contact, REM_FORK, &m, sizeof(m));
+-	if (error < 0)
+-		goto fail;
++	ret = do_fork(clone_flags, stack_start, regs, stack_size, parent_tidptr
++		     ,child_tidptr);
+ 
+-	ret = remote_wait(current, REM_FORK | REPLY, &r, sizeof(r));
+-	if (ret < 0)
+-		goto fail;
+-	ret = do_fork(clone_flags, stack_start, regs, stack_size, parent_tidptr,
+-								child_tidptr);
++        read_lock(&tasklist_lock);
+ 	child = find_task_by_pid(ret);
++        read_unlock(&tasklist_lock);
++
+ 	if (!child) {
+-		printk(KERN_ERR "error: child %d not found\n", r.pid);
++		printk(KERN_ERR "error: child %d not found\n", r->pid);
+ 		return -1;
+ 	}
+-	task_set_comm(child, childsock);
+ 
++        #warning "Should setup the hpid/rpid for this task here"
+ 	return ret;
+ fail:
+ 	OMBUG("failed\n");
+-	return -1;
++	return error;
+ }
+ 
+ /*
+@@ -342,12 +277,16 @@
+ long remote_do_execve(char __user * filename, char __user *__user *argv,
+ 		char __user *__user *envp, struct pt_regs * regs)
+ {
+-	struct omp_execve_req m;
++        #warning "remote_do_execve is not done yet"
++
++        struct omp_execve_req m;
+ 	struct omp_execve_ret r;
+ 	unsigned long p;
+ 	char *data, *ptr;
+ 	int error;
+ 	int sz;
++        struct kcom_pkt *pkt;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)current->om.whereto;
+ 
+ 	p = PAGE_SIZE * MAX_ARG_PAGES - sizeof(void *);
+ 	//m.filename = filename;
+@@ -364,6 +303,7 @@
+ 
+ 	memcpy(&m.regs, regs, sizeof(struct pt_regs));
+ 
++        #warning "Filename should be included in the structure itself ...
+ 	/* pack all data (filename, argv, envp) */
+ 	sz = m.filelen + m.argvlen + m.envplen + 3;
+ 	data = kmalloc(sz, GFP_KERNEL);
+@@ -389,21 +329,9 @@
+ 	*ptr++ = '\0';
+ 
+ 	/* send request */
+-	error = comm_send_hd(current->om.contact, REM_EXECVE, &m, sizeof(m));
+-	if (error < 0)
+-		goto error;
+-
+-	/* send packed data */
+-	error = comm_send(current->om.contact, data, sz);
+-	kfree(data);
+-	if (error < 0)
+-		goto error;
++        error = kcom_send_command(KCOM_L2_REQ_DO_EXECVE, sizeof(m)
++        			 ,(char*)&m, 0, dest_ptr, &pkt);
+ 
+-	error = remote_wait(current, REM_EXECVE | REPLY, &r, sizeof(r));
+-	if (error < 0)
+-		goto error;
+-
+-	return 0;
+ error:
+ 	return error;
+ }
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/migsend.c	2006-12-19 17:00:23.000000000 +0100
+@@ -41,58 +41,6 @@
+ #include <hpc/version.h>
+ #include <hpc/arch.h>
+ 
+-/* handle sending of migration request, and check answer */
+-int mig_send_hshake(task_t *p, struct socket *mlink, int type)
+-{
+-	struct omp_mig_handshake hshake, hshake_recv;
+-	int error;
+-
+-	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
+-	hshake.type = type;
+-	hshake.version = OPENMOSIX_VERSION;
+-	hshake.personality = p->personality;
+-
+-	error = comm_send(mlink, &hshake, sizeof(hshake));
+-        if (error < 0) {
+-		OMBUG("send failed: %d\n", error);
+-		return -1;
+-	}
+-
+-	error = comm_recv(mlink, &hshake_recv, sizeof(hshake_recv));
+-        if (error < 0) {
+-		OMBUG("recv failed %d\n", error);
+-                return -1;
+-        }
+-
+-	if (hshake_recv.type != (hshake.type | HSHAKE_REPLY)) {
+-		/* it's a no go ... */
+-		OMBUG("no go\n");
+-		return -1;
+-	}
+-
+-	return 0;
+-}
+-
+-static int mig_send_fp(task_t *p)
+-{
+-	struct omp_mig_fp m;
+-	struct sockaddr_in *dest_ptr;
+-
+-	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
+-
+-	dest_ptr=(void *)p->om.whereto;
+-	if (!used_math()) {
+-		return 0;
+-	}
+-
+-	arch_mig_send_fp(p, &m);
+-	if (task_test_dflags(p, DREMOTE))
+-		kcom_send_with_ack(MIG_FP | REM_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+-	else
+-		kcom_send_with_ack(MIG_FP | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+-	return 0;
+-}
+-
+ 
+ /**
+  * mig_send_mm
+@@ -103,18 +51,12 @@
+  **/
+ static int mig_send_mm(task_t *p)
+ {
+-	struct sockaddr_in *dest_ptr;
+-	int ret;
+-
+-	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++	struct sockaddr_in *dest_ptr=(void *)p->om.whereto;
+ 
+-	dest_ptr=(void *)p->om.whereto;
+-	if (task_test_dflags(p, DREMOTE))
+-		ret=kcom_send_with_ack(MIG_MM | REM_FLG, sizeof(struct omp_mig_mm), (char *)&p->mm->start_code, 0, dest_ptr);
+-	else
+-		ret=kcom_send_with_ack(MIG_MM | DEP_FLG, sizeof(struct omp_mig_mm), (char *)&p->mm->start_code, 0, dest_ptr);
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 
+-	return ret;
++	return kcom_send_command(KCOM_L2_MIG_MM, sizeof(struct omp_mig_mm)
++				,(char *)&p->mm->start_code, 0, dest_ptr, NULL);
+ }
+ 
+ static inline void mig_send_vma_file(task_t *p, struct vm_area_struct *vma,
+@@ -151,7 +93,7 @@
+ 	int ret = 0;
+ 	struct sockaddr_in *dest_ptr;
+ 
+-	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 
+ 	dest_ptr=(void *)p->om.whereto;
+ 	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
+@@ -165,14 +107,11 @@
+ 		if (vma->vm_file)
+ 			mig_send_vma_file(p, vma, &m);
+ 
+-		if (task_test_dflags(p, DREMOTE))
+-			ret=kcom_send_with_ack(MIG_VMA | REM_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+-		else
+-			ret=kcom_send_with_ack(MIG_VMA | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
++		ret = kcom_send_command(KCOM_L2_MIG_VMA, sizeof(m), (char *)&m, 0, dest_ptr, NULL);
+ 
+-		if (ret != 0) {
++		if (ret < 0) {
+ 			OMBUG("ERROR sending vmas\n");
+-			return -1;
++			return ret;
+ 		}
+ 	}
+ 	return ret;
+@@ -191,32 +130,43 @@
+ 	struct vm_area_struct * vma;
+ 	unsigned long addr;
+ 	struct sockaddr_in *dest_ptr;
+-        int type = MIG_PAGE;
++	int ret;
+ 
+-	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 
+ 	dest_ptr=(void *)p->om.whereto;
+-
+-        if (task_test_dflags(p, DREMOTE))
+-                type |= REM_FLG;
+-        else
+-                type |= DEP_FLG;
+-
+ 	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
+ 	{
+  		OMDEBUG_MIG(3, "+ checking vma %d\n", p->pid);
+ 		if (!(vma->vm_flags & VM_READ))
+ 			continue;
+- 		OMDEBUG_MIG(3, "+ VM_READ!  %d\n", p->pid);
+ 
++ 		OMDEBUG_MIG(3, "+ VM_READ!  %d\n", p->pid);
+ 		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE) {
+  			OMDEBUG_MIG(3, "++ sending page %d\n", p->pid);
+-                        kcom_send_with_ack(type, PAGE_SIZE, (char *)addr, addr, dest_ptr);
++                        ret = kcom_send_command(KCOM_L2_MIG_PAGE, PAGE_SIZE, (char *)addr, addr, dest_ptr, NULL);
++                        if (ret<0)
++                        	return ret;
+                 }
+ 	}
+ 	return 0;
+ }
+ 
++static int mig_send_fp(task_t *p)
++{
++	struct omp_mig_fp m;
++	struct sockaddr_in *dest_ptr;
++
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
++
++	dest_ptr=(void *)p->om.whereto;
++	if (!used_math()) {
++		return 0;
++	}
++
++	arch_mig_send_fp(p, &m);
++	return kcom_send_command(KCOM_L2_MIG_FP, sizeof(m), (char *)&m, 0, dest_ptr, NULL);
++}
+ 
+ /**
+  * mig_send_proc_context - Sends the 'important' part of the process context.
+@@ -227,7 +177,7 @@
+ 	struct omp_mig_task m;
+ 	struct sockaddr_in* dest_ptr;
+ 
+-	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 	dest_ptr=(void *)p->om.whereto;
+ 
+ 	m.ptrace = p->ptrace;
+@@ -265,12 +215,7 @@
+ 
+ 	arch_mig_send_proc_context(p, &m);
+ 
+-	if (task_test_dflags(p, DREMOTE))
+-		kcom_send_with_ack(MIG_TASK | REM_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+-	else
+-		kcom_send_with_ack(MIG_TASK | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+-
+-	return 0;
++	return kcom_send_command(KCOM_L2_MIG_TASK, sizeof(m), (char *)&m, 0, dest_ptr, NULL);
+ 
+ }
+ 
+@@ -283,46 +228,75 @@
+  **/
+ int mig_do_send(task_t *p)
+ {
++	int err = 0;
+ 	struct sockaddr_in* dest_ptr=(void *)p->om.whereto;
+ 	arch_mig_send_pre(p);
+ 
+-	if (!p) goto fail_mig;
++	if (!p)
++		goto fail_mig;
+ 
+ 	OMDEBUG_MIG(1, "mig_do_send migration of process %d\n", p->pid);
+ 
+ 	if (task_test_dflags(p, DREMOTE))  {
+-		if (kcom_send_with_ack(MIG_GO_HOME | REM_FLG, 0, NULL, 0, dest_ptr))
++		/* Informing the deputy that we come back */
++
++		err = kcom_send_command(KCOM_L2_MIG_GO_HOME, 0, NULL, 0, dest_ptr, NULL);
++
++		if (err < 0) {
++			printk(KERN_ERR "[oM] [%d] Can't inform deputy for coming back home\n", p->pid);
+ 			goto fail_mig;
++		}
+ 	} else {
+-		if (kcom_send_with_ack(MIG_INIT | DEP_FLG, 0, NULL, 0, dest_ptr))
++		/* Initiating new migration, and get the remote pid */
++
++		struct kcom_pkt *pkt;
++		struct kcom_task *tsk;
++
++		OMDEBUG_MIG(3, "Sending MIG_INIT command\n");
++
++		err = kcom_send_command(KCOM_L1_MIG_INIT, 0, NULL, 0, dest_ptr, &pkt);
++		if (err < 0)
++			goto fail_mig;
++
++		if (!pkt) {
++			err = -EINVAL;
+ 			goto fail_mig;
++		}
++
++		tsk = kcom_task_find(p->pid);
++		tsk->rpid = * ((pid_t*) pkt->data);
++
++		OMDEBUG_MIG(2, "Setting rpid to %d for pid %d\n"
++			   ,tsk->rpid, p->pid);
++
++		kcom_pkt_delete(pkt);
++
+ 	}
+ 
+-	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+-	if (mig_send_mm(p)) goto fail_mig;
++	if ((err = mig_send_mm(p)) < 0)
++		goto fail_mig;
+ 
+-	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+-	if (mig_send_vmas(p)) goto fail_mig;
++	if ((err = mig_send_vmas(p)) < 0)
++		goto fail_mig;
+ 
+-	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+-	if (mig_send_pages(p)) goto fail_mig;
++	if ((err = mig_send_pages(p)) < 0)
++		goto fail_mig;
+ 
+-	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+-	if (mig_send_fp(p)) goto fail_mig;
++	if ((err = mig_send_fp(p)) < 0)
++		goto fail_mig;
+ 
+-	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+-	if (arch_mig_send_specific(p)) goto fail_mig;
++	if ((err = arch_mig_send_specific(p)) < 0)
++		goto fail_mig;
+ 
+-	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+-	if (mig_send_proc_context(p)) goto fail_mig;
++	if ((err = mig_send_proc_context(p)) < 0)
++		goto fail_mig;
+ 
+-	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
++	OMDEBUG_MIG(3, "sending process[%d] done\n", p->pid);
+ 
+ 	arch_mig_send_post(p);
+ 
+-
+ 	return 0;
+ fail_mig:
+-	OMBUG("failed\n");
+-	return -1;
++	printk(KERN_ERR"[oM] Migration of process[%u] failed with error %d\n", p->pid, err);
++	return err;
+ }
+Index: linux/include/asm-generic/errno.h
+===================================================================
+--- linux.orig/include/asm-generic/errno.h	2006-12-19 16:56:06.000000000 +0100
++++ linux/include/asm-generic/errno.h	2006-12-19 17:00:23.000000000 +0100
+@@ -106,4 +106,7 @@
+ #define	EOWNERDEAD	130	/* Owner died */
+ #define	ENOTRECOVERABLE	131	/* State not recoverable */
+ 
++/* OpenMosix codes */
++#define ENACKED		270	/* openMosix protocol specific NACK received */
++
+ #endif
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/deputy.c	2006-12-19 17:00:23.000000000 +0100
+@@ -34,30 +34,14 @@
+ #include <hpc/prototype.h>
+ #include <hpc/hpc.h>
+ 
+-NORET_TYPE void deputy_die_on_communication(void)
+-{
+-	printk(KERN_ERR "deputy communication died.\n");
+-	do_exit(SIGKILL);
+-}
+-
+ /**
+  * deputy_do_syscall - process a syscall coming from remote
+  **/
+-static int deputy_do_syscall(task_t *p, struct kcom_pkt *pkt)
++int deputy_do_syscall(struct kcom_task *tsk, const struct kcom_pkt *const pkt)
+ {
++        task_t *p = tsk->task;
+ 	struct omp_syscall_req *s;
+ 	struct omp_syscall_ret r;
+-	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+-
+-
+-	if (sizeof(struct omp_syscall_req) != pkt->len) {
+-		OMBUG("data size of %d does not match expected %lu\n"
+-		     ,pkt->len, sizeof(struct omp_syscall_req));
+-		kcom_send_nack(p, pkt);
+-		return -EFAULT;
+-	}
+-
+-	kcom_send_ack(p, pkt);
+ 
+ 	s = (struct omp_syscall_req*) pkt->data;
+ 	
+@@ -66,91 +50,79 @@
+ 	/* do the syscall and put reply in r */
+ 	r.ret = arch_exec_syscall(s->n, (syscall_parameter_t *) &s->arg);
+ 	
+-	kcom_send_with_ack(MIG_SYSCALL | PKT_NEW_MSG | SYSCALL_DONE | DEP_FLG, 0, NULL, r.ret, dest_ptr);
+-
+-
+-	return 0;
++        return kcom_send_resp(p, sizeof(struct omp_syscall_ret), (char*)&r, pkt);
+ }
+ 
+ /**
+  * deputy_do_fork - process a fork coming from remote
+  **/
+ 
+-#if 0
+-static int deputy_do_fork(task_t *p)
++int deputy_do_fork(struct kcom_task *tsk, const struct kcom_pkt *const pkt)
+ {
+-	int error;
+-	struct omp_fork_req m;
++        task_t *p = tsk->task;
++	struct omp_fork_req *m;
+ 	struct omp_fork_ret r;
+ 	task_t *child;
+-	struct socket *childsock;
+ 
+-	error = comm_recv(p->om.contact, &m, sizeof(m));
+-	if (error < 0)
+-		return -1;
++        OMDEBUG_SYS(1, "[deputy] remote fork\n");
+ 
+-	childsock = comm_setup_connect(&m.sockaddr, 0);
+-	if (!childsock)
+-		return -1;
++        m = (struct omp_fork_req*) pkt->data;
+ 
+-	r.pid = do_fork(m.clone_flags, m.stack_start, &m.regs, m.stack_size,
++	r.pid = do_fork(m->clone_flags, m->stack_start, &m->regs, m->stack_size,
+ 						0, 0);
+ 
++        read_lock(&tasklist_lock);
+ 	child = find_task_by_pid(r.pid);
++        read_unlock(&tasklist_lock);
++
+ 	if (!child) {
+-		printk(KERN_ERR "error: child %d not found\n", r.pid);
+-		return -1;
++		printk(KERN_ERR "[oM] error: child %d not found\n", r.pid);
++		kcom_send_nack(p, pkt);
++		return -ENODEV;
+ 	}
+ 	r.tgid = child->tgid;
+-	task_set_comm(child, childsock);
+-
+-	error = comm_send_hd(p->om.contact, REM_FORK | REPLY, &r, sizeof(r));
+-	if (error < 0)
+-		return -1;
+ 
+-	return 0;
++        return kcom_send_resp(p, sizeof(struct omp_fork_ret), (char*)&r, pkt);
+ }
+ 
+ /**
+  * deputy_do_readpage - process request a specific page
+  **/
+-static int deputy_do_readpage(task_t *p)
++int deputy_do_readpage(struct kcom_task *tsk, const struct kcom_pkt * const pkt)
+ {
+-	struct omp_page_req m;
++        task_t *p = tsk->task;
++	struct omp_page_req *m;
+ 	struct page *page = NULL;
+ 	struct vm_area_struct vma = { };
+ 	struct om_held_file *heldfile;
+ 	void *kmpage;
+-	int error;
+ 
+-	error = comm_recv(p->om.contact, &m, sizeof(m));
+-	if (error < 0)
+-		goto out;
++        OMDEBUG_SYS(1, "[deputy] remote read page\n");
++
++        m = (struct omp_page_req *) pkt->data;
+ 
+-	heldfile = task_heldfiles_find(p, m.file);
+-	if (!heldfile) {
+-		OMBUG("file not found\n");
++	heldfile = task_heldfiles_find(p, m->file);
++	if (!heldfile)
+ 		goto out;
+-	}
+ 		
+ 	memset(&vma, 0, sizeof(struct vm_area_struct));
+-	vma.vm_end = m.offset + PAGE_SIZE;
+-	vma.vm_file = (struct file *) m.file;
++	vma.vm_end = m->offset + PAGE_SIZE;
++	vma.vm_file = (struct file *) m->file;
+ 
+-	page = heldfile->nopage(&vma, m.offset, NULL);
++	page = heldfile->nopage(&vma, m->offset, NULL);
+ 	kmpage = kmap(page);
+ 
+-	error = comm_send(p->om.contact, kmpage, PAGE_SIZE);
+-	if (error < 0)
+-		goto out;
++        return kcom_send_resp(p, PAGE_SIZE, (char*)kmpage, pkt);
++
+ out:
++	OMBUG("file not found\n");
+ 	if (page) {
+ 		kunmap(page);
+ 		__free_page(page);
+ 	}
+-	return error;
++        kcom_send_nack(p, pkt);
++	return -EBADF;
+ }
+-#endif
+ 
+ /**
+  * deputy_do_mmap_pgoff - really do a mmap on deputy
+@@ -194,39 +166,35 @@
+ /**
+  * deputy_do_mmap - process request to mmap a file
+  **/
+-#if 0
+-static int deputy_do_mmap(task_t *p)
++int deputy_do_mmap(struct kcom_task *tsk, const struct kcom_pkt *const pkt)
+ {
+-	struct omp_mmap_req m;
++        task_t *p = tsk->task;
++	struct omp_mmap_req *m;
+ 	struct omp_mmap_ret r;
+ 	struct file *file;
+ 	int error;
+ 
+-	error = comm_recv(p->om.contact, &m, sizeof(m));
+-	if (error < 0)
+-		goto error;
++        m = (struct omp_mmap_req*) pkt->data;
+ 
+ 	error = -EBADF;
+-	file = fget(m.fd);
++	file = fget(m->fd);
+ 	if (!file)
+ 		goto out;
+ 	
+-	error = do_mmap_pgoff(file, m.addr, m.len, m.prot, m.flags, m.pgoff);
++	error = do_mmap_pgoff(file, m->addr, m->len, m->prot, m->flags, m->pgoff);
+ 	
+ 	r.file = file;
+ 	r.isize = file->f_dentry->d_inode->i_size;
+ 	fput(file);
+ out:
+ 	r.ret = error;
+-	
+-	error = comm_send(p->om.contact, &r, sizeof(r));
+-	if (error < 0)
+-		goto error;
+-	return 0;
+-error:
+-	return -1;
++	return kcom_send_resp(p, sizeof(struct omp_mmap_ret), (char*)&r, pkt);
++
+ }
+ 
++#if 0
++/* Not yet done, to be reviewed */
++
+ static void bprm_drop(struct linux_binprm *bprm)
+ {
+ 	int i;
+@@ -249,6 +217,7 @@
+ 	kfree(bprm);
+ }
+ 
++
+ static int __deputy_do_execve(struct linux_binprm *bprm,
+                               struct pt_regs * regs)
+ {
+@@ -269,9 +238,9 @@
+ 	return retval;
+ }
+ 
+-struct linux_binprm *deputy_setup_bprm(char * filename,
+-                              int argc, char **argv,
+-                              int envc, char **envp)
++static struct linux_binprm *deputy_setup_bprm(char * filename,
++		                              int argc, char **argv,
++		                              int envc, char **envp)
+ {
+ 	struct linux_binprm *bprm;
+ 	struct file *file;
+@@ -335,35 +304,37 @@
+ 	return ERR_PTR(retval);
+ }
+ 
++#endif
+ /**
+  * deputy_do_execve - process request to execve a new executable
+  **/
+-static int deputy_do_execve(task_t *p)
++int deputy_do_execve(struct kcom_task* tsk, const struct kcom_pkt *const pkt)
+ {
+-	struct omp_execve_req m;
++
++	OMDEBUG_SYS(1, "[deputy] received do_execve -> FIXME: nacked for now\n");
++	#warning "FIXME: deputy_do_execve not implemented yet"
++	return kcom_send_nack(tsk->task, pkt);
++#if 0
++        task_t *p = tsk->task;
++	struct omp_execve_req *m;
+ 	struct omp_execve_ret r;
+ 	int error;
+-	char *filename;
+ 	char **argv, **envp;
+ 	struct linux_binprm *bprm;
+ 	int sz;
+ 	char *data = NULL;
+ 
+-	error = comm_recv(p->om.contact, &m, sizeof(m));
+-	if (error < 0)
+-		goto error;
++        m = (struct omp_execve_req*)pkt->data;
++
+ 
+-	sz = m.filelen + m.argvlen + m.envplen + 3;
++        /*FIXME the filename should be included in the packet */
++	sz = m->filelen + m->argvlen + m->envplen + 3;
+ 	data = kmalloc(sz, GFP_KERNEL);
+ 	if (!data)
+-		/* FIXME must reply to remote */
+-		return -ENOMEM;
+-	
+-	error = comm_recv(p->om.contact, data, sz);
+-	if (error < 0)
+ 		goto error;
+ 
+-	filename = data;
++        /* Should be receiving the filename */
++
+ 	argv = (char **) (data + m.filelen + 1);
+ 	envp = (char **) (data + m.filelen + m.argvlen + 2);
+ 
+@@ -376,115 +347,63 @@
+ 	if (error < 0)
+ 		goto error;
+ 
+-	comm_send_hd(p->om.contact, REM_EXECVE | REPLY, &r, sizeof(r));
++        return kcom_send_resp(p, sizeof(struct omp_execve_ret), &r, pkt);
+ 
+-	
+ error:
+-	kfree(data);
++        kcom_send_nack(p, pkt);
+ 	return error;
+-}
+-
+ #endif
++}
+ 
+ /**
+  * deputy_do_sigpending - process signal pending
+  **/
+-static inline void deputy_do_sigpending(task_t *p)
++void deputy_do_sigpending(task_t *p)
+ {
+ 	siginfo_t info;
+-
+-	#if 0
+ 	struct omp_signal s;
+-	struct sockaddr_in *dest_ptr=p->om.whereto;
+-	#endif
+-
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in*)p->om.whereto;
+ 	int signr;
++        int err;
+ 
+-	arch_do_signal(p);
+ 
++/*	arch_do_signal(p);*/
+ 
+-	printk(KERN_WARNING "%s does not yet know how to process signals ... \n", __FUNCTION__);
+ 
+-	while (signal_pending (p)) {
+-		signr = dequeue_signal(p, &p->blocked, &info);
++process_signal:
+ 
+-	/* FIXME:   was kinda working, not now. */
+-	#if 0
+-		if (signr != SIGKILL) {
+-			s.signr = signr;
+-			memcpy(&s.siginfo, &info, sizeof(siginfo_t));
++	spin_lock(&p->sighand->siglock);
++	if (!signal_pending(p))
++		goto exit_unlock;
+ 
+-			kcom_send_with_ack(MIG_SYSCALL | PKT_NEW_MSG | DEP_SIGNAL | DEP_FLG, sizeof(struct omp_signal), &s, 0, dest_ptr);
+-			printk("Signal %d sent to remote.\n", signr);
+-		} else
+-			printk("Signal %d discarded.\n", signr);
+-	#endif
++	signr = dequeue_signal(p, &p->blocked, &info);
++	spin_unlock(&p->sighand->siglock);
+ 
++	s.signr = signr;
++	memcpy(&s.siginfo, &info, sizeof(siginfo_t));
++	OMDEBUG_KCOMD(1, "Signal %d sent to remote.\n", signr);
++
++	err = kcom_send_command(KCOM_L1_DEP_SIGNAL, sizeof(struct omp_signal)
++	     		       ,(char*)&s, 0, dest_ptr, NULL);
++
++	if (err < 0)
++		printk(KERN_ERR"Error Sending signal %d\n", signr);
++
++	if (SIGKILL == signr) {
++		/* No need to send the rest */
++		while (signal_pending(p)) {
++		    dequeue_signal(p, &p->blocked, &info);
++		}
++		return;
+ 	}
+ 
+-	return;
++	goto process_signal;
+ 
+-}
+-
+-/**
+- * deputy_process_misc - process has receive an interrupt in communication
+- **/
+-static void deputy_process_misc(task_t *p)
+-{
+-	if (task_dreqs_pending(p))
+-		task_do_request();
+-
+-	spin_lock(&p->sighand->siglock);
+-	if (signal_pending(p)) {
+-		deputy_do_sigpending(p);
+-	}
++exit_unlock:
+ 	spin_unlock(&p->sighand->siglock);
+-}
+ 
+-#if 0
+-/**
+- * deputy_process_communication - process has receive communication in deputy
+- **/
+-static void deputy_process_communication(task_t *p)
+-{
+-	struct omp_req req;
+-	int error;
+-	
+-	error = comm_recv(p->om.contact, &req, sizeof(req));
+-	if (error < 0)
+-		deputy_die_on_communication();
+-
+-	switch (req.type)
+-	{
+-	case 0:
+-		deputy_die_on_communication();
+-		break;
+-	case REM_BRING_HOME:
+-		error = task_go_home(p);
+-		break;
+-	case REM_SYSCALL:
+-		error = deputy_do_syscall(p);
+-		break;
+-	case REM_FORK:
+-		error = deputy_do_fork(p);
+-		break;
+-	case REM_PAGE:
+-		error = deputy_do_readpage(p);
+-		break;
+-	case REM_MMAP:
+-		error = deputy_do_mmap(p);
+-		break;
+-	case REM_EXECVE:
+-		error = deputy_do_execve(p);
+-		break;
+-	default:
+-		OMBUG("received unexpected [%x]\n", req.type);
+-		error = -1;
+-	}
+-	if (error < 0)
+-		deputy_die_on_communication();
+ }
+-#endif
++
+ 
+ /**
+  * deputy_main_loop - process loop when process is deputy
+@@ -493,11 +412,8 @@
+ {
+ 	task_t *p=current;
+ 	struct kcom_task *mytsk;
+-	int error=0;
+-	struct kcom_pkt *pkt, *pkt_next;
+-	struct list_head syscall_packet_list;
+-
+-	INIT_LIST_HEAD(&syscall_packet_list);
++	int err=0;
++	struct kcom_pkt *pkt;
+ 
+ 	mytsk=kcom_home_task_find(p->pid);
+ 
+@@ -508,43 +424,32 @@
+ 
+ loop_again:
+ 
+-	set_current_state(TASK_INTERRUPTIBLE);
+-
+-	if (unlikely(list_empty(&mytsk->in_packs)))
+-		goto no_packets;
+-
+-	/* Process incoming packets from remote task (add them to process_list*/
+-	write_lock(&mytsk->in_packs_lock);
+-	list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+-
+-		if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
+-			/* syscalls may schedule or do many spinlocked forbidden things*/
+-			list_move_tail(&pkt->list, &syscall_packet_list);
+-		} else {
+-			/* Deputy should only have syscall packets ... */
+-			printk(KERN_ERR"[OM] Deputy %d received non syscall packet ?\n", current->pid);
+-			kcom_pkt_delete(pkt);
+-		}
++        err = __kcom_wait_msg(mytsk, &pkt);
+ 
+-		/* everything else is an error => discarding */
++	if (-EAGAIN == err) {
++		deputy_do_sigpending(p);
++		goto loop_again;
++	}
+ 
++	if (err < 0) {
++	    printk(KERN_ERR "[deputy][%d] Got error %d while waiting for packet (ignoring)\n"
++		  , p->pid, err);
++	    schedule_timeout(HZ);
++	    goto loop_again;
+ 	}
+-	write_unlock(&mytsk->in_packs_lock);
+ 
+-	if ((unlikely(list_empty(&syscall_packet_list))))
+-		goto no_packets;
++        err = kcomd_do_l2_state_machine(mytsk, pkt);
+ 
+-	/* We can now process all syscalls without holding locks ...*/
+-	list_for_each_entry_safe(pkt, pkt_next, &syscall_packet_list, list) {
+-		OMDEBUG_SYS(3, "Deputy recevied syscall packet to execute ...\n");
+-		error = deputy_do_syscall(p, pkt);
+-		kcom_pkt_delete(pkt);
+-	}
+ 
+-no_packets:
++        if (err < 0) {
++	    printk(KERN_ERR "[deputy][%d] error %d handling packet '%s'\n"
++		  ,p->pid, err, __get_packet_name(pkt->type));
++
++        }
++        kcom_pkt_delete(pkt);
+ 
+-	deputy_process_misc(current);
+-	schedule();
++	if (task_dreqs_pending(p))
++		task_do_request();
+ 
+ 	if(likely(task_test_dflags(current, DDEPUTY)))
+ 		goto loop_again;
+Index: linux/include/hpc/hpc.h
+===================================================================
+--- linux.orig/include/hpc/hpc.h	2006-12-19 16:56:06.000000000 +0100
++++ linux/include/hpc/hpc.h	2006-12-19 17:00:23.000000000 +0100
+@@ -23,6 +23,7 @@
+ 
+ #include <linux/sched.h>
+ #include <linux/fs.h>
++#include <linux/config.h>
+ 
+ /* arch specific */
+ int user_thread(int (*fn)(void *), void * arg, unsigned long flags);
+@@ -47,7 +48,7 @@
+ 
+ /* task.c */
+ int openmosix_task_init(struct task_struct *);
+-int openmosix_task_exit(void);
++int openmosix_task_exit(long code);
+ 
+ struct openmosix_options
+ {
+@@ -58,6 +59,8 @@
+ 	int debug_copyuser;
+ 	int debug_kcomd;
+ 	int debug_protocol;
++#else
++	int dummy;
+ #endif
+ };
+ 
+Index: linux/hpc/Makefile
+===================================================================
+--- linux.orig/hpc/Makefile	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/Makefile	2006-12-19 17:00:23.000000000 +0100
+@@ -2,7 +2,7 @@
+ obj-$(CONFIG_KCOMD)     += kcomd.o
+ 
+ # core part
+-obj-$(CONFIG_OPENMOSIX)		+= kernel.o task.o comm.o kcom.o
++obj-$(CONFIG_OPENMOSIX)		+= kernel.o task.o kcom.o
+ obj-$(CONFIG_OPENMOSIX)		+= remote.o deputy.o copyuser.o files.o syscalls.o
+ obj-$(CONFIG_OPENMOSIX)		+= migrecv.o migsend.o migctrl.o
+ obj-$(CONFIG_OPENMOSIX)		+= service.o
+Index: linux/hpc/comm.c
+===================================================================
+--- linux.orig/hpc/comm.c	2006-12-19 16:56:06.000000000 +0100
++++ /dev/null	1970-01-01 00:00:00.000000000 +0000
+@@ -1,530 +0,0 @@
+-/*
+- *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+- *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
+- *
+- * This program is free software; you can redistribute it and/or modify
+- * it under the terms of the GNU General Public License as published
+- * by the Free Software Foundation; version 2 only.
+- *
+- * This program is distributed in the hope that it will be useful,
+- * but WITHOUT ANY WARRANTY; without even the implied warranty of
+- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+- * GNU General Public License for more details.
+- *
+- * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
+- *
+- * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
+- *
+- */
+-#include <linux/sched.h>
+-#include <linux/socket.h>
+-#include <linux/in.h>
+-#include <linux/in6.h>
+-#include <linux/net.h>
+-#include <net/sock.h>
+-#include <net/tcp.h>
+-#include <asm/uaccess.h>
+-#include <hpc/mig.h>
+-#include <hpc/debug.h>
+-#include <hpc/comm.h>
+-#include <hpc/task.h>
+-#include <hpc/prototype.h>
+-
+-#define POLLIN_SET (POLLRDNORM | POLLRDBAND | POLLIN | POLLHUP | POLLERR)
+-
+-unsigned long comm_remote_timo = COMM_REMOTE_TIMO;	/* for remote accept */
+-unsigned long comm_connect_timo = COMM_CONNECT_TIMO;	/* for connection */
+-unsigned long comm_reconn_timo = COMM_RECONN_TIMO;	/* for reconnection */
+-
+-/**
+- * comm_shutdown - shutdown socket
+- * @mlink:	openMosix link to shutdown
+- **/
+-static void comm_shutdown(struct socket *sock)
+-{
+-	if (sock && sock->ops)
+-		sock->ops->shutdown(sock, SEND_SHUTDOWN);
+-}
+-
+-/**
+- * comm_getname - get the name of socket
+- * @mlink:	openMosix link to query
+- * @address:	the sockaddr to fill
+- * @peer:	get peer name instead?
+- **/
+-int comm_getname(struct socket *sock, struct sockaddr *address, int peer)
+-{
+-	int val, ret;
+-
+-	val = sizeof(struct sockaddr);
+-	if (!sock->ops || !sock->ops->getname)
+-		return -1;
+-	ret = sock->ops->getname(sock, address, &val, peer);
+-	if (ret)
+-		return -1;
+-	return val;
+-}
+-
+-/**
+- * comm_data_ready - Wake the socket when data are ready
+- * @sk:	socket to wake up
+- * @len:	unneeded
+- **/
+-void comm_data_ready(struct sock *sk, int len)
+-{
+-	wake_up_interruptible(sk->sk_sleep);
+-}
+-
+-static int comm_setup_tcp(struct socket *sock)
+-{
+-	int val;
+-	char __user *pval;
+-	int error;
+-	mm_segment_t oldfs;
+-
+-	oldfs = get_fs();
+-	set_fs(KERNEL_DS);
+-
+-	pval = (char __user *) &val;
+-
+-	/* old TOADDR/ACCEPT */
+-	val = 1;
+-	error = sock_setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
+-	                        pval, sizeof(val));
+-	if (error)
+-		goto fail;
+-	/* FIXME: check on these, old COMM_MIGD */
+-	val = OPENMOSIX_CONNECTION_KEEPALIVE_INTERVAL;
+-	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL,
+-	                              pval, sizeof(val));
+-	if (error)
+-		goto fail;
+-
+-	val = OPENMOSIX_CONNECTION_KEEPALIVE_MAXTRIES;
+-	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,
+-	                              pval, sizeof(val));
+-	if (error)
+-		goto fail;
+-
+-	val = OPENMOSIX_CONNECTION_KEEPALIVE_TOTAL;
+-	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE,
+-	                              pval, sizeof(val));
+-	if (error)
+-		goto fail;
+-
+-	val = 1;
+-	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
+-	                              pval, sizeof(val));
+-	if (error)
+-		goto fail;
+-
+-fail:
+-	set_fs(oldfs);
+-	return error;
+-}
+-
+-
+-struct socket * comm_socket(int family, int type, int proto)
+-{
+-	int error;
+-	struct socket *sock;
+-
+-	error = sock_create(family, type, proto, &sock);
+-	if (error < 0)
+-		return NULL;
+-	return sock;
+-}
+-
+-
+-int comm_bind(struct socket *sock, struct sockaddr *saddr)
+-{
+-	int error;
+-
+-	error = sock->ops->bind(sock, saddr, sizeof(*saddr));
+-	if (error == -EADDRINUSE)
+-		printk(KERN_ERR "comm_bind() Already in use\n");
+-
+-	return error;
+-}
+-
+-static int comm_listen(struct socket *sock)
+-{
+-	int error;
+-
+-	error = sock->ops->listen(sock, SOMAXCONN);
+-
+-	return error;
+-}
+-
+-
+-int comm_connect(struct socket *sock, struct sockaddr *saddr, unsigned long timo)
+-{
+-	int error;
+-	DECLARE_WAITQUEUE(wait, current);
+-
+-	if (!timo)
+-		timo = MAX_SCHEDULE_TIMEOUT;
+-
+-	error = sock->ops->connect(sock, saddr, sizeof(*saddr), O_NONBLOCK);
+-
+-	add_wait_queue(sock->sk->sk_sleep, &wait);
+-	while (sock->state != SS_CONNECTED) {
+-		set_current_state(TASK_INTERRUPTIBLE);
+-		error = sock->ops->connect(sock, saddr, sizeof(*saddr),
+-						O_NONBLOCK);
+-		if (error != -EALREADY || (error = sock_error(sock->sk)))
+-			break;
+-
+-		timo = schedule_timeout(timo);
+-		if (timo <= 0) {
+-			error = -EAGAIN;
+-			break;
+-		}
+-	}
+-	remove_wait_queue(sock->sk->sk_sleep, &wait);
+-	set_current_state(TASK_RUNNING);
+-
+-	if (error) {
+-		OMBUG("failed to connect\n");
+-		return error;
+-	}
+-
+-	if (sock->sk->sk_err) {
+-		error = sock_error(sock->sk);	/* cleans error.. */
+-		OMBUG("sk_err\n");
+-		return error;
+-	}
+-
+-	return 0;
+-}
+-
+-
+-/**
+- * comm_close - close an openMosix communication socket
+- * @mlink:	openMosix link
+- **/
+-void comm_close(struct socket *sock)
+-{
+-	BUG_ON(!sock);
+-
+-	sock_release(sock);
+-}
+-
+-/**
+- * comm_peek - peek the socket looking for data pending
+- **/
+-int comm_peek(struct socket *sock)
+-{
+-	int mask;
+-
+-	mask = sock->ops->poll(NULL, sock, NULL);
+-	return (mask & POLLIN_SET) ? 1 : 0;
+-}
+-
+-
+-/**
+- * comm_poll - wait for a communication event, interrupt or openMosix event
+- * @sock:		socket to poll
+- * @mask:		polling mask
+- * @interruptible:	is the task interruptible
+- * @timo:		timeout (0 = MAX_SCHEDULE_TIMEOUT)
+- *
+- * Description:
+- *	returns 1 on communication events, and 0 otherwise
+- */
+-static int comm_poll(struct socket *sock, int mask, int interruptible, unsigned long timo)
+-{
+-	int pollmask;
+-	static struct file sighfile = {.f_count = ATOMIC_INIT(1)};
+-	DECLARE_WAITQUEUE(wait, current);
+-
+-	/*
+-	 * sighfile: we are required to supply a file to "hold" while we poll.
+-	 * a bit ridiculous in this context, but nobody will notice because
+-	 * f_count will never drop to 0
+-	 */
+-	if (!timo)
+-		timo = MAX_SCHEDULE_TIMEOUT;
+-	add_wait_queue(sock->sk->sk_sleep, &wait);
+-	for (;;)
+-	{
+-		set_current_state(TASK_INTERRUPTIBLE);
+-		pollmask = sock->ops->poll(&sighfile, sock, NULL);
+-		if ((pollmask & mask) || (interruptible &&
+-					 (signal_pending(current)
+-					 || task_test_dreqs(current, ~0))))
+-			break;
+-
+-		timo = schedule_timeout(timo);
+-		if (timo <= 0)
+-			break;
+-	}
+-	remove_wait_queue(sock->sk->sk_sleep, &wait);
+-	set_current_state(TASK_RUNNING);
+-
+-	return (pollmask & mask) ? 1 : 0;
+-}
+-
+-
+-/**
+- * comm_wait - wait for a message, or some other openMosix event
+- *
+- * Description:
+- *	return 1 if there is a message, 0 if another event occured first.
+- **/
+-int comm_wait(struct socket *sock)
+-{
+-	return comm_poll(sock, POLLIN_SET, 1, 0UL);
+-}
+-
+-
+-/**
+- * comm_accept - accept a connection on openMosix socket
+- * @ml:		the socket that receive a connection
+- * @mlp:	the new link opened will be assigned here
+- * @saddr:	source address of the connection
+- * @timeout:	timeout (0 = MAX_SCHEDULE_TIMEOUT)
+- **/
+-int comm_accept(struct socket *ml, struct socket **mlp, struct sockaddr *saddr,
+-		unsigned long timeout)
+-{
+-	struct socket *sock;
+-	int error = -EMFILE;
+-
+-	*mlp = NULL;
+-
+-	sock = sock_alloc();
+-	if (!sock)
+-		return error;
+-
+-	sock->type = ml->type;
+-	sock->ops = ml->ops;
+-
+-	if (timeout && !comm_poll(ml, POLLIN | POLLRDNORM, 0, timeout)) {
+-		error = -EAGAIN;
+-		goto failed;
+-	}
+-
+-	error = ml->ops->accept(ml, sock, 0);
+-	if (error)
+-		goto failed;
+-
+-	/* set up connection options */
+-	error = comm_setup_tcp(sock);
+-	if (error)
+-		goto failed;
+-
+-	*mlp = sock;
+-	return error;
+-
+-failed:
+-	sock_release(sock);
+-	return error;
+-}
+-
+-/**
+- * comm_dorecv - Reliable read data from socket
+- * @sock:	socket to read from
+- * @msg:	fill with data
+- * @len:	lenght of the data
+- *
+- * Description:
+- *	reliably read data on success, or if
+- *	error == -EFAULT: returns number of bytes received otherwise
+- *	(any other error): returns negative error.
+- **/
+-static int comm_dorecv(struct socket *sock, struct msghdr *msg, int len)
+-{
+-	int n = 0;
+-	int left = len;
+-
+-	do {
+-		n = sock_recvmsg(sock, msg, left, msg->msg_flags);
+-		if (n <= 0) {
+-			/* if we already got -EFAULT, we must report */
+-			if (n == -EFAULT)
+-			{
+-				for ( ; msg->msg_iovlen; msg->msg_iov++) {
+-					msg->msg_iovlen--;
+-					len -= msg->msg_iov->iov_len;
+-				}
+-				return len;
+-			}
+-
+-			/* .. otherwise - it is fatal - return error */
+-			if (n < 0)
+-				return n;
+-			return -EPIPE;
+-		}
+-
+-		left -= n;
+-		if (left) {
+-			/* ...->recvmsg() updated iovec, we update msg */
+-			while (!msg->msg_iov->iov_len)
+-			{
+-				msg->msg_iov++;
+-				msg->msg_iovlen--;
+-			}
+-		}
+-	} while (left);
+-	return len;
+-}
+-
+-
+-/**
+- * comm_recv - receive a message of size @len
+- * @mlink:	socket we're using
+- * @data:	pointer to buffer to write message into
+- * @len:	length of data we want
+- **/
+-int comm_recv(struct socket *mlink, void *data, int len)
+-{
+-	struct iovec iov;
+-	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
+-	mm_segment_t oldfs;
+-	int error = -1;
+-
+-	BUG_ON(len > PAGE_SIZE);
+-	BUG_ON(!mlink);
+-
+-	iov.iov_base = data;
+-	iov.iov_len = len;
+-
+-	oldfs = get_fs();
+-	set_fs(KERNEL_DS);
+-
+-	error = comm_dorecv(mlink, &msg, len);
+-	if (error != len) {
+-		OMBUG("got %d of %d\n", error, len);
+-		if (error >= 0)
+-			error = -EFAULT;
+-		comm_shutdown(mlink);
+-	}
+-
+-	set_fs(oldfs);
+-
+-	return error;
+-}
+-
+-
+-
+-/**
+- * comm_send - send data and returns the bytes number of data sent
+- * @mlink:	socket we're using
+- * @data:	data to send
+- * @len:	length of data
+- **/
+-int comm_send(struct socket *mlink, void *data, int len)
+-{
+-	struct iovec iov;
+-	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_NOSIGNAL };
+-	mm_segment_t oldfs;
+-	int error;
+-
+-	BUG_ON(!mlink);
+-
+-	iov.iov_base = data;
+-	iov.iov_len  = len;
+-
+-	oldfs = get_fs();
+-	set_fs(KERNEL_DS);
+-
+-	error = sock_sendmsg(mlink, &msg, len);
+-	if (error != len)
+-		printk(KERN_WARNING "sock_sendmsg: sent %d of %d\n", error, len);
+-
+-	set_fs(oldfs);
+-
+-	return error;
+-}
+-
+-/* ---------- openmosix specifics start here ------------ */
+-#include <hpc/protocol.h>
+-
+-void set_our_addr(int type, struct sockaddr *sa, int port)
+-{
+-	struct sockaddr_in *sa_in;
+-	struct sockaddr_in6 *sa_in6;
+-
+-	switch (type) {
+-	case AF_INET:
+-		sa_in = (struct sockaddr_in *) sa;
+-		sa_in->sin_family = type;
+-		sa_in->sin_addr.s_addr = INADDR_ANY;
+-		sa_in->sin_port = port;
+-		return;
+-	case AF_INET6:
+-		sa_in6 = (struct sockaddr_in6 *) sa;
+-		return;
+-	}
+-}
+-
+-/* lazy helper functions */
+-struct socket * comm_setup_listen(struct sockaddr *sa)
+-{
+-	struct socket *link;
+-	int error;
+-
+-	link = comm_socket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP);
+-	if (!link)
+-		return NULL;
+-
+-	error = comm_bind(link, sa);
+-	if (error < 0)
+-		goto fail;
+-
+-	error = comm_listen(link);
+-	if (error < 0)
+-		goto fail;
+-
+-	return link;
+-
+-fail:
+-	comm_close(link);
+-	return NULL;
+-}
+-
+-struct socket * comm_setup_connect(struct sockaddr *sa, int timo)
+-{
+-	struct socket *link;
+-
+-	link = comm_socket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP);
+-	if (!link)
+-		return NULL;
+-
+-	if (comm_connect(link, sa, timo))
+-		goto fail;
+-
+-	return link;
+-
+-fail:
+-	comm_close(link);
+-	return NULL;
+-}
+-
+-int comm_send_hd(struct socket *link, int type, void *data, int dlen)
+-{
+-	struct omp_req req;
+-	int error;
+-
+-	req.type = type;
+-	req.dlen = dlen;
+-
+-	error = comm_send(link, &req, sizeof(req));
+-	if (error < 0)
+-		return -1;
+-
+-	error = comm_send(link, data, dlen);
+-	if (error < 0)
+-		return -1;
+-
+-	return 0;
+-}
+-
+-
+-int comm_send_req(struct socket *link, int type)
+-{
+-	struct omp_req req;
+-	req.type = type;
+-	return comm_send(link, &req, sizeof(req));
+-}
+Index: linux/hpc/kernel.c
+===================================================================
+--- linux.orig/hpc/kernel.c	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/kernel.c	2006-12-19 17:00:23.000000000 +0100
+@@ -162,21 +162,38 @@
+ {
+ 	task_t *p=current;
+ 	struct kcom_task *mytsk;
+-	struct kcom_pkt *pkt, *pkt_next;
++	struct kcom_pkt *pkt;
++	int err = 0;
+ 
+-
+-	/* FIXME:  should we just add a *kcom_task to the proc struct, and speed this up? */
+ 	mytsk=kcom_task_find(p->pid);
+-		if (!list_empty(&mytsk->in_packs))
+-			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+-				if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
+-					if ((pkt->type & SYSCALL_MASK) == DEP_SIGNAL) {
+-						kcom_pkt_delete(pkt);
+-					}
+-				}
+-			}
++
++	if (!mytsk)
++		return -ENODEV;
++
++new_packet:
++
++	read_lock(&mytsk->in_packs_lock);
++	if (!list_empty(&mytsk->in_packs)) {
++		err = __kcom_wait_for_any_msg(mytsk, &pkt);
++		if (err < 0)
++			goto error_unlock;
++
++	}
++	read_unlock(&mytsk->in_packs_lock);
++
++	if (pkt) {
++		err = kcomd_do_l2_state_machine(mytsk, pkt);
++		kcom_pkt_delete(pkt);
++	}
++
++	if(!list_empty(&mytsk->in_packs))
++		goto new_packet;
++
+ 	return 0;
+ 
++error_unlock:
++	read_unlock(&mytsk->in_packs_lock);
++	return err;
+ }
+ 
+ static inline int deputy_pre_usermode(void)
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-12-19 16:56:06.000000000 +0100
++++ linux/hpc/proc.c	2006-12-19 17:00:23.000000000 +0100
+@@ -46,15 +46,10 @@
+ 	struct sockaddr_in* dest_ptr=(struct sockaddr_in *)p->om.whereto;
+ 	struct sockaddr_in *cur_addr;
+ 	struct kcom_task *tsk;
+-	struct kcom_node *node;
+-
+ 
+ 	OMDEBUG_MIG(2, "asking process %d migration ?\n", p->pid);
+-	if (!dest_ptr) {
+-		OMBUG("internal structure is not initialized for pid %d\n", p->pid);
+-		return -EFAULT;
+-	}
+-	if(task_test_dflags(p, DPASSING)) {
++
++	if(task_test_dflags(p, DPASSING) || task_test_dflags(p, DINCOMING)) {
+ 		printk(KERN_ERR "[oM] Can't migrate pid %d, process is currently migrating\n", p->pid );
+ 		return -EAGAIN;
+ 	}
+@@ -66,24 +61,24 @@
+ 		if (task_test_dflags(p, DDEPUTY)) { /* if already migrated and this is home node*/
+ 
+ 			OMDEBUG_MIG(3, "asking process %d to migrate home ?\n", p->pid);
+-			node=kcom_node_find((struct sockaddr *)dest_ptr);
+-			if (node==NULL)
+-				return 1;
+-			tsk=kcom_task_find(p->pid);
+-			if (tsk==NULL)
+-				return 1;
+-
+-			OMDEBUG_MIG(3, "asking process %d to migrate home (ready)?\n", p->pid);
+ 
+-			kcom_task_send(tsk, MIG_COME_HOME | PKT_NEW_MSG | DEP_FLG, 0, NULL, NULL, 0);
++			tsk=kcom_task_find(p->pid);
+ 
++			if (!tsk) {
++				OMBUG("pid [%d] deputy without task!\n", p->pid);
++				return -ENODEV;
++			}
++			__kcom_send_command(tsk, KCOM_L1_MIG_COME_HOME, 0, NULL, 0, dest_ptr, NULL);
+ 
+-			if (kcomd_task != NULL) send_sig(SIGHUP,kcomd_task,0);
+-		} else {
++		} else if (task_test_dflags(p, DREMOTE)) {
+ 
+ 			OMDEBUG_MIG(3, "asking process %d to migrate home (from remote)\n",  p->pid);
+ 			task_register_migration(p);
++
++		} else {
++			printk(KERN_ERR "Can not migrate 'home' pid %d, it's not a migrated process\n", p->pid);
+ 		}
++
+ 	} else {
+ 		/* Sanity Check FIXME: Only accepting ipv4 addresses for now */
+ 		int n, addr[4];
+@@ -104,7 +99,8 @@
+ 				if (in_aton(buf) == cur_addr->sin_addr.s_addr) { /* home -> remote - redundant migration;*/
+ 					return size;
+ 				} /* FIXME:  remote to remote migration*/
+-			OMBUG("remote to remote migration is not yet implemented :(\n");
++
++				OMBUG("remote to remote migration is not yet implemented :(\n");
+ 			}
+ 		} else {
+ 
+@@ -133,7 +129,8 @@
+ 
+ 	if (task_test_dreqs(p, DREQ_MOVE)) {
+ 		length = sprintf(buf, "queued\n");
+-	} else if(task_test_dflags(p, DPASSING)) {
++	} else if (task_test_dflags(p, DPASSING)
++		  ||task_test_dflags(p, DINCOMING)) {
+ 		length = sprintf(buf, "migrating\n");
+ 	} else if (task_test_dflags(p, DMIGRATED)) {
+ 		saddr=(struct sockaddr_in *)p->om.whereto;
+Index: linux/hpc/service.c
+===================================================================
+--- linux.orig/hpc/service.c	2006-12-19 16:56:07.000000000 +0100
++++ linux/hpc/service.c	2006-12-19 17:00:23.000000000 +0100
+@@ -124,30 +124,3 @@
+ 	}
+ }
+ 
+-/**
+- * sockaddr_inherit - fullfill sa with the same type of mlink
+- **/
+-int sockaddr_inherit(struct socket *mlink, struct sockaddr *sa)
+-{
+-	struct sockaddr tmp;
+-
+-	if (comm_getname(mlink, &tmp, 0) < 0)
+-		return -1;
+-
+-	memset(sa, 0, sizeof(struct sockaddr));
+-	sa->sa_family = tmp.sa_family;
+-
+-	switch (tmp.sa_family) {
+-		case AF_INET: {
+-			struct sockaddr_in *in = (struct sockaddr_in *) sa;
+-			in->sin_addr.s_addr = INADDR_ANY;
+-			break;
+-		}
+-		case AF_INET6: {
+-			struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) sa;
+-			memset(&in6->sin6_addr, 0, sizeof(struct in6_addr));
+-			break;
+-		}
+-	}
+-	return 0;
+-}
+Index: linux/hpc/migctrl.c
+===================================================================
+--- linux.orig/hpc/migctrl.c	2006-12-19 16:56:07.000000000 +0100
++++ linux/hpc/migctrl.c	2006-12-19 17:00:23.000000000 +0100
+@@ -41,27 +41,24 @@
+  **/
+ int task_remote_expel(task_t *p)
+ {
++	int err;
++
+ 	BUG_ON(!task_test_dflags(p, DREMOTE));
+ 	OMDEBUG_MIG(3, "pid %d task expeled !!!\n", p->pid);
+ 
+-	if (mig_do_send(p)) {
++	err = mig_do_send(p);
++	if (err<0) {
+ 		goto failed;
+ 	}
+ 
++	task_clear_dflags(p, DREMOTE);
++
+ 	do_exit(SIGKILL);
+ 	return 0;
+-failed:
+-	OMBUG("failed\n");
+-	return -1;
+-}
+ 
+-/**
+- * task_remote_wait_expel - call from REMOTE to send a task to DEPUTY
+- * @p:		task which will come back
+- **/
+-int task_remote_wait_expel(task_t *p)
+-{
+-	return task_remote_expel(p);
++failed:
++	OMBUG("pid [%d] mig_do_send failed (%d)\n", p->pid, err);
++	return err;
+ }
+ 
+ /**
+@@ -79,8 +76,7 @@
+ 		return 0;
+ 	task_set_dflags(p, DDEPUTY);
+ 
+-	if (mig_do_send(p)) {
+-		error = -1;
++	if ((error=mig_do_send(p))<0) {
+ 		goto failed;
+ 	}
+ 
+@@ -165,7 +161,7 @@
+ 	 */
+ 
+ 	if (task_test_dflags(p, DREMOTE))
+-		task_remote_wait_expel(p);
++		task_remote_expel(p);
+ 	else if (task_test_dflags(p, DDEPUTY))
+ 		task_local_bring(p, reason);
+ 	else
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-12-19 16:56:07.000000000 +0100
++++ linux/hpc/task.c	2006-12-19 17:00:23.000000000 +0100
+@@ -181,21 +181,42 @@
+ /**
+  * openmosix_task_exit - Exit current task
+  **/
+-int openmosix_task_exit(void)
++int openmosix_task_exit(long code)
+ {
+ 	task_t *p = current;
+ 
+ 	if (!task_test_dflags(p, DDEPUTY | DREMOTE))
+ 		return 0;
+ 
++	if (task_test_dflags(p, DREMOTE)) {
++
++	    struct sockaddr_in *dest_ptr=(void *)p->om.whereto;
++	    struct kcom_task *tsk;
++	    tsk = kcom_task_find( p->pid);
++	    if (!tsk)
++		goto delete_task;
++
++	    kcom_send_command(KCOM_L2_END_OF_PROCESS, sizeof(long), (char *)&code, 0, dest_ptr, NULL);
++
++	    /* Since we are going to delete the task, we must make sure
++	     * our packet had been sent */
++	wait_for_send:
++
++	    if (!list_empty(&tsk->out_packs))
++	    {
++		set_task_state(p, TASK_INTERRUPTIBLE);
++		schedule_timeout(HZ);
++		set_task_state(p, TASK_INTERRUPTIBLE);
++
++		goto wait_for_send;
++	    }
++	}
++
++delete_task:
+ 	kcom_task_delete(p->pid);
+ 	task_heldfiles_clear(p);
+ 	kfree(p->om.whereto);
+ 
+-	#if 0
+-	if (p->om.contact)
+-		 comm_close(p->om.contact);
+-	#endif
+ 	return 0;
+ }
+ 
+Index: linux/kernel/exit.c
+===================================================================
+--- linux.orig/kernel/exit.c	2006-12-19 16:56:07.000000000 +0100
++++ linux/kernel/exit.c	2006-12-19 17:00:23.000000000 +0100
+@@ -898,7 +898,7 @@
+ 		update_hiwater_vm(tsk->mm);
+ 	}
+ #ifdef CONFIG_OPENMOSIX
+-	openmosix_task_exit();
++	openmosix_task_exit(code);
+ #endif
+ 	group_dead = atomic_dec_and_test(&tsk->signal->live);
+ 	if (group_dead) {
+Index: linux/hpc/arch-x86_64.c
+===================================================================
+--- linux.orig/hpc/arch-x86_64.c	2006-12-19 19:04:06.000000000 +0100
++++ linux/hpc/arch-x86_64.c	2006-12-22 14:57:02.000000000 +0100
+@@ -98,6 +98,7 @@
+ {
+ 	struct pt_regs *regs;
+ 	int i;
++	unsigned int fstmp;
+ 
+ 	regs = ARCH_TASK_GET_USER_REGS(p);
+ 
+@@ -108,9 +109,17 @@
+ 
+ 	m->arch.ds = p->thread.ds;
+ 	m->arch.es = p->thread.es;
+-	m->arch.fs = p->thread.fs;
+-	m->arch.gs = p->thread.gs;
+-	m->arch.fsindex = p->thread.fsindex;
++
++	/* at this point, registers are not yet in the thread struct, since we */
++	/* did not schedule, we have to read it directly from the registers    */
++
++	rdmsrl(MSR_FS_BASE, m->arch.fs);
++
++	__asm__ __volatile__ ("\t movl %%fs, %0;\n": "=r" (fstmp));
++	p->thread.fsindex = fstmp;		/* Fxxxxg gcc not understanding offsets!*/
++
++	rdmsrl(MSR_KERNEL_GS_BASE, m->arch.gs); /*usermode gs because of swapgs*/
++
+ 	m->arch.gsindex = p->thread.gsindex;
+ 	m->arch.userrsp = read_pda(oldrsp);
+ 
+@@ -122,6 +131,7 @@
+ 
+ void arch_kickstart(struct task_struct *p)
+ {
++	/* regs must stay first !!!!!!!! it mark the stacj start*/
+ 	struct pt_regs *regs;
+ 	regs = ARCH_TASK_GET_USER_REGS(p);
+ 
+@@ -134,29 +144,34 @@
+ 		set_debugreg(p->thread.debugreg7, 7);
+ 	}
+ 
+-	/*
+-	load_TLS(&p->thread, smp_processor_id());
+-	*/
+-
+ 	if (p->thread.ds)
+ 		loadsegment(ds, p->thread.ds);
++
+ 	if (p->thread.es)
+ 		loadsegment(es, p->thread.es);
++
+ 	if (p->thread.fsindex)
+ 		loadsegment(fs, p->thread.fsindex);
++
++	if (p->thread.fs)
++		wrmsrl(MSR_FS_BASE, p->thread.fs);
++
+ 	if (p->thread.gsindex)
+ 		load_gs_index(p->thread.gsindex);
+ 
++	load_TLS(&p->thread, smp_processor_id());
++
+ 	regs->cs = __USER_CS;
+ 	regs->ss = __USER_DS;
+ 	set_fs(USER_DS);
+ 
+-	/* FIXME: not sure about this one */
+ 	flush_signals(p);
+ 
+ 	asm(	"movq %0,%%rsp\n\t"
+ 		"jmp ret_from_kickstart\n\t"
+ 		: /**/ : "r"(regs));
++
++	/*(regs is the first variable, hence, the stack start */
+ }
+ 
+ long arch_exec_syscall(int n, syscall_parameter_t * args)

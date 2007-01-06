@@ -1,0 +1,73 @@
+This adds hardware breakpoint support for i386.  This is not as well tested as
+software breakpoints, but in some minimal testing appears to be functional.
+
+Signed-off-by: Milind Dumbare <milind@linsyssoft.com>
+
+ kgdb.c |   49 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 49 insertions(+)
+
+Index: linux-2.6.16/arch/i386/kernel/kgdb.c
+===================================================================
+--- linux-2.6.16.orig/arch/i386/kernel/kgdb.c	2006-04-25 11:30:47.000000000 +0530
++++ linux-2.6.16/arch/i386/kernel/kgdb.c	2006-04-25 11:45:34.000000000 +0530
+@@ -184,6 +184,54 @@
+ 		asm volatile ("movl %0, %%db7\n"::"r" (dr7));
+ }
+ 
++int kgdb_remove_hw_break(unsigned long addr)
++{
++	int i, idx = -1;
++	for (i = 0; i < 4; i++) {
++		if (breakinfo[i].addr == addr && breakinfo[i].enabled) {
++			idx = i;
++			break;
++		}
++	}
++	if (idx == -1)
++		return -1;
++
++	breakinfo[idx].enabled = 0;
++	return 0;
++}
++
++void kgdb_remove_all_hw_break(void)
++{
++	int i;
++
++	for (i = 0; i < 4; i++) {
++		if (breakinfo[i].enabled) {
++			/* Do what? */
++			;
++		}
++		memset(&breakinfo[i], 0, sizeof(struct hw_breakpoint));
++	}
++}
++
++int kgdb_set_hw_break(unsigned long addr)
++{
++	int i, idx = -1;
++	for (i = 0; i < 4; i++) {
++		if (!breakinfo[i].enabled) {
++			idx = i;
++			break;
++		}
++	}
++	if (idx == -1)
++		return -1;
++
++	breakinfo[idx].enabled = 1;
++	breakinfo[idx].type = 1;
++	breakinfo[idx].len = 1;
++	breakinfo[idx].addr = addr;
++	return 0;
++}
++
+ void kgdb_disable_hw_debug(struct pt_regs *regs)
+ {
+ 	/* Disable hardware debugging while we are in kgdb */
+@@ -311,4 +359,5 @@
+ 
+ struct kgdb_arch arch_kgdb_ops = {
+ 	.gdb_bpt_instr = {0xcc},
++	.flags = KGDB_HW_BREAKPOINT,
+ };

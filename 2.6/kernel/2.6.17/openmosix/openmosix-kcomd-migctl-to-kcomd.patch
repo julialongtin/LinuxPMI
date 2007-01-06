@@ -1,0 +1,164 @@
+Index: linux/hpc/migctrl.c
+===================================================================
+--- linux.orig/hpc/migctrl.c	2006-11-02 22:50:48.000000000 +0100
++++ linux/hpc/migctrl.c	2006-11-02 22:51:40.000000000 +0100
+@@ -26,6 +26,9 @@
+ #include <hpc/hpc.h>
+ #include <hpc/debug.h>
+ #include <hpc/service.h>
++#include <linux/in.h>
++#include <hpc/omtask.h>
++#include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/mig.h>
+ #include <hpc/protocol.h>
+@@ -36,20 +39,12 @@
+  **/
+ int task_remote_expel(task_t *p)
+ {
+-	struct socket *link;
+-
+ 	BUG_ON(!task_test_dflags(p, DREMOTE));
+ 
+-	if (mig_send_hshake(p, p->om.contact, HSHAKE_MIG_REQUEST))
+-		goto failed;
+-
+ 	if (mig_do_send(p)) {
+ 		goto failed;
+ 	}
+ 
+-	link = task_set_comm(p, NULL);
+-	comm_close(link);
+-
+ 	do_exit(SIGKILL);
+ 	return 0;
+ failed:
+@@ -63,19 +58,6 @@
+  **/
+ int task_remote_wait_expel(task_t *p)
+ {
+-	int error;
+-	struct omp_req req;
+-
+-	comm_send_req(p->om.contact, REM_BRING_HOME);
+-
+-	error = comm_recv(p->om.contact, &req, sizeof(req));
+-	if (error < 0)
+-		return -1;
+-	if (req.type != DEP_COMING_HOME) {
+-		OMBUG("!DEP_COMING_HOME\n");
+-		return -1;
+-	}
+-
+ 	return task_remote_expel(p);
+ }
+ 
+@@ -87,27 +69,12 @@
+  **/
+ static int task_local_send(task_t *p, struct sockaddr *whereto, int reason)
+ {
+-	struct socket *mlink;
+ 	int error = 0;
+ 
+ 	if (task_test_dflags(p, DDEPUTY))
+ 		return 0;
+-	sockaddr_setup_port(whereto, REMOTE_DAEMON_PORT);
+-	mlink = comm_setup_connect(whereto, 0);
+-	if (!mlink) {
+-		OMBUG("error\n");
+-
+-		error = -1;
+-		goto failed;
+-	}
+-
+-	task_set_comm(p, mlink);
+ 	task_set_dflags(p, DDEPUTY);
+ 
+-	/* see if other part is with on this */
+-	if (mig_send_hshake(p, mlink, HSHAKE_MIG_REQUEST))
+-		goto failed;
+-
+ 	if (mig_do_send(p)) {
+ 		error = -1;
+ 		goto failed;
+@@ -119,8 +86,6 @@
+ failed:
+ 	OMBUG("failed\n");
+ 	task_clear_dflags(p, DDEPUTY);
+-	if (mlink)
+-		comm_close(mlink);
+ 	return error;
+ }
+ 
+@@ -134,7 +99,6 @@
+ static int task_local_bring(task_t *p, int reason)
+ {
+ 	int error;
+-	struct socket *link;
+ 
+ 	if (!task_test_dflags(p, DDEPUTY))
+ 		return 0;
+@@ -143,21 +107,15 @@
+ 		goto failed;
+ 	}
+ 
+-	/* send remote request */
+-	comm_send_req(p->om.contact, DEP_COMING_HOME);
+-
+-	/* see if other part is with on this */
+-	if (mig_recv_hshake(p->om.contact))
+-		goto failed;
+-
+ 	/* receive the process back */
+ 	error = mig_do_receive(p);
+ 	if (error)
+ 		goto failed;
+ 
+ 	task_clear_dflags(p, DDEPUTY);
+-	link = task_set_comm(p, NULL);
+-	comm_close(link);
++
++	set_current_state(TASK_RUNNING);
++	schedule();
+ 
+ 	return 0;
+ failed:
+@@ -188,21 +146,29 @@
+                                struct sockaddr * whereto,
+                                int reason)
+ {
+-	int error;
+ 
+ 	task_set_dflags(p, DPASSING);
+ 
+-	error = (task_test_dflags(p, DREMOTE))
+-		? (whereto)
+-			? task_move_remote2remote(p, whereto, reason)
+-			: task_remote_wait_expel(p)
+-		: (whereto)
+-			? task_local_send(p, whereto, reason)
+-			: task_local_bring(p, reason);
++	/*
++	 * Ok, if DREMOTE flag set, then this is a remote process
++	 * if DDEPUTY is set, then this is a deputy
++	 * if neither is set, then this is a home process going out.
++	 * FIXME:  remote to remote?
++	 */
++
++	if (task_test_dflags(p, DREMOTE))
++		task_remote_wait_expel(p);
++	else if (task_test_dflags(p, DDEPUTY))
++		task_local_bring(p, reason);
++	else
++		task_local_send(p, whereto, reason);	/*
++							 * if neither flag is set then
++							 * home process going out
++							 */
+ 
+ 	task_clear_dflags(p, DPASSING);
+ 
+-	return error;
++	return 0;
+ }
+ 
+ int task_move_to_node(struct task_struct *p, struct sockaddr * whereto,

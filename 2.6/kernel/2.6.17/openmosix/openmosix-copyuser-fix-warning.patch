@@ -1,0 +1,30 @@
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-11-02 22:51:55.000000000 +0100
++++ linux/hpc/copyuser.c	2006-11-02 22:52:14.000000000 +0100
+@@ -276,6 +276,7 @@
+ /**
+  * remote_strnlen_from_user - strnlen from user for deputy
+  **/
++#if 0
+ static int remote_strnlen_user(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_usercopy_req u;
+@@ -294,6 +295,8 @@
+ 	return 0;
+ }
+ 
++#endif
++
+ /**
+  * remote_put_user - put user for deputy
+  **/
+@@ -414,7 +417,7 @@
+ 
+ 	}
+ 
+-	printk(KERN_ERR "openMosix: %s is not supposed to end that way ! (%s:%n)\n"
++	printk(KERN_ERR "openMosix: %s is not supposed to end that way ! (%s:%d)\n"
+ 	      , __FUNCTION__, __FILE__, __LINE__);
+ 
+ 	return -1;

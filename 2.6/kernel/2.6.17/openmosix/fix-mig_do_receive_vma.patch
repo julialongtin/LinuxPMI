@@ -1,0 +1,22 @@
+Subject: [patch @num@/@total@] Fix mig_do_receive_vma
+
+prot was incorrectly initialized to all permissions, and not 
+the permissions of the initial page ... (CtrlC/CtrlV mistake ?)
+
+---
+ hpc/migrecv.c |    1 -
+ 1 file changed, 1 deletion(-)
+
+
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2007-01-03 17:49:41.000000000 +0100
++++ linux/hpc/migrecv.c	2007-01-03 17:57:17.000000000 +0100
+@@ -202,7 +202,6 @@
+ 
+ 	/* copy VM_(READ|WRITE|EXEC) bits to prot */
+ 	prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));
+-	prot = (VM_READ | VM_WRITE | VM_EXEC);
+ 
+ 	/* mmap stuff */
+ 	down_write(&p->mm->mmap_sem);

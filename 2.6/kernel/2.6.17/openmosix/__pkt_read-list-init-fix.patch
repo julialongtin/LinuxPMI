@@ -1,0 +1,25 @@
+Subject: [patch @num@/@total@] @name@
+
+packet list were not initialized, and in some cases
+this lead to kernel memory corruption ... thanks to a user that 
+reported a 'strange' bug on his box, we finally found the problem :)
+
+Thanks raw ! this bug submission really helped :)
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-24 22:55:33.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-24 23:04:25.000000000 +0100
+@@ -399,10 +399,12 @@
+ 			goto error_delete_packet;
+ 		}
+ 	}
+-
++	INIT_LIST_HEAD(&((*recv_kcom_pkt)->list));
+ 	return 0;
+ 
+ error_delete_packet:
++	/* Since the list may contain junk, we must init it */
++	INIT_LIST_HEAD(&((*recv_kcom_pkt)->list));
+ 	kcom_pkt_delete(*recv_kcom_pkt);
+ 	*recv_kcom_pkt = NULL;
+ 

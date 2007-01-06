@@ -1,0 +1,19 @@
+Index: linux/hpc/migctrl.c
+===================================================================
+--- linux.orig/hpc/migctrl.c	2006-11-02 22:51:40.000000000 +0100
++++ linux/hpc/migctrl.c	2006-11-02 22:52:16.000000000 +0100
+@@ -129,12 +129,14 @@
+  * @whereto:	whereto
+  * @reason:	reason to send (if any)
+  **/
++#if 0
+ static int task_move_remote2remote(task_t *p, struct sockaddr * whereto,
+ 								int reason)
+ {
+ 	OMBUG("not implemented.\n");
+ 	return 0;
+ }
++#endif
+ 
+ /**
+  * task_move_to_node - send a task to a node

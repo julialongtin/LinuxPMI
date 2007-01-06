@@ -1,0 +1,19 @@
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:00:28.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:16.000000000 +0100
+@@ -143,10 +143,10 @@
+ 		return 0;
+ 
+ 	n = max(fd,max(fd4, fd6));
+-	// spin_lock(&kcom_nodes_lock);
+-	list_for_each_entry(node, &kcom_nodes, list)
+-		n = max(node->fd, n);
+-	// spin_unlock(&kcom_nodes_lock);
++
++	read_lock(&kcom_nodes_lock);
++	list_for_each_entry(node, &kcom_nodes, list) n = max(node->fd, n);
++	read_unlock(&kcom_nodes_lock);
+ 
+ 
+ 	maxfds = n;

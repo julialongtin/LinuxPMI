@@ -1,0 +1,83 @@
+[patch @num@/@total@] @name@ fix spinlock usage
+
+This patch fixes the spinlock usage in __kcom_find_task
+
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:16.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:28.000000000 +0100
+@@ -572,17 +572,23 @@
+ 	struct kcom_task *tmp2;
+ 	task_t *p;
+ 
+-	// read_lock(&tasklist_lock);
++	read_lock(&tasklist_lock);
+ 	p = find_task_by_pid(pid);
+-	// read_unlock(&tasklist_lock);
++	 read_unlock(&tasklist_lock);
+ 	if (!p) {
+ 		printk(KERN_ERR "Unable to find pid %u\n", pid);
+ 		return NULL;
+ 	}
+ 
++        // TODO: needs some cleanup (-- Florian Delizy)
+ 	if (where == 0) {
+-		list_for_each_entry(tmp, &kcom_nodes, list)
+-			list_for_each_entry(tmp2, &tmp->tasks, list)
++
++                read_lock(&kcom_nodes_lock);
++
++		list_for_each_entry(tmp, &kcom_nodes, list) {
++
++                        read_lock(&tmp->tasks_lock);
++			list_for_each_entry(tmp2, &tmp->tasks, list) {
+ 				/*
+ 				 * One remote node, we're interested in rpid
+ 				 * One home node, we're interested in hpid
+@@ -594,16 +600,42 @@
+ 					if (tmp2->hpid == pid)
+ 						return tmp2;
+ 				}
++                        }
++                        read_unlock(&tmp->tasks_lock);
++                }
++                read_unlock(&kcom_nodes_lock);
++
+ 	} else if (where == 1) { /* home */
+-		list_for_each_entry(tmp, &kcom_nodes, list)
+-			list_for_each_entry(tmp2, &tmp->tasks, list)
++
++                read_lock(&kcom_nodes_lock);
++		list_for_each_entry(tmp, &kcom_nodes, list) {
++
++                        read_lock(&tmp->tasks_lock);
++
++			list_for_each_entry(tmp2, &tmp->tasks, list) {
+ 				if (tmp2->hpid == pid)
+ 					return tmp2;
++                        }
++
++                        read_unlock(&tmp->tasks_lock);
++                }
++                read_unlock(&kcom_nodes_lock);
++
+ 	} else if (where == 2) { /* remote */
+-		list_for_each_entry(tmp, &kcom_nodes, list)
+-			list_for_each_entry(tmp2, &tmp->tasks, list)
++
++                read_lock(&kcom_nodes_lock);
++		list_for_each_entry(tmp, &kcom_nodes, list) {
++
++                        read_lock(&tmp->tasks_lock);
++
++			list_for_each_entry(tmp2, &tmp->tasks, list) {
+ 				if (tmp2->rpid == pid)
+ 					return tmp2;
++                        }
++
++                        read_unlock(&tmp->tasks_lock);
++                }
++                read_unlock(&kcom_nodes_lock);
+ 
+ 	}
+ 	return NULL;

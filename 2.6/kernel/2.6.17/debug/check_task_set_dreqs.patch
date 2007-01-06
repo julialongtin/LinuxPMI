@@ -1,0 +1,87 @@
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-11-15 16:33:16.000000000 +0100
++++ linux/hpc/task.c	2006-11-15 16:35:54.000000000 +0100
+@@ -228,8 +228,20 @@
+ 	OMDEBUG_MIG(3, "pid %d registering process migration ?\n", p->pid);
+ 
+ 	task_set_dreqs(p, DREQ_MOVE);
++	if (task_test_dreqs(p, DREQ_MOVE)) {
++	    OMDEBUG_MIG( 3, "DREQ_MOVE is set ... ok\n");
++	} else {
++	    OMBUG( "Can not set DREQ_MOVE !!  O_O'\n");
++	}
++
+ 	wake_up_process(p);
+ 	set_ti_thread_flag(p->thread_info, TIF_NEED_RESCHED);
++
++	if (task_test_dreqs(p, DREQ_MOVE)) {
++	    OMDEBUG_MIG( 3, "DREQ_MOVE is still set ... ok\n");
++	} else {
++	    OMBUG( "DREQ_MOVE had gone away !!  O_O'\n");
++	}
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(task_register_migration);
+Index: linux/hpc/kernel.c
+===================================================================
+--- linux.orig/hpc/kernel.c	2006-11-15 17:11:24.000000000 +0100
++++ linux/hpc/kernel.c	2006-11-15 17:16:57.000000000 +0100
+@@ -28,6 +28,7 @@
+ 
+ #include <hpc/kcom.h>
+ #include <hpc/prototype.h>
++#include <hpc/debug.h>
+ 
+ struct openmosix_options om_opts;
+ EXPORT_SYMBOL_GPL(om_opts);
+@@ -191,11 +192,19 @@
+ asmlinkage int openmosix_pre_usermode(struct pt_regs regs)
+ {
+ 	unsigned long flags;
++	extern pid_t om_last_pid_started;
+ 
++	if ( current->pid == om_last_pid_started ) {
++	    om_last_pid_started = 0;
++	    OMDEBUG_MIG( 3, "Process %d had been recently asked to move\n", current->pid );
++	}
++    
+ 	if (task_test_dreqs(current, ~0)) {
+ 		local_save_flags(flags);
+ 		local_irq_enable();
+ 
++		OMDEBUG_MIG( 3, "dreqs are not empty\n");
++
+ 		task_do_request();
+ 
+ 		local_irq_restore(flags);
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-15 17:15:01.000000000 +0100
++++ linux/hpc/proc.c	2006-11-15 19:38:57.000000000 +0100
+@@ -41,6 +41,9 @@
+ /*
+  *	PID set/get accessor
+  */
++
++pid_t om_last_pid_started = 0; 
++
+ static int proc_pid_set_where(struct task_struct *p, char *buf, size_t size)
+ {
+ 	struct sockaddr_in* dest_ptr=(struct sockaddr_in *)p->om.whereto;
+@@ -104,7 +107,14 @@
+ 			task_register_migration(p);
+ 		}
+ 	}
+-
++	
++	om_last_pid_started = p->pid;
++	if (task_test_dreqs(p, DREQ_MOVE)) {
++	    OMDEBUG_MIG( 3, "DREQ_MOVE is set ... ok\n");
++	} else {
++	    OMBUG( "Can not set DREQ_MOVE !!  O_O'\n");
++	}
++	OMDEBUG_MIG( 3, "Last pid started set to %d\n", om_last_pid_started );
+ 	return size;
+ }
+ 

@@ -1,0 +1,180 @@
+Subject: [patch @num@/@total@] @name@ replace TIF_NEED_RESCHED usage
+
+till now, the migration process involved notifying the process by setting it's
+TIF_NEED_RESCHED flag to 1 and intercepting it before the schedule. This works
+all fine on most of the cases, but in case the process was waiting for a
+resource (say in a syscall), once the process is scheduled back, the
+TIF_NEED_RESCHED is cleared before the end of the schedule() call (and thus the
+process never receive the migration order...)
+
+The solution is to stop hijacking the TIF_NEED_RESCHED flag and use our very
+own flag :) (although this involve some changes in the architecture, this is
+necessary).
+
+We now have TIF_NEED_OM_REFRESH (x86_64 and i386)
+
+I didn't check the i386 entry.S modification, I just *think* it should work,
+if some i386 kernel devs could have a look at it, that would be better
+Index: linux/include/asm-x86_64/thread_info.h
+===================================================================
+--- linux.orig/include/asm-x86_64/thread_info.h	2006-11-16 22:31:54.000000000 +0100
++++ linux/include/asm/thread_info.h	2006-11-16 22:32:09.000000000 +0100
+@@ -101,6 +101,7 @@
+ #define TIF_IRET		5	/* force IRET */
+ #define TIF_SYSCALL_AUDIT	7	/* syscall auditing active */
+ #define TIF_SECCOMP		8	/* secure computing */
++#define TIF_NEED_OM_REFRESH	9	/* task needs to execute openMosix requests */
+ #define TIF_POLLING_NRFLAG	16	/* true if poll_idle() is polling TIF_NEED_RESCHED */
+ #define TIF_IA32		17	/* 32bit process */ 
+ #define TIF_FORK		18	/* ret_from_fork */
+@@ -115,6 +116,7 @@
+ #define _TIF_IRET		(1<<TIF_IRET)
+ #define _TIF_SYSCALL_AUDIT	(1<<TIF_SYSCALL_AUDIT)
+ #define _TIF_SECCOMP		(1<<TIF_SECCOMP)
++#define _TIF_NEED_OM_REFRESH	(1<<TIF_NEED_OM_REFRESH)
+ #define _TIF_POLLING_NRFLAG	(1<<TIF_POLLING_NRFLAG)
+ #define _TIF_IA32		(1<<TIF_IA32)
+ #define _TIF_FORK		(1<<TIF_FORK)
+Index: linux/include/asm-i386/thread_info.h
+===================================================================
+--- linux.orig/include/asm-i386/thread_info.h	2006-11-16 22:31:54.000000000 +0100
++++ linux/include/asm-i386/thread_info.h	2006-11-16 22:32:09.000000000 +0100
+@@ -141,6 +141,7 @@
+ #define TIF_SYSCALL_AUDIT	7	/* syscall auditing active */
+ #define TIF_SECCOMP		8	/* secure computing */
+ #define TIF_RESTORE_SIGMASK	9	/* restore signal mask in do_signal() */
++#define TIF_NEED_OM_REFRESH	10	/* task needs to execute openMosix requests */
+ #define TIF_POLLING_NRFLAG	16	/* true if poll_idle() is polling TIF_NEED_RESCHED */
+ #define TIF_MEMDIE		17
+ 
+@@ -154,6 +155,7 @@
+ #define _TIF_SYSCALL_AUDIT	(1<<TIF_SYSCALL_AUDIT)
+ #define _TIF_SECCOMP		(1<<TIF_SECCOMP)
+ #define _TIF_RESTORE_SIGMASK	(1<<TIF_RESTORE_SIGMASK)
++#define _TIF_NEED_OM_REFRESH	(1<<TIF_NEED_OM_REFRESH)
+ #define _TIF_POLLING_NRFLAG	(1<<TIF_POLLING_NRFLAG)
+ 
+ /* work to do on interrupt/exception return */
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-11-16 22:32:09.000000000 +0100
++++ linux/hpc/task.c	2006-11-16 22:32:09.000000000 +0100
+@@ -230,7 +230,7 @@
+ 	task_set_dreqs(p, DREQ_MOVE);
+ 	if (task_test_dflags(p,DDEPUTY))
+ 		wake_up_process(p);
+-	set_ti_thread_flag(p->thread_info, TIF_NEED_RESCHED);
++	set_ti_thread_flag(p->thread_info, TIF_NEED_OM_REFRESH);
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(task_register_migration);
+Index: linux/hpc/kernel.c
+===================================================================
+--- linux.orig/hpc/kernel.c	2006-11-16 22:31:54.000000000 +0100
++++ linux/hpc/kernel.c	2006-11-16 22:32:10.000000000 +0100
+@@ -212,6 +212,9 @@
+ 
+ 		local_irq_restore(flags);
+ 	}
++
++	if (!task_test_dflags(current, DDEPUTY))
++		clear_ti_thread_flag(current->thread_info, TIF_NEED_OM_REFRESH );
+ 	return 0;
+ }
+ 
+Index: linux/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux.orig/arch/x86_64/kernel/entry.S	2006-11-16 22:31:54.000000000 +0100
++++ linux/arch/x86_64/kernel/entry.S	2006-11-16 22:32:10.000000000 +0100
+@@ -265,16 +265,24 @@
+ 	bt $TIF_NEED_RESCHED,%edx
+ 	jnc sysret_signal
+ 	sti
+-#ifdef CONFIG_OPENMOSIX
+-	SAVE_REST
+-	call openmosix_pre_usermode
+-	RESTORE_REST
+-#endif /* CONFIG_OPENMOSIX */
+ 	pushq %rdi
+ 	CFI_ADJUST_CFA_OFFSET 8
+ 	call schedule
+ 	popq  %rdi
+ 	CFI_ADJUST_CFA_OFFSET -8
++#ifdef CONFIG_OPENMOSIX
++	/* Check if the process have pending oM requests     */
++	/* Must be after schedule() for real time sake       */
++	/* Once here, the current task struct may have moved */
++	cli
++	GET_THREAD_INFO(%rcx)
++	bt $TIF_NEED_OM_REFRESH,threadinfo_flags(%rcx)
++	jnc sysret_careful_no_om
++	SAVE_REST
++	call openmosix_pre_usermode
++	RESTORE_REST
++sysret_careful_no_om:
++#endif /* CONFIG_OPENMOSIX */
+ 
+ 	jmp sysret_check
+ 
+@@ -629,14 +637,21 @@
+ 	/* edi: workmask, edx: work */
+ retint_careful:
+ 	CFI_RESTORE_STATE
+-	bt    $TIF_NEED_RESCHED,%edx
+-	jnc   retint_signal
+-	sti
+ #ifdef CONFIG_OPENMOSIX
++	/* Check if the task have pending oM requests */
++	bt $TIF_NEED_OM_REFRESH,%edx
++	jnc retint_careful_no_om
++	sti
+ 	SAVE_REST
+ 	call openmosix_pre_usermode
+ 	RESTORE_REST
+-#endif /* CONFIG_OPENMOSIX */
++	cli
++retint_careful_no_om:
++#endif  /* CONFIG_OPENMOSIX */
++
++	bt    $TIF_NEED_RESCHED,%edx
++	jnc   retint_signal
++	sti
+ 	pushq %rdi
+ 	CFI_ADJUST_CFA_OFFSET	8
+ 	call  schedule
+Index: linux/arch/i386/kernel/entry.S
+===================================================================
+--- linux.orig/arch/i386/kernel/entry.S	2006-11-16 22:31:55.000000000 +0100
++++ linux/arch/i386/kernel/entry.S	2006-11-16 22:32:10.000000000 +0100
+@@ -170,12 +170,10 @@
+ 					# setting need_resched or sigpending
+ 					# between sampling and the iret
+ 	movl TI_flags(%ebp), %ecx
++
+ 	andl $_TIF_WORK_MASK, %ecx	# is there any work to be done on
+ 					# int/exception return?
+ 	jne work_pending
+-#ifdef CONFIG_OPENMOSIX
+-	call openmosix_pre_usermode
+-#endif /* CONFIG_OPENMOSIX */
+ 	jmp restore_all
+ 
+ #ifdef CONFIG_PREEMPT
+@@ -348,6 +346,17 @@
+ 	# perform work that needs to be done immediately before resumption
+ 	ALIGN
+ work_pending:
++
++#ifdef CONFIG_OPENMOSIX
++	/* Check if some oM requests are pending */
++	bt %ecx, $TIF_NEED_OM_RESCHED
++	jnc work_pending_no_om
++	SAVE_ALL
++	call openmosix_pre_usermode
++	RESTORE_ALL
++work_pending_no_om:
++#endif /* CONFIG_OPENMOSIX */
++
+ 	testb $_TIF_NEED_RESCHED, %cl
+ 	jz work_notifysig
+ work_resched:

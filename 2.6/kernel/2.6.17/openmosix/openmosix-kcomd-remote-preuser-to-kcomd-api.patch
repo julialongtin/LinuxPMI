@@ -1,0 +1,53 @@
+Index: linux/hpc/kernel.c
+===================================================================
+--- linux.orig/hpc/kernel.c	2006-11-02 22:50:47.000000000 +0100
++++ linux/hpc/kernel.c	2006-11-02 22:51:44.000000000 +0100
+@@ -26,6 +26,9 @@
+ #include <hpc/comm.h>
+ #include <hpc/mig.h>
+ 
++#include <hpc/kcom.h>
++#include <hpc/prototype.h>
++
+ struct openmosix_options om_opts;
+ EXPORT_SYMBOL_GPL(om_opts);
+ 
+@@ -157,11 +160,26 @@
+ 
+ static inline int remote_pre_usermode(void)
+ {
+-	task_t *p = current;
+-
+-	if (p->om.contact && comm_peek(p->om.contact))
+-		remote_do_comm(p);
++	task_t *p=current;
++	struct kcom_task *mytsk;
++	struct kcom_pkt *pkt, *pkt_next;
++
++
++	/* FIXME:  should we just add a *kcom_task to the proc struct, and speed this up? */
++	mytsk=kcom_task_find(p->pid);
++		if (!list_empty(&mytsk->in_packs))
++			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
++				printk("packet found.\n");
++				if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
++					if ((pkt->type & SYSCALL_MASK) == DEP_SIGNAL) {
++						printk("Signal pkt found.\n");
++						remote_do_signal(p, pkt);
++						list_del(&pkt->list);
++					}
++				}
++			}
+ 	return 0;
++
+ }
+ 
+ static inline int deputy_pre_usermode(void)
+@@ -206,7 +224,6 @@
+ static int __init openmosix_init(void)
+ {
+ 	/* kick off the kernel threads: */
+-	kernel_thread(openmosix_mig_daemon, NULL, 0);
+ 
+ 	return 0;
+ }

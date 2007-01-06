@@ -1,0 +1,24 @@
+Index: linux/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux.orig/arch/x86_64/kernel/entry.S	2006-11-14 11:59:13.000000000 +0100
++++ linux/arch/x86_64/kernel/entry.S	2006-11-14 11:59:59.000000000 +0100
+@@ -732,6 +732,9 @@
+  * Exception entry points.
+  */ 		
+ 	.macro zeroentry sym
++	#ifdef CONFIG_KGDB
++	    int $3
++	#endif /* CONFIG_KGDB */
+ 	INTR_FRAME
+ 	pushq $0	/* push error code/oldrax */ 
+ 	CFI_ADJUST_CFA_OFFSET 8
+@@ -743,6 +746,9 @@
+ 	.endm	
+ 
+ 	.macro errorentry sym
++	#ifdef CONFIG_KGDB
++	    int $3
++	#endif /* CONFIG_KGDB */
+ 	XCPT_FRAME
+ 	pushq %rax
+ 	CFI_ADJUST_CFA_OFFSET 8

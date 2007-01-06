@@ -1,0 +1,42 @@
+Subject: [patch @num@/@total@] @name@
+
+Fix wrong sysret_signal in x86_64 
+
+---
+ arch/x86_64/kernel/entry.S |   15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+
+Index: linux/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux.orig/arch/x86_64/kernel/entry.S	2006-12-19 16:59:26.000000000 +0100
++++ linux/arch/x86_64/kernel/entry.S	2006-12-22 23:43:39.000000000 +0100
+@@ -162,6 +162,7 @@
+ #ifdef CONFIG_OPENMOSIX
+ ENTRY(ret_from_kickstart)
+ 	CFI_STARTPROC
++	cli
+ 	swapgs
+ 	RESTORE_ALL 8
+ 	iretq
+@@ -288,6 +289,20 @@
+ 
+ 	/* Handle a signal */ 
+ sysret_signal:
++#ifdef CONFIG_OPENMOSIX
++	/* Check if the process have pending oM requests     */
++	/* Must be after schedule() for real time sake       */
++	/* Once here, the current task struct may have moved */
++	cli
++	GET_THREAD_INFO(%rcx)
++	bt $TIF_NEED_OM_REFRESH,threadinfo_flags(%rcx)
++	jnc 1f
++	SAVE_REST
++	call openmosix_pre_usermode
++	RESTORE_REST
++	jmp sysret_check
++1:
++#endif /* CONFIG_OPENMOSIX */
+ 	sti
+ 	testl $(_TIF_SIGPENDING|_TIF_NOTIFY_RESUME|_TIF_SINGLESTEP),%edx
+ 	jz    1f

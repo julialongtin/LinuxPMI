@@ -1,0 +1,646 @@
+Subject: [patch @num@/@total@] @name@
+
+This patch breaks kcomd_thread_handle_streams into separate functions
+for read and write, and create a task processing list for solving
+race conditions (as well as error handling)
+
+tasks now have two separate lists for output packets:
+	out_packs : where packets are initially added
+	egress_list: where kcomd put temporary packets before they get sent
+Index: linux/include/hpc/kcom.h
+===================================================================
+--- linux.orig/include/hpc/kcom.h	2006-11-21 19:13:11.000000000 +0100
++++ linux/include/hpc/kcom.h	2006-11-21 21:35:24.000000000 +0100
+@@ -112,6 +112,7 @@
+ 	char *resp;   /* ptr of response */
+ };
+ 
++
+ struct kcom_node
+ {
+ 	int fd;                 	/* fd to send packet */
+@@ -139,6 +140,9 @@
+ 
+ 	rwlock_t out_packs_lock;	/* List structure locks ...*/
+ 	rwlock_t in_packs_lock;
++
++	struct list_head process_list;	/* list used internally by kcomd */
++	struct list_head egress_list;   /* list used internally by kcomd */
+ };
+ 
+ extern int kcom_send_nack(task_t *p, struct kcom_pkt *recv_pkt);
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-21 19:14:09.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-23 18:42:18.000000000 +0100
+@@ -934,6 +934,8 @@
+ 		INIT_LIST_HEAD(&kctask->list);
+ 		INIT_LIST_HEAD(&kctask->out_packs);
+ 		INIT_LIST_HEAD(&kctask->in_packs);
++		INIT_LIST_HEAD(&kctask->process_list);
++		INIT_LIST_HEAD(&kctask->egress_list);
+ 		rwlock_init(&kctask->in_packs_lock);
+ 		rwlock_init(&kctask->out_packs_lock);
+ 
+@@ -1164,6 +1166,43 @@
+ }
+ 
+ /**
++ * __kcom_find_or_create_task
++ *
++ * Description:
++ *    This function attempt to find the task for the corresponding address and pid
++ *    if not found, it creates it or return -ENODEV or -ENOMEM in case of problem
++ *
++ *    The task is filled in *tsk
++ **/
++
++int __kcom_find_or_create_task(struct sockaddr_in *saddr, struct kcom_task **tsk, pid_t pid)
++{
++	struct kcom_node *node;
++
++	node=kcom_node_find((struct sockaddr *)saddr);
++
++	if (!node) {
++
++		node=create_connection((struct sockaddr *)saddr);
++		if (!node) {
++			OMBUG("ERROR: Unable to create new connection.\n");
++			return -ENODEV;
++		}
++	}
++
++	*tsk=kcom_task_find(pid);
++	if (!*tsk) {
++		*tsk=kcom_task_create(node, pid);
++		if (!*tsk) {
++			OMBUG("ERROR: Unable to create task.\n");
++			return -ENOMEM;
++		}
++	}
++
++	return 0;
++}
++
++/**
+  * kcom_send
+  *
+  * Description:
+@@ -1176,29 +1215,16 @@
+ int kcom_send(int type, int datasize, char *data, unsigned long addr, struct sockaddr_in *saddr)
+ {
+ 
+-	struct kcom_node *node;
+ 	struct kcom_task *tsk;
+-	task_t *p = current;
+ 	unsigned int msgid;
++	int ret;
+ 
+ 	OMDEBUG_PROTOCOL(1, "protocol: send packet (type=0x%x datasize=%d)\n"
+ 			,(unsigned)type, datasize);
+ 
+-	node=kcom_node_find((struct sockaddr *)saddr);
+-	if (node==NULL) {
+-		OMBUG("node not found, creating new connection.\n");
+-		node=create_connection((struct sockaddr *)saddr);
+-		if (node==NULL)
+-			return -1;
+-	}
+-
+-	tsk=kcom_task_find(p->pid);
+-	if (tsk==NULL) {
+-		OMBUG("Task not found. creating new.\n");
+-		tsk=kcom_task_create(node, p->pid);
+-		if (tsk==NULL)
+-			return -1;
+-	}
++	ret = __kcom_find_or_create_task(saddr, &tsk, current->pid);
++	if (0!=ret)
++		return ret;
+ 
+ 	msgid=kcom_task_send(tsk, type, datasize, data, NULL, addr);
+ 
+@@ -1466,6 +1492,7 @@
+ 
+ }
+ 
++
+ /**
+  * kcom_send_with_ack
+  *
+@@ -1474,34 +1501,17 @@
+  **/
+ int kcom_send_with_ack(int type, int datasize, char *data, unsigned long addr, struct sockaddr_in *saddr)
+ {
+-	struct kcom_node *node;
+-	struct kcom_task *tsk;
+-	task_t *p = current;
++	struct kcom_task *tsk = NULL;
+ 	unsigned int msgid;
++	int ret;
+ 	int ack;
+ 
+ 	OMDEBUG_PROTOCOL(2, "sending packet with ack (type=0x%x, datasize=%d)\n"
+ 			,(unsigned)type, datasize);
+ 
+-	node=kcom_node_find((struct sockaddr *)saddr);
+-
+-	if (node==NULL) {
+-
+-		node=create_connection((struct sockaddr *)saddr);
+-		if (!node) {
+-			OMBUG("ERROR: Unable to create new connection.\n");
+-			goto return_error;
+-		}
+-	}
+-
+-	tsk=kcom_task_find(p->pid);
+-	if (tsk==NULL) {
+-		tsk=kcom_task_create(node, p->pid);
+-		if (!tsk) {
+-			OMBUG("ERROR: Unable to create task.\n");
+-			goto return_error;
+-		}
+-	}
++	ret = __kcom_find_or_create_task(saddr, &tsk, current->pid);
++	if (0!=ret)
++		return ret;
+ 
+ 	// FIXME:  what if tsk is deleted between kcom_task_send and wait_for_ack ?
+ 	msgid = kcom_task_send(tsk, type, datasize, data, NULL, addr);
+@@ -1510,7 +1520,7 @@
+ 		send_sig(SIGHUP, kcomd_task, 0);
+ 	else {
+ 		OMBUG("Unable to find kcomd daemon.\n");
+-		goto return_error;
++		return -ENODEV;
+ 	}
+ 
+ 	set_current_state(TASK_INTERRUPTIBLE);
+@@ -1524,12 +1534,10 @@
+ 
+ 	if (ack == -2) {
+ 	    OMBUG("Got NACK !! \n");
+-	    goto return_error;
++	    return -1;
+ 	}
+ 	return 0;
+ 
+-return_error:
+-	return -1;
+ }
+ 
+ /**
+@@ -1540,31 +1548,17 @@
+  **/
+ int kcom_send_with_response(int type, int datasize, char *data, unsigned long addr, char *resp, struct sockaddr_in *saddr)
+ {
+-	struct kcom_node *node;
+ 	struct kcom_task *tsk;
+-	task_t *p = current;
+ 	unsigned int msgid;
+ 	int i=-1;
++	int ret;
+ 
+ 	OMDEBUG_PROTOCOL(1, "Sending packet with response (type=0x%x, datasize=%d)\n"
+ 			,(unsigned)type, datasize);
+ 
+-	node=kcom_node_find((struct sockaddr *)saddr);
+-	if (node==NULL) {
+-		node=create_connection((struct sockaddr *)saddr);
+-		if (node==NULL) {
+-			return -1;
+-		}
+-	}
+-
+-	tsk=kcom_task_find(p->pid);
+-	if (!tsk) {
+-		tsk=kcom_task_create(node, p->pid);
+-		if (!tsk) {
+-			OMBUG("Unable to create task\n");
+-			return -1;
+-		}
+-	}
++	ret = __kcom_find_or_create_task(saddr, &tsk, current->pid);
++	if (0!=ret)
++		return ret;
+ 
+ 	msgid=kcom_task_send(tsk, type, datasize, data, resp, addr);
+ 
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-21 19:16:41.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-23 18:42:26.000000000 +0100
+@@ -159,6 +159,9 @@
+  *
+  * Description:
+  *    Sends the kcom pkt header and the data, if any.
++ *    return 0 on success, a negative value if not
++ *
++ *    This function may schedule
+  **/
+ 
+ int data_send(struct socket *sock, struct kcom_pkt* pkt)
+@@ -171,6 +174,8 @@
+ 	int first_vec = 0;
+ 	int sent = 0;
+ 	int i;
++	int first_loop = 1;
++	int nb_retries = 0;
+ 
+ 	/* Sanity check */
+ 
+@@ -179,6 +184,11 @@
+ 	    return -EFAULT;
+ 	}
+ 
++	OMDEBUG_KCOMD(3, "KCOMD: send packet type=0x%x len=%d\n"
++			,(unsigned)pkt->type, pkt->len);
++
++	OMDEBUG_KCOMD_DO(4, om_dump_packet(pkt));
++
+ 	/* Prepare packets */
+ 
+ 	msg.msg_flags = MSG_WAITALL | MSG_NOSIGNAL;
+@@ -206,10 +216,22 @@
+ 
+ 		/* kernel_sendmsg can fail if no space left on skbuff, or interrupted ... */
+ 		if (-ENOSPC == sent || -EAGAIN == sent || 0 == sent) {
+-			OMBUG("Can not send packet for now, retrying\n");
++
++			if (first_loop && total_data == packet[0].iov_len + packet[1].iov_len)
++				return -EAGAIN;
++
++			first_loop = 0;
++
++			if (60000 < ++nb_retries)
++				return -ETIMEDOUT;
++
++			if (0==nb_retries%1000)
++				printk(KERN_WARNING"Can not send packet for now, retrying\n");
++
+ 			schedule_timeout(HZ/1000);
+ 			continue;
+ 		}
++		first_loop = 0;
+ 
+ 		/* if something wrong happened :*/
+ 		if (0 > sent) {
+@@ -221,7 +243,9 @@
+ 
+ 		total_data -= sent;
+ 
+-		if (!total_data) break;
++		if (!total_data)
++			break;
++
+ 		/* Thanks to fs/cifs/transport.c !*/
+ 
+ 		for (i = first_vec; i < 2; i++) {
+@@ -242,7 +266,7 @@
+ 
+ 	}
+ 
+-	return pkt->len;
++	return 0;
+ 
+ }
+ 
+@@ -447,47 +471,6 @@
+ 
+ }
+ 
+-
+-
+-/**
+- * data_write
+- *
+- * Description:
+- *    Loops through all tasks that have processes on the node that
+- *    has data to send, and sends the pkts.
+- *    Once the pkt has been sent, its memory is freed.
+- **/
+-int data_write(struct kcom_node *node)
+-{
+-	struct kcom_task *task, *task_next;
+-	struct kcom_pkt *pkt, *pkt_next;
+-
+-	if (!node->sock)
+-		__create_connection(&node->addr, node);
+-
+-	if(!node->sock)
+-		return -ENODEV;
+-
+-	read_lock(&node->tasks_lock);
+-	list_for_each_entry_safe(task, task_next, &node->tasks, list) {
+-
+-		write_lock(&task->out_packs_lock);
+-		list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list) {
+-
+-			OMDEBUG_KCOMD(3, "KCOMD: send packet type=0x%x len=%d\n"
+-				     ,(unsigned)pkt->type, pkt->len);
+-
+-			OMDEBUG_KCOMD_DO(4, om_dump_packet(pkt));
+-			data_send(node->sock, pkt);
+-
+-			kcom_pkt_delete(pkt);
+-		}
+-		write_unlock(&task->out_packs_lock);
+-	}
+-	read_unlock(&node->tasks_lock);
+-	return 0;
+-}
+-
+ static void kcomd_thread_free_ressources(void);
+ 
+ /**
+@@ -598,55 +581,24 @@
+ 
+ 
+ /**
+- * kcomd_thread_handle_streams:
++ * __kcomd_thread_do_read
+  *
+  * Description:
+- *    kcomd_thread_handle_streams handle the read/write on the opened sockets
+- *    it is uniquely called from kcomd_thread (and should be called without
+- *    holding any locks). This function may schedule or sleep.
+- **/
+-
+-static void kcomd_thread_handle_streams(void)
++ *    this function (only called from kcomd_thread_handle_streams) is responsible
++ *    for reading packets out of the process_list
++ *
++ *    This function may schedule or hold locks
++ */
++void __kcomd_thread_do_read(struct list_head* process_list)
+ {
+-
+ 	struct kcom_node *node, *node_next;
+-	struct list_head process_list;
+ 	int nb_retries = 0;
+ 	int err = 0;
+-
+-	INIT_LIST_HEAD(&process_list);
+-
+-	/* for each nodes { test bit, in, out and do stuff } */
+-	/*
+-	 * If we need to read from a socket, we might schedule or sleep ...
+-	 * this we must not hold any locks, therefore we must build
+-	 * a second list for reading ...
+-	 */
+-
+-	read_lock(&kcom_nodes_lock);
+-	list_for_each_entry (node, &kcom_nodes, list) {
+-
+-		INIT_LIST_HEAD(&node->process_list);
+-
+-		if (test_bit(node->fd, sockets_fds.res_in)) {
+-			OMDEBUG_KCOMD( 3, "KCOMD: receiving on fd %d\n", node->fd );
+-			list_add_tail( &node->process_list, &process_list );
+-			if (err!=0) {
+-				printk(KERN_ERR "ERROR receiving data => ignoring packet.\n");
+-				continue;
+-			}
+-		}
+-		if (node->fd!=-1 && test_bit(node->fd, sockets_fds.res_out)) {
+-			data_write(node);
+-		}
+-	}
+-	read_unlock(&kcom_nodes_lock);
+-
+ 	/* Once we have built our read list, we must now use it */
+ 
+-do_read_process_list:
++do_process_list:
+ 
+-	list_for_each_entry_safe(node, node_next, &process_list, process_list) {
++	list_for_each_entry_safe(node, node_next, process_list, process_list) {
+ 
+ 		err=pkt_read(node);
+ 
+@@ -660,29 +612,217 @@
+ 		if (err < 0) {
+ 			kcom_node_increment_error(node);
+ 			kcom_node_sock_release(node);
++			printk(KERN_ERR "ERROR receiving data => ignoring packet.\n");
+ 		}
+ 
+ 		kcom_node_clear_error(node);
+ 
+ 	}
+-	if (!list_empty(&process_list)) {
++	if (!list_empty(process_list)) {
+ 		/* Prevent infinite loop 60s */
+-		if (60000 < nb_retries++) {
++		if (60000 < ++nb_retries) {
+ 			OMBUG("too many retries\n");
+-			goto read_clear_list_exit;
++			goto clear_list_exit;
+ 		}
+ 		schedule_timeout(HZ/1000);
+-		goto do_read_process_list;
++		goto do_process_list;
+ 	}
+ 
+ 	/* Clear the process_list and intialize each element, if we find an
+ 	 * offensive node in it, just delete the socket ... */
+ 
+-read_clear_list_exit:
+-	list_for_each_entry_safe(node, node_next, &process_list, process_list) {
++clear_list_exit:
++	list_for_each_entry_safe(node, node_next, process_list, process_list) {
+ 		list_del( &node->process_list);
+-		kcom_node_del(&node->addr);
++		INIT_LIST_HEAD(&node->process_list);
++		kcom_node_increment_error(node);
+ 	}
++}
++
++/**
++ * __kcomd_thread_do_write
++ *
++ * Description:
++ *    only called from kcomd_thread_handle_streams, read the list, and write
++ *    all pending packets. Handle the error count of nodes as well
++ *
++ *    This function may schedule or hold locks ...
++ **/
++
++void __kcomd_thread_do_write(struct list_head* process_list)
++{
++	struct kcom_task* task, *task_next;
++	struct kcom_pkt* pkt, *pkt_next;
++	struct kcom_node* node = NULL;
++	int err = 0;
++	int nb_retries = 0;
++	struct socket* sock = NULL;
++
++do_process_list:
++
++	list_for_each_entry_safe(task, task_next, process_list, process_list){
++
++		node = task->node;
++		if (!node)
++			goto next_task_del;
++		/* First check all socks are ok */
++		if(!node->sock)
++			__create_connection(&node->addr, node);
++
++		sock = node->sock;
++
++		if(!sock)
++			goto next_task_error;
++
++		/* Now send all packets on the egress_list */
++
++		list_for_each_entry_safe(pkt, pkt_next, &task->egress_list, list) {
++
++			err = data_send(sock, pkt);
++
++			/* If EAGAIN or ENOSPC, we will wait after trying all packets only*/
++			if (-EAGAIN==err || -ENOSPC==err)
++				goto next_task;
++
++			/* if any other error, reset the offending connection,
++			 * and get the task out of the proces_list */
++			if (err<0) {
++				kcom_node_sock_release(node);
++				goto next_task_error;
++			}
++
++			kcom_pkt_delete(pkt);
++			kcom_node_clear_error(node);
++		}
++
++		/* If we arrive here, all packets are sent */
++
++	/* Next task removing the task from process_list */
++	next_task_del:
++		list_del(&task->process_list);
++		INIT_LIST_HEAD(&task->process_list);
++	/* Next task without removing the task from process_list */
++	next_task:
++		continue;
++
++	/* Next task incrementing the error count */
++	next_task_error:
++		list_del(&task->process_list);
++		INIT_LIST_HEAD(&task->process_list);
++		/* This function may delete the node */
++		kcom_node_increment_error(node);
++		/* FIXME: in the future, if the node is deleted,
++		 *        we should find all occurences of the node
++		 *        in the process_list to remove relative tasks as well
++		 */
++
++	}
++
++	/* We passed once, but we may have been interrupted ... so check */
++
++	if (!list_empty(process_list)) {
++		/* Prevent infinite loop 60s */
++		if (60000 < ++nb_retries) {
++			OMBUG("too many retries\n");
++			goto clear_list_exit;
++		}
++		schedule_timeout(HZ/1000);
++		goto do_process_list;
++	}
++
++clear_list_exit:
++	list_for_each_entry_safe(task, task_next, process_list, process_list) {
++		list_del( &task->process_list);
++		INIT_LIST_HEAD(&node->process_list);
++		kcom_node_increment_error(task->node);
++	}
++}
++
++/*
++ * __kcomd_thread_prepare_task
++ *
++ * Description:
++ *    Move all packets from out_packs list to egress_list for sending
++ **/
++
++static void __kcomd_thread_prepare_task(struct kcom_task* task)
++{
++	struct kcom_pkt *pkt, *pkt_next;
++
++	write_lock(&task->out_packs_lock);
++	list_for_each_entry_safe(pkt, pkt_next, &task->out_packs, list){
++		list_move_tail(&pkt->list, &task->egress_list);
++	}
++	write_unlock(&task->out_packs_lock);
++}
++
++/**
++ * kcomd_thread_handle_streams:
++ *
++ * Description:
++ *    kcomd_thread_handle_streams handle the read/write on the opened sockets
++ *    it is uniquely called from kcomd_thread (and should be called without
++ *    holding any locks). This function may schedule or sleep.
++ *
++ *    This function creates two lists, one for write one for read, and use
++ *    __kcomd_thread_do_read/__kcomd_thread_do_write to handle the work.
++ **/
++
++void kcomd_thread_handle_streams(void)
++{
++
++	struct kcom_node *node;
++	struct kcom_task *task;
++	struct list_head process_list;
++	struct list_head write_process_list;
++
++	INIT_LIST_HEAD(&process_list);
++	INIT_LIST_HEAD(&write_process_list);
++
++	/* for each nodes { test bit, in, out and do stuff } */
++	/*
++	 * If we need to read from a socket, we might schedule or sleep ...
++	 * this we must not hold any locks, therefore we must build
++	 * a second list for reading ...
++	 */
++
++	read_lock(&kcom_nodes_lock);
++	list_for_each_entry (node, &kcom_nodes, list) {
++
++		INIT_LIST_HEAD(&node->process_list);
++
++		/* Build read list */
++		if (test_bit(node->fd, sockets_fds.res_in)) {
++			OMDEBUG_KCOMD( 3, "KCOMD: receiving on fd %d\n", node->fd );
++			list_add_tail( &node->process_list, &process_list );
++		}
++
++		/* Build write list */
++		if (node->fd!=-1 && test_bit(node->fd, sockets_fds.res_out)) {
++			OMDEBUG_KCOMD( 3, "KCOMD: sending on fd %d\n", node->fd );
++			read_lock(&node->tasks_lock);
++			list_for_each_entry(task, &node->tasks, list){
++
++				INIT_LIST_HEAD(&task->process_list);
++
++				if (!list_empty(&task->out_packs)
++				   || !list_empty(&task->egress_list)) {
++					list_add_tail(&task->process_list, &write_process_list);
++					__kcomd_thread_prepare_task(task);
++				}
++			}
++			read_unlock(&node->tasks_lock);
++		}
++	}
++	read_unlock(&kcom_nodes_lock);
++
++	/* Since the above function may schedule or hold locks, we need
++	 * separate lists */
++	if (!list_empty(&process_list))
++		__kcomd_thread_do_read(&process_list);
++
++	if (!list_empty(&write_process_list))
++		__kcomd_thread_do_write(&write_process_list);
+ 
+ }
+ 

@@ -1,0 +1,104 @@
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-02 22:50:49.000000000 +0100
++++ linux/hpc/proc.c	2006-11-02 22:51:31.000000000 +0100
+@@ -27,6 +27,9 @@
+ #include <hpc/proc.h>
+ #include <hpc/version.h>
+ #include <hpc/service.h>
++#include <linux/inet.h>
++#include <linux/in.h>
++#include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/task.h>
+ #include <hpc/debug.h>
+@@ -37,29 +40,77 @@
+  */
+ static int proc_pid_set_where(struct task_struct *p, char *buf, size_t size)
+ {
+-	int ret;
+-	struct sockaddr destination;
++	struct sockaddr_in* dest_ptr=(struct sockaddr_in *)p->om.whereto;
++	struct sockaddr_in *cur_addr;
++	struct kcom_task *tsk;
++	struct kcom_node *node;
++	/* task_t *kcomd_task;*/
++
++	buf[size-1]='\0';	 /* ensures no trailing crap in 'where' file*/
+ 
+ 	if (size >= 4 && strnicmp(buf, "home", 4) == 0) {
+-		printk("HOME detected\n");
+-		ret = task_register_migration(p, NULL);
++		printk("HOME detected - ");
++		/* p->om.whereto=NULL;*/
++		/* ret = task_register_migration(p, NULL);*/
++		if (task_test_dflags(p, DDEPUTY)) { /* if already migrated and this is home node*/
++			printk("on deputy node\n");
++			node=kcom_node_find((struct sockaddr *)dest_ptr);
++			if (node==NULL)
++				return 1;
++			tsk=kcom_task_find(p->pid);
++			if (tsk==NULL)
++				return 1;
++			kcom_task_send(tsk, MIG_COME_HOME | PKT_NEW_MSG | DEP_FLG, 0, NULL, NULL, 0);
++
++			#if 0
++			read_lock(&tasklist_lock);
++			kcomd_task = find_task_by_pid(kcom_pid);
++			read_unlock(&tasklist_lock);
++			#endif
++
++			if (kcomd_task != NULL)
++				send_sig(SIGHUP,kcomd_task,0);
++			/* kcom_send(MIG_COME_HOME | PKT_NEW_MSG | DEP_FLG, 0, NULL, 0, dest_ptr);*/
++		} else {
++			printk("on remote node\n");
++			task_register_migration(p);
++		}
+ 	} else {
+-		ret = string_to_sockaddr(buf, &destination);
+-		if (ret >= 0)
+-			task_register_migration(p, &destination);
++		if (task_test_dflags(p, DDEPUTY)) {
++			tsk=kcom_task_find(p->pid);
++			if (tsk) {
++				cur_addr=(struct sockaddr_in *)&tsk->node->addr;
++
++				if (in_aton(buf) == cur_addr->sin_addr.s_addr) { /* home -> remote - redundant migration;*/
++					printk("Process already migrated to %s\n", buf);
++					return size;
++				} /* FIXME:  remote to remote migration*/
++			}
++		} else {
++
++			dest_ptr->sin_family=AF_INET;
++			dest_ptr->sin_port=htons(DAEMON_IP4_PORT);
++			dest_ptr->sin_addr.s_addr=in_aton(buf);
++
++			task_register_migration(p);
++		}
+ 	}
++
+ 	return size;
+ }
+ 
+ static int proc_pid_get_where(struct task_struct *p, char *buf, size_t size)
+ {
+ 	int length;
+-	struct sockaddr address;
++	struct sockaddr_in *saddr;
++	unsigned int addr;
+ 
+-	if (p->om.contact && task_test_dflags(p, DMIGRATED)) {
+-		comm_getname(p->om.contact, &address, 1);
+-		length = sockaddr_to_string(&address, buf);
+-		length += sprintf(buf + length, "\n");
++	if (task_test_dflags(p, DMIGRATED)) {
++	/* FIXME:  what if process is currently migrating? */
++		saddr=(struct sockaddr_in *)p->om.whereto;
++		addr=saddr->sin_addr.s_addr;
++		length=sprintf(buf, "%u.%u.%u.%u\n", (0x000000FF & addr), (0x0000FF00 & addr)>>8,
++							(0x00FF0000 & addr)>>16, (0xFF000000 & addr) >> 24);
+ 	} else
+ 		length = sprintf(buf, "home\n");
+ 

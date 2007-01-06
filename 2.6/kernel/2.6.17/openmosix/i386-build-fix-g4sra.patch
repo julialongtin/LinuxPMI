@@ -1,0 +1,107 @@
+Subject: [patch @num@/@total@] i386 build fix
+
+This patch was first sent to me by Carl Radford <CRADFORD@bordersgroupinc.com>
+here is the first transcript of his mail :
+
+> Hi Florian,
+>
+> http://openmosix.unfreeze.net/releases/kernels/linux-2.6.17-20061101-prealpha.tar.bz2
+>
+>
+> Will not compile for me under i386 arch with gcc 4.1.1, due to errors in hpc/kcomd.c
+>
+> I have made a patch for you to review of the changes I made to get a clean compile, DO NOT TRUST IT! :>)
+
+It's now reviewed, and integrated in the new release :
+
+http://openmosix.unfreeze.net/releases/kernels/linux-2.6.17-20061102-prealpha.tar.bz2
+
+Thanks Carl!
+
+Index: linux/hpc/arch-i386.c
+===================================================================
+--- linux.orig/hpc/arch-i386.c	2006-11-13 16:00:16.000000000 +0100
++++ linux/hpc/arch-i386.c	2006-11-13 16:02:03.000000000 +0100
+@@ -273,3 +273,11 @@
+ 	retval = remote_do_fork(clone_flags, newsp, &regs, 0, parent_tidptr, child_tidptr);
+ 	return retval;
+ }
++
++/*****************************************************************************/
++
++void arch_do_signal(task_t *p)
++{
++  do_signal(ARCH_TASK_GET_USER_REGS(p));
++}
++
+Index: linux/hpc/arch-x86_64.c
+===================================================================
+--- linux.orig/hpc/arch-x86_64.c	2006-11-13 16:00:16.000000000 +0100
++++ linux/hpc/arch-x86_64.c	2006-11-13 16:02:03.000000000 +0100
+@@ -180,6 +180,14 @@
+ 	return remote_do_fork(SIGCHLD, regs.rsp, &regs, 0, NULL, NULL);
+ }
+ 
++/*****************************************************************************/
++void arch_do_signal(task_t *p)
++{
++  do_signal(ARCH_TASK_GET_USER_REGS(p),NULL);
++}
++
++/*****************************************************************************/
++
+ #define NOT_IMPLEMENTED(fct)					\
+ asmlinkage long fct(struct pt_regs regs)			\
+ { printk(KERN_ERR #fct "not yet implemented\n"); return -1; }
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-13 16:02:00.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-13 16:02:03.000000000 +0100
+@@ -408,8 +408,8 @@
+ 
+ 	int signr;
+ 
+-	do_signal(ARCH_TASK_GET_USER_REGS(p), NULL);
+-	
++	arch_do_signal(p);
++
+ 
+ 	printk(KERN_WARNING "%s does not yet know how to process signals ... \n", __FUNCTION__);
+ 
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:02:00.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:02:03.000000000 +0100
+@@ -165,7 +165,7 @@
+ {
+ 
+ 	struct msghdr msg;
+-	struct kvec packet[2] = {{0}};
++	struct kvec packet[2] = {{0},{0}};
+ 	int nvec = 1;
+ 	int total_data = 0;
+ 	int first_vec = 0;
+@@ -404,9 +404,9 @@
+ 	/*sys_close(node->fd); */
+ 	sock_release(node->sock);
+ 
+-	write_lock(kcom_nodes_lock);
++	write_lock(&kcom_nodes_lock);
+ 	list_del(&node->list);
+-	write_unlock(kcom_nodes_lock);
++	write_unlock(&kcom_nodes_lock);
+ 	kmem_cache_free(kcom_node_cachep, node);
+ 
+ 
+Index: linux/include/hpc/arch.h
+===================================================================
+--- linux.orig/include/hpc/arch.h	2006-11-13 16:00:16.000000000 +0100
++++ linux/include/hpc/arch.h	2006-11-13 16:02:03.000000000 +0100
+@@ -26,6 +26,7 @@
+ int arch_mig_receive_proc_context(struct task_struct *, struct omp_mig_task *);
+ void arch_mig_receive_fp(struct task_struct *, struct omp_mig_fp *);
+ int arch_mig_receive_specific(struct task_struct *, struct omp_mig_arch *);
++void arch_do_signal(task_t *p);
+ 
+ void arch_mig_send_pre(struct task_struct *);
+ void arch_mig_send_post(struct task_struct *);

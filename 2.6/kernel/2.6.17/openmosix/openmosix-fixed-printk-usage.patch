@@ -1,0 +1,895 @@
+Subject: [patch @num@/@total@] Fix printk usage
+This trivial patch fix the printk usage (we should use printk(KERN_XXXX as much as possible)
+Index: linux/hpc/comm.c
+===================================================================
+--- linux.orig/hpc/comm.c	2006-11-02 22:50:46.000000000 +0100
++++ linux/hpc/comm.c	2006-11-02 22:51:55.000000000 +0100
+@@ -142,7 +142,7 @@
+ 
+ 	error = sock->ops->bind(sock, saddr, sizeof(*saddr));
+ 	if (error == -EADDRINUSE)
+-		printk("comm_bind() Already in use\n");
++		printk(KERN_ERR "comm_bind() Already in use\n");
+ 
+ 	return error;
+ }
+@@ -431,7 +431,7 @@
+ 
+ 	error = sock_sendmsg(mlink, &msg, len);
+ 	if (error != len)
+-		printk("sock_sendmsg: sent %d of %d\n", error, len);
++		printk(KERN_WARNING "sock_sendmsg: sent %d of %d\n", error, len);
+ 
+ 	set_fs(oldfs);
+ 
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-11-02 22:51:45.000000000 +0100
++++ linux/hpc/copyuser.c	2006-11-02 22:51:55.000000000 +0100
+@@ -392,7 +392,7 @@
+ 					if (kcomd_task) {
+ 						send_sig(SIGHUP, kcomd_task, 0);
+ 					} else
+-						printk("Unable to signal kcomd\n");
++						printk(KERN_WARNING "Unable to signal kcomd\n");
+ 
+ 					ret=pkt->addr;  /* the return value is stored in the addr field */
+ 					list_del(&pkt->list);
+Index: linux/hpc/debug-i386.c
+===================================================================
+--- linux.orig/hpc/debug-i386.c	2006-11-02 22:50:46.000000000 +0100
++++ linux/hpc/debug-i386.c	2006-11-02 22:51:55.000000000 +0100
+@@ -36,20 +36,20 @@
+ 
+ 	reg = (myreg) ? myreg : ARCH_TASK_GET_USER_REGS(current);
+ 
+-	printk("pt_regs:\n");
+-	printk("ebx: 0x%lx, ecx: 0x%lx, edx: 0x%lx\n", reg->ebx, reg->ecx, reg->edx);
+-	printk("esi: 0x%lx, edi: 0x%lx, ebp: 0x%lx\n", reg->esi, reg->edi, reg->ebp);
+-	printk("eax: 0x%lx, xds: 0x%x, xes: 0x%x\n", reg->eax, reg->xds, reg->xes);
+-	printk("orig_eax: 0x%lx, eip: 0x%lx, xcs: 0x%x\n", reg->orig_eax, reg->eip, reg->xcs);
+-        printk("eflags: 0x%lx, esp: 0x%lx, xss: 0x%x\n", reg->eflags, reg->esp, reg->xss);
++	printk(KERN_DEBUG "pt_regs:\n");
++	printk(KERN_DEBUG "ebx: 0x%lx, ecx: 0x%lx, edx: 0x%lx\n", reg->ebx, reg->ecx, reg->edx);
++	printk(KERN_DEBUG "esi: 0x%lx, edi: 0x%lx, ebp: 0x%lx\n", reg->esi, reg->edi, reg->ebp);
++	printk(KERN_DEBUG "eax: 0x%lx, xds: 0x%x, xes: 0x%x\n", reg->eax, reg->xds, reg->xes);
++	printk(KERN_DEBUG "orig_eax: 0x%lx, eip: 0x%lx, xcs: 0x%x\n", reg->orig_eax, reg->eip, reg->xcs);
++        printk(KERN_DEBUG "eflags: 0x%lx, esp: 0x%lx, xss: 0x%x\n", reg->eflags, reg->esp, reg->xss);
+ }
+ 
+ 
+ void inline debug_thread(struct thread_struct *t)
+ {
+-	printk("thread_struct:\n");
+-	printk("esp0: 0x%lx, sysenter_cs: 0x%lx\n",t->esp0, t->sysenter_cs);
+-	printk("eip: 0x%lx, esp: 0x%lx", t->eip, t->esp);
++	printk(KERN_DEBUG "thread_struct:\n");
++	printk(KERN_DEBUG "esp0: 0x%lx, sysenter_cs: 0x%lx\n",t->esp0, t->sysenter_cs);
++	printk(KERN_DEBUG "eip: 0x%lx, esp: 0x%lx", t->eip, t->esp);
+ 
+ }
+ 
+Index: linux/hpc/debug.c
+===================================================================
+--- linux.orig/hpc/debug.c	2006-11-02 22:50:46.000000000 +0100
++++ linux/hpc/debug.c	2006-11-02 22:51:55.000000000 +0100
+@@ -27,7 +27,7 @@
+ 
+ void debug_mlink(struct socket *sock)
+ {
+-	printk("mlink: socket @ = %p\n", sock);
++	printk(KERN_DEBUG "mlink: socket @ = %p\n", sock);
+ }
+ 
+ 
+@@ -40,7 +40,7 @@
+ 	for (i = 0; i < 4096; i++)
+ 		digest += ptr[i] * i;
+ 
+-	printk("sum of 0x%p is %lu\n", (void *) addr, digest);
++	printk(KERN_DEBUG"sum of 0x%p is %lu\n", (void *) addr, digest);
+ }
+ 
+ void debug_vmas(struct mm_struct *mm)
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-02 22:51:53.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-02 22:51:55.000000000 +0100
+@@ -61,7 +61,7 @@
+ 			continue;
+ 		}
+ 		if (i < 0) {
+-			printk("ERROR %d receiving data.\n", i);
++			printk(KERN_ERR "ERROR %d receiving data.\n", i);
+ 			set_fs(oldfs);
+ 			return -1;
+ 		}
+@@ -108,7 +108,7 @@
+ 			continue;
+ 		}
+ 		if (i < 0) {
+-			printk("ERROR %d receiving header.\n", i);
++			printk(KERN_ERR "ERROR %d receiving header.\n", i);
+ 			set_fs(oldfs);
+ 			return NULL;
+ 		}
+@@ -272,7 +272,7 @@
+ 
+ 	node=kmem_cache_alloc(kcom_node_cachep, SLAB_KERNEL);
+ 	if (!node) {
+-		printk("Unable to allocate node space.\n");
++		printk(KERN_ERR "Unable to allocate node space.\n");
+ 		return NULL; //-ENOMEM;
+ 	}
+ 	INIT_LIST_HEAD(&node->list);
+@@ -295,10 +295,10 @@
+ 	if (kcomd_task)
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 	else {
+-		printk("Unable to find kcomd daemon.\n");
++		printk(KERN_ERR "Unable to find kcomd daemon.\n");
+ 		return NULL;
+ 	}
+-	printk("leaving kcom_node_add\n");
++	printk(KERN_DEBUG "leaving kcom_node_add\n");
+ 	return node;
+ 
+ }
+@@ -355,7 +355,7 @@
+ 	ret = sock_setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
+ 		pval, sizeof(val));
+ 	if (ret) {
+-		printk("unable to setsock SO_KEEPALIVE ERROR %d\n", ret);
++		printk(KERN_ERR "unable to setsock SO_KEEPALIVE ERROR %d\n", ret);
+ 		return -1;
+ 	}
+ 
+@@ -364,7 +364,7 @@
+ 	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL,
+ 		pval, sizeof(val));
+ 	if (ret) {
+-		printk("Unable to setsock TCP_KEEPINTVL ERROR %d\n", ret);
++		printk(KERN_ERR "Unable to setsock TCP_KEEPINTVL ERROR %d\n", ret);
+ 		return -1;
+ 	}
+ 
+@@ -372,7 +372,7 @@
+ 	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,
+ 		pval, sizeof(val));
+ 	if (ret) {
+-		printk("unable to setsock TCP_KEEPCNT ERROR %d\n", ret);
++		printk(KERN_ERR "unable to setsock TCP_KEEPCNT ERROR %d\n", ret);
+ 		return -1;
+ 	}
+ 
+@@ -380,14 +380,14 @@
+ 	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE,
+ 		pval, sizeof(val));
+ 	if (ret) {
+-		printk("unable to setsock TCP_KEEPIDLE ERROR %d\n", ret);
++		printk(KERN_ERR "unable to setsock TCP_KEEPIDLE ERROR %d\n", ret);
+ 		return -1;
+ 	}
+ 
+ 	val=1;
+ 	ret = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, pval, sizeof(val));
+ 	if (ret < 0) {
+-		printk("Unable to setsockopt ERROR: %d\n", ret);
++		printk(KERN_ERR "Unable to setsockopt ERROR: %d\n", ret);
+ 		return -1;
+ 	}
+ 	set_fs(oldfs);
+@@ -417,7 +417,7 @@
+ 
+ 	ret = sock_create(saddr->sa_family, SOCK_STREAM, IPPROTO_TCP, &sock);
+ 	if (ret < 0) {
+-		printk("Unable to sock_create. ret=%d\n", ret);
++		printk(KERN_ERR "Unable to sock_create. ret=%d\n", ret);
+ 		return NULL;
+ 	}
+ 
+@@ -438,7 +438,7 @@
+ 	set_current_state(TASK_RUNNING);
+ 
+ 	if (error < 0) {
+-		printk("Unable to create connection. Err %d\n", error);
++		printk(KERN_ERR "Unable to create connection. Err %d\n", error);
+ 		return NULL;
+ 	}
+ 
+@@ -446,17 +446,17 @@
+ 	if (!node) {
+ 		node = kcom_node_add(sock);
+ 		if (!node) {
+-			printk("Unable to add node\n");
++			printk(KERN_ERR "Unable to add node\n");
+ 			return NULL;
+ 		}
+ 		memcpy(&node->addr, saddr, sizeof(*saddr));
+ 		ret=set_sockopts(node->sock);
+ 		if (ret) {
+-			printk("Unable to set socket options.\n");
++			printk(KERN_ERR "Unable to set socket options.\n");
+ 			return NULL;
+ 		}
+ 	} else
+-		printk("Connection already exists. Not creating new node.\n");
++		printk(KERN_WARNING "Connection already exists. Not creating new node.\n");
+ 
+ 	return node;
+ 
+@@ -496,7 +496,7 @@
+ 					kctask->rpid = 0;
+ 				}
+ 			} else {
+-				printk("ERROR creating kcom task.\n");
++				printk(KERN_ERR "ERROR creating kcom task.\n");
+ 				return NULL;
+ 			}
+ 		}
+@@ -542,14 +542,14 @@
+ 		list_for_each_entry(tmp2, &tmp->tasks, list)
+ 			if (task_test_dflags(current, DREMOTE)) {
+ 				if (tmp2->rpid == pid) {
+-					printk("Deleting remote kcom task %u.\n", pid);
++					printk(KERN_DEBUG "Deleting remote kcom task %u.\n", pid);
+ 					list_del(&tmp2->list);
+ 					kfree(tmp2);
+ 					break;
+ 				}
+ 			 } else {
+ 				if (tmp2->hpid == pid) {
+-					printk("Deleting home kcom task %u.\n", pid);
++					printk(KERN_DEBUG "Deleting home kcom task %u.\n", pid);
+ 					list_del(&tmp2->list);
+ 					kfree(tmp2);
+ 					break;
+@@ -579,7 +579,7 @@
+ 	p = find_task_by_pid(pid);
+ 	// read_unlock(&tasklist_lock);
+ 	if (!p) {
+-		printk("Unable to find pid %u\n", pid);
++		printk(KERN_ERR "Unable to find pid %u\n", pid);
+ 		return NULL;
+ 	}
+ 
+@@ -724,7 +724,7 @@
+ 
+ 	node=kcom_node_find((struct sockaddr *)saddr);
+ 	if (node==NULL) {
+-		printk("node not found, creating new connection.\n");
++		printk(KERN_ERR "node not found, creating new connection.\n");
+ 		node=create_connection((struct sockaddr *)saddr);
+ 		if (node==NULL)
+ 			return -1;
+@@ -732,7 +732,7 @@
+ 
+ 	tsk=kcom_task_find(p->pid);
+ 	if (tsk==NULL) {
+-		printk("Task not found. creating new.\n");
++		printk(KERN_ERR "Task not found. creating new.\n");
+ 		tsk=kcom_task_create(node, p->pid);
+ 		if (tsk==NULL)
+ 			return -1;
+@@ -784,7 +784,7 @@
+ 	if (kcomd_task)
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 	else {
+-		printk("Unable to signal kcomd\n");
++		printk(KERN_ERR "Unable to signal kcomd\n");
+ 		return -1;
+ 	}
+ 
+@@ -832,7 +832,7 @@
+ 	if (kcomd_task)
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 	else {
+-		printk("Unable to signal kcomd\n");
++		printk(KERN_ERR "Unable to signal kcomd\n");
+ 		return -1;
+ 	}
+ 
+@@ -875,10 +875,10 @@
+ 
+ 	list_add_tail(&send_pkt->list, &send_tsk->out_packs);
+ 	if (kcomd_task) {
+-		printk("Signaling kcomd\n");
++		printk(KERN_DEBUG "Signaling kcomd\n");
+ 		send_sig(SIGHUP, kcomd_task, 0);
+ 	} else {
+-		printk("Unable to signal kcomd\n");
++		printk(KERN_ERR "Unable to signal kcomd\n");
+ 		return -1;
+ 	}
+ 	return 0;
+@@ -937,14 +937,14 @@
+ 	struct kcom_pkt *pkt, *pkt_next;
+ 	int i=-1;
+ 
+-	printk("wait_for_response...for msgid %u\n", msgid);
++	printk(KERN_DEBUG "wait_for_response...for msgid %u\n", msgid);
+ 	list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list)
+ 		// FIXME:  check for resp or ack, too.
+ 		if (msgid==pkt->msgid) {
+ 			i=pkt->len;
+ 			list_del(&pkt->list);
+ 			kmem_cache_free(kcom_pkt_cachep, pkt);
+-			printk("wait_for_response: i=%d, addr=%lu pkt->resp=%s\n", i, pkt->addr, pkt->resp);
++			printk(KERN_DEBUG"wait_for_response: i=%d, addr=%lu pkt->resp=%s\n", i, pkt->addr, pkt->resp);
+ 		}
+ 	return i;
+ 
+@@ -965,20 +965,20 @@
+ 
+ 	node=kcom_node_find((struct sockaddr *)saddr);
+ 	if (node==NULL) {
+-		printk("Node not found, creating new connection.\n");
++		printk(KERN_DEBUG "Node not found, creating new connection.\n");
+ 		node=create_connection((struct sockaddr *)saddr);
+ 		if (!node) {
+-			printk("ERROR: Unable to create new connection.\n");
++			printk(KERN_ERR "ERROR: Unable to create new connection.\n");
+ 			return -1;
+ 		}
+ 	}
+ 
+ 	tsk=kcom_task_find(p->pid);
+ 	if (tsk==NULL) {
+-		printk("Task not found. creating new.\n");
++		printk(KERN_DEBUG "Task not found. creating new.\n");
+ 		tsk=kcom_task_create(node, p->pid);
+ 		if (!tsk) {
+-			printk("ERROR: Unable to create task.\n");
++			printk(KERN_ERR "ERROR: Unable to create task.\n");
+ 			return -1;
+ 		}
+ 	}
+@@ -989,7 +989,7 @@
+ 	if (kcomd_task)
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 	else {
+-		printk("Unable to find kcomd daemon.\n");
++		printk(KERN_ERR "Unable to find kcomd daemon.\n");
+ 		return -1;
+ 	}
+ 
+@@ -999,7 +999,7 @@
+ 		set_current_state(TASK_INTERRUPTIBLE);
+ 	}
+ 	set_current_state(TASK_RUNNING);
+-	printk("Done waiting. msgid %d received...\n", msgid);
++	printk(KERN_DEBUG "Done waiting. msgid %d received...\n", msgid);
+ 
+ 
+ 	return 0;
+@@ -1021,7 +1021,7 @@
+ 
+ 	node=kcom_node_find((struct sockaddr *)saddr);
+ 	if (node==NULL) {
+-		printk("node not found, creating new connection.\n");
++		printk(KERN_DEBUG "node not found, creating new connection.\n");
+ 		node=create_connection((struct sockaddr *)saddr);
+ 		if (node==NULL) {
+ 			return -1;
+@@ -1030,10 +1030,10 @@
+ 
+ 	tsk=kcom_task_find(p->pid);
+ 	if (!tsk) {
+-		printk("Task not found. Creating new.\n");
++		printk(KERN_DEBUG "Task not found. Creating new.\n");
+ 		tsk=kcom_task_create(node, p->pid);
+ 		if (!tsk) {
+-			printk("Unable to create task\n");
++			printk(KERN_ERR "Unable to create task\n");
+ 			return -1;
+ 		}
+ 	}
+@@ -1043,7 +1043,7 @@
+ 	if (kcomd_task)
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 	else {
+-		printk("Unable to find kcomd daemon.\n");
++		printk(KERN_ERR "Unable to find kcomd daemon.\n");
+ 		return -1;
+ 	}
+ 
+@@ -1055,7 +1055,7 @@
+ 		schedule();
+ 		goto retry;
+ 	}
+-	printk("Done waiting. msgid %d received...\n", msgid);
++	printk(KERN_DEBUG "Done waiting. msgid %d received...\n", msgid);
+ 
+ 	return i;
+ }
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-02 22:51:46.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-02 22:51:55.000000000 +0100
+@@ -69,7 +69,7 @@
+ 		send_sig(SIGHUP,kcomd_task,0);
+ 
+ 	if (sizeof(struct omp_syscall_req) != pkt->len)
+-		printk("ERROR in deputy_do_syscall.  data size of %d does not match expected %d\n", pkt->len, sizeof(struct omp_syscall_req));
++		printk(KERN_ERR "ERROR in deputy_do_syscall.  data size of %d does not match expected %lu\n", pkt->len, sizeof(struct omp_syscall_req));
+ 	memcpy(&s, pkt->data, pkt->len);
+ 	
+ 	OMDEBUG_SYS(1, "[deputy] receive syscall %d\n", s.n);
+Index: linux/hpc/kernel.c
+===================================================================
+--- linux.orig/hpc/kernel.c	2006-11-02 22:51:44.000000000 +0100
++++ linux/hpc/kernel.c	2006-11-02 22:51:55.000000000 +0100
+@@ -169,10 +169,8 @@
+ 	mytsk=kcom_task_find(p->pid);
+ 		if (!list_empty(&mytsk->in_packs))
+ 			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+-				printk("packet found.\n");
+ 				if ((pkt->type & MIG_MASK) == MIG_SYSCALL) {
+ 					if ((pkt->type & SYSCALL_MASK) == DEP_SIGNAL) {
+-						printk("Signal pkt found.\n");
+ 						remote_do_signal(p, pkt);
+ 						list_del(&pkt->list);
+ 					}
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:51:42.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:51:55.000000000 +0100
+@@ -83,14 +83,14 @@
+ 	struct kcom_pkt *send_pkt;
+ 	task_t *sltsk;
+ 
+-	printk("FUNCTION: mig_do_receive_home\n");
++	printk(KERN_DEBUG "FUNCTION: mig_do_receive_home\n");
+ 
+ 	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {
+-		printk("Received MIG_GO_HOME NEW_MSG packet.\n");
++		printk(KERN_DEBUG "Received MIG_GO_HOME NEW_MSG packet.\n");
+ 
+ 		recv_tsk=kcom_task_find(recv_kcom_pkt->hpid);
+ 		if (!recv_tsk) {
+-			printk("Unable to find home pid %u\n", recv_kcom_pkt->hpid);
++			printk(KERN_ERR "Unable to find home pid %u\n", recv_kcom_pkt->hpid);
+ 			return -1;
+ 		}
+ 
+@@ -109,20 +109,20 @@
+ 		sltsk=find_task_by_pid(recv_kcom_pkt->hpid); /* only home node will receive MIG_GO_HOME NEW_MSG*/
+ 		/* read_unlock(&tasklist_lock);*/
+ 		if (sltsk) {
+-			printk("Registering task migration\n");
++			printk(KERN_DEBUG "Registering task migration\n");
+ 			task_register_migration(sltsk);
+ 		} else {
+-			printk("Failed to register task migration\n");
++			printk(KERN_ERR "Failed to register task migration\n");
+ 			return -1;
+ 		}
+ 
+ 
+ 	} else {
+-		printk("Received MIG_GO_HOME PKT_ACK packet.\n");
++		printk(KERN_DEBUG "Received MIG_GO_HOME PKT_ACK packet.\n");
+ 
+ 		recv_tsk=kcom_task_find(recv_kcom_pkt->rpid);
+ 		if (!recv_tsk) {
+-			printk("Unable to find remote pid %u\n", recv_kcom_pkt->rpid);
++			printk(KERN_ERR "Unable to find remote pid %u\n", recv_kcom_pkt->rpid);
+ 			return -1;
+ 		}
+ 
+@@ -131,10 +131,10 @@
+ 		/* spin_unlock(&recv_tsk->spinlock);*/
+ 		sltsk=find_task_by_pid(recv_kcom_pkt->rpid); /* only remote node will receive MIG_GO_HOME ack*/
+ 		if (sltsk) {
+-			printk("Waking up process %u\n", sltsk->pid);
++			printk(KERN_DEBUG "Waking up process %u\n", sltsk->pid);
+ 			wake_up_process(sltsk);
+ 		} else {
+-			printk("Unable to wake up process %u\n", recv_kcom_pkt->rpid);
++			printk(KERN_ERR"Unable to wake up process %u\n", recv_kcom_pkt->rpid);
+ 			return -1;
+ 		}
+ 	}
+@@ -158,16 +158,16 @@
+ 	pid_t rpid;
+ 	struct sockaddr_in *saddr;
+ 	const unsigned int LO_IP=in_aton("127.0.0.1");
+-	printk("Received MIG_INIT packet.\n");
++	printk(KERN_DEBUG "Received MIG_INIT packet.\n");
+ 
+ 	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {	 /* incoming process*/
+-		printk("Creating new process.\n");
++		printk(KERN_DEBUG "Creating new process.\n");
+ 		rpid=0;
+ 
+ 		send_pkt=kcom_pkt_create(0, MIG_INIT | PKT_ACK | REM_FLG, 0,  NULL);
+ 
+ 		if (!send_pkt) {
+-			printk("ERROR creating pkt in mig_do_receive_init\n");
++			printk(KERN_ERR "ERROR creating pkt in mig_do_receive_init\n");
+ 			return -1;
+ 		}
+ 		/* responses have same msg id as pkt they are responding to.*/
+@@ -179,13 +179,13 @@
+ 		/* spin_lock();*/
+ 		saddr=(struct sockaddr_in *)&node->addr;
+ 		if (saddr->sin_addr.s_addr==LO_IP) { /* this allows loopback migration to work.*/
+-			printk("Loopback migration.\n"); /* both home and remote processes use same task.  better idea?*/
++			printk(KERN_DEBUG "Loopback migration.\n"); /* both home and remote processes use same task.  better idea?*/
+ 			send_tsk=kcom_home_task_find(recv_kcom_pkt->hpid);
+ 		} else {
+ 			send_tsk=kcom_task_create(node, 0);
+ 			/* spin_unlock();*/
+ 			if (!send_tsk) {
+-				printk("ERROR: creating new kcom_task.\n");
++				printk(KERN_ERR "ERROR: creating new kcom_task.\n");
+ 				return -1;
+ 			}
+ 			send_tsk->hpid=recv_kcom_pkt->hpid;
+@@ -202,7 +202,7 @@
+ 		}
+ 
+ 		if (rpid < 0) {
+-			printk("Error creating new process.\n");
++			printk(KERN_ERR "Error creating new process.\n");
+ 			send_pkt->type=MIG_INIT | PKT_NACK | REM_FLG;
+ 
+ 			/* spin_lock(&send_tsk->spinlock);*/
+@@ -210,7 +210,7 @@
+ 			/* spin_unlock(&send_tsk->spinlock);*/
+ 			return -1;
+ 		} else
+-			printk("New process: %u\n", rpid);
++			printk(KERN_DEBUG "New process: %u\n", rpid);
+ 
+ 		send_pkt->rpid=rpid;
+ 
+@@ -238,7 +238,7 @@
+ {
+ 
+ 	OMDEBUG_MIG(2, "MIG_MM\n");
+-	printk("FUNCTION: mig_do_receive_mm\n");
++	printk(KERN_DEBUG "FUNCTION: mig_do_receive_mm\n");
+ 
+ 	down_write(&p->mm->mmap_sem);
+ 	memcpy(&p->mm->start_code, pkt->data, pkt->len);
+@@ -247,7 +247,7 @@
+ 
+ 	kcom_send_ack(p, pkt);
+ 
+-	printk("leaving FUNCTION: mig_do_receive_mm\n");
++	printk(KERN_DEBUG "leaving FUNCTION: mig_do_receive_mm\n");
+ 
+ }
+ EXPORT_SYMBOL_GPL(mig_do_receive_mm);
+@@ -266,7 +266,7 @@
+ 	extern asmlinkage long sys_madvise(unsigned long, size_t, int);
+ 
+ 
+-	printk("FUNCTION: mig_do_receive_vma\n");
++	printk(KERN_DEBUG "FUNCTION: mig_do_receive_vma\n");
+ 
+ 	a = (struct omp_mig_vma *)pkt->data;
+ 
+@@ -329,7 +329,7 @@
+ 
+ 	kcom_send_ack(p, pkt);
+ 
+-	printk("leaving FUNCTION: mig_do_receive_vma\n");
++	printk(KERN_DEBUG "leaving FUNCTION: mig_do_receive_vma\n");
+ 	return 0;
+ }
+ EXPORT_SYMBOL_GPL(mig_do_receive_vma);
+@@ -409,7 +409,7 @@
+ 	return 0;
+ 
+ out:
+-	printk("receive page failed at addr %p\n", (void *) addr);
++	printk(KERN_ERR "receive page failed at addr %p\n", (void *) addr);
+ 	OMBUG("receive page failed at addr %p\n", (void *) addr);
+ 	__free_page(recv_page);
+ 	return -1;
+@@ -428,7 +428,7 @@
+ {
+ 	struct omp_mig_fp *fp;
+ 
+-	printk("FUNCTION: mig_do_receive_fp\n");
++	printk(KERN_DEBUG "FUNCTION: mig_do_receive_fp\n");
+ 	fp=(void *)pkt->data;
+ 
+ 	OMDEBUG_MIG(2, "MIG_FP\n");
+@@ -437,7 +437,7 @@
+ 
+ 	kcom_send_ack(p, pkt);
+ 
+-	printk("leaving FUNCTION: mig_do_receive_fp\n");
++	printk(KERN_DEBUG "leaving FUNCTION: mig_do_receive_fp\n");
+ 
+ 	return 0;
+ }
+@@ -491,7 +491,7 @@
+ 	arch_pick_mmap_layout(p->mm);
+ 
+ 	kcom_send_ack(p, pkt);
+-	printk("leaving FUNCTION: mig_do_receive_proc_context\n");
++	printk(KERN_DEBUG "leaving FUNCTION: mig_do_receive_proc_context\n");
+ 
+ 	return 0;
+ }
+@@ -524,7 +524,7 @@
+ 	/* Initialize remote proc's whereto*/
+ 	if (task_test_dflags(p, DREMOTE)) {
+ 		memcpy(p->om.whereto, &mytsk->node->addr, sizeof(mytsk->node->addr));
+-		printk("Setting mytsk->rpid (currently: %u) = p->pid (%u)\n", mytsk->rpid, p->pid);
++		printk(KERN_DEBUG "Setting mytsk->rpid (currently: %u) = p->pid (%u)\n", mytsk->rpid, p->pid);
+ 	}
+ 
+ 	set_current_state(TASK_INTERRUPTIBLE);
+@@ -533,7 +533,7 @@
+ 
+ 		if (!list_empty(&mytsk->in_packs))
+ 			list_for_each_entry_safe(pkt, pkt_next, &mytsk->in_packs, list) {
+-				printk("mig_do_receive:  msgid=%u\n", pkt->msgid);
++				printk(KERN_DEBUG "mig_do_receive:  msgid=%u\n", pkt->msgid);
+ 
+ 				switch (pkt->type & MIG_MASK) {
+ 
+@@ -585,7 +585,7 @@
+ 						return 0;
+ 
+ 					default:
+-						printk("[pid: %u] Unknown packet type 0x%x received.\n", p->pid, pkt->type);
++						printk(KERN_ERR "[pid: %u] Unknown packet type 0x%x received.\n", p->pid, pkt->type);
+ 						break;
+ 
+ 				}
+@@ -593,9 +593,9 @@
+ 			}
+ 
+ 	/* spin_unlock(&mytsk->spinlock);*/
+-	printk("process %u going to sleep.\n", p->pid);
++	printk(KERN_DEBUG "process %u going to sleep.\n", p->pid);
+ 	schedule();
+-	printk("process %u waking up.\n", p->pid);
++	printk(KERN_DEBUG "process %u waking up.\n", p->pid);
+ 	set_current_state(TASK_INTERRUPTIBLE);
+ 	/* spin_lock(&mytsk->spinlock);*/
+ 	}
+@@ -643,9 +643,9 @@
+ 	/* set_current_state(TASK_INTERRUPTIBLE);*/
+ 	schedule();
+ 	if (task_test_dflags(p, DREMOTE))
+-	printk("[OM] starting remote process(%d)\n", p->pid);
++	printk(KERN_DEBUG "[OM] starting remote process(%d)\n", p->pid);
+ 	else
+-	printk("[OM] starting local process(%d)\n", p->pid);
++	printk(KERN_DEBUG "[OM] starting local process(%d)\n", p->pid);
+ 
+ 	#if 0
+ 	flush_signals(p); //MSDMSD
+@@ -662,7 +662,7 @@
+ 	arch_kickstart(p);
+ 	/*NOTREACHED*/
+ 
+-	printk("process %u, waking up. YOU SHOULD NOT SEE THIS!!!!!\n", p->pid);
++	printk(KERN_ERR "process %u, waking up. YOU SHOULD NOT SEE THIS!!!!!\n", p->pid);
+ 	while (1) {
+ 		set_current_state(TASK_INTERRUPTIBLE);
+ 		schedule();
+@@ -670,7 +670,7 @@
+ 
+ 
+ fail:
+-	printk("mig_handle_migration failed with %d\n", error);
++	printk(KERN_ERR "mig_handle_migration failed with %d\n", error);
+ 	OMBUG("failed\n");
+ 	do_exit(SIGKILL);
+ 	/*NOTREACHED*/
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2006-11-02 22:51:28.000000000 +0100
++++ linux/hpc/migsend.c	2006-11-02 22:51:55.000000000 +0100
+@@ -77,7 +77,7 @@
+ 
+ 	dest_ptr=(void *)p->om.whereto;
+ 	if (!used_math()) {
+-		printk("leaving FUNCTION: mig_send_fp, !used_math\n");
++		printk(KERN_DEBUG "leaving FUNCTION: mig_send_fp, !used_math\n");
+ 		return 0;
+ 	}
+ 
+@@ -103,12 +103,12 @@
+ 	int ret;
+ 
+ 	dest_ptr=(void *)p->om.whereto;
+-	printk("FUNCTION: mig_send_mm.\n");
++	printk(KERN_DEBUG "FUNCTION: mig_send_mm.\n");
+ 	if (task_test_dflags(p, DREMOTE))
+ 		ret=kcom_send_with_ack(MIG_MM | REM_FLG, sizeof(struct omp_mig_mm), (char *)&p->mm->start_code, 0, dest_ptr);
+ 	else
+ 		ret=kcom_send_with_ack(MIG_MM | DEP_FLG, sizeof(struct omp_mig_mm), (char *)&p->mm->start_code, 0, dest_ptr);
+-	printk("leaving FUNCTION: mig_send_mm\n");
++	printk(KERN_DEBUG "leaving FUNCTION: mig_send_mm\n");
+ 
+ 	return ret;
+ }
+@@ -165,7 +165,7 @@
+ 			ret=kcom_send_with_ack(MIG_VMA | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+ 
+ 		if (ret != 0) {
+-			printk("ERROR sending vmas\n");
++			printk(KERN_ERR "ERROR sending vmas\n");
+ 			return -1;
+ 		}
+ 	}
+@@ -187,7 +187,7 @@
+ 	struct sockaddr_in *dest_ptr;
+ 	char *data;
+ 
+-	printk("FUNCTION: mig_send_pages\n");
++	printk(KERN_DEBUG "FUNCTION: mig_send_pages\n");
+ 	data=kzalloc(PAGE_SIZE, GFP_KERNEL);
+ 
+ 	dest_ptr=(void *)p->om.whereto;
+@@ -280,11 +280,11 @@
+ 	arch_mig_send_pre(p);
+ 
+ 	if (task_test_dflags(p, DREMOTE))  {
+-		printk("Sending MIG_GO_HOME\n");
++		printk(KERN_DEBUG "Sending MIG_GO_HOME\n");
+ 		if (kcom_send_with_ack(MIG_GO_HOME | REM_FLG, 0, NULL, 0, dest_ptr))
+ 			goto fail_mig;
+ 	} else {
+-		printk("Sending MIG_INIT\n");
++		printk(KERN_DEBUG "Sending MIG_INIT\n");
+ 		if (kcom_send_with_ack(MIG_INIT | DEP_FLG, 0, NULL, 0, dest_ptr))
+ 			goto fail_mig;
+ 	}
+@@ -298,13 +298,13 @@
+ 
+ 	arch_mig_send_post(p);
+ 
+-	printk("Process %u now migrated to %u.%u.%u.%u\n", p->pid,
++	printk(KERN_DEBUG "Process %u now migrated to %u.%u.%u.%u\n", p->pid,
+ 					(0x000000FF & addr), (0x0000FF00 & addr)>>8,
+ 					(0x00FF0000 & addr)>>16, (0xFF000000 & addr) >> 24);
+ 
+ 	return 0;
+ fail_mig:
+-	printk("error FUNCTION: mig_do_send\n");
++	printk(KERN_ERR "error FUNCTION: mig_do_send\n");
+ 	OMBUG("failed\n");
+ 	return -1;
+ }
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-02 22:51:31.000000000 +0100
++++ linux/hpc/proc.c	2006-11-02 22:51:55.000000000 +0100
+@@ -49,11 +49,11 @@
+ 	buf[size-1]='\0';	 /* ensures no trailing crap in 'where' file*/
+ 
+ 	if (size >= 4 && strnicmp(buf, "home", 4) == 0) {
+-		printk("HOME detected - ");
++		printk(KERN_DEBUG "HOME detected - ");
+ 		/* p->om.whereto=NULL;*/
+ 		/* ret = task_register_migration(p, NULL);*/
+ 		if (task_test_dflags(p, DDEPUTY)) { /* if already migrated and this is home node*/
+-			printk("on deputy node\n");
++			printk(KERN_DEBUG "on deputy node\n");
+ 			node=kcom_node_find((struct sockaddr *)dest_ptr);
+ 			if (node==NULL)
+ 				return 1;
+@@ -72,7 +72,7 @@
+ 				send_sig(SIGHUP,kcomd_task,0);
+ 			/* kcom_send(MIG_COME_HOME | PKT_NEW_MSG | DEP_FLG, 0, NULL, 0, dest_ptr);*/
+ 		} else {
+-			printk("on remote node\n");
++			printk(KERN_DEBUG "on remote node\n");
+ 			task_register_migration(p);
+ 		}
+ 	} else {
+@@ -82,7 +82,7 @@
+ 				cur_addr=(struct sockaddr_in *)&tsk->node->addr;
+ 
+ 				if (in_aton(buf) == cur_addr->sin_addr.s_addr) { /* home -> remote - redundant migration;*/
+-					printk("Process already migrated to %s\n", buf);
++					printk(KERN_DEBUG "Process already migrated to %s\n", buf);
+ 					return size;
+ 				} /* FIXME:  remote to remote migration*/
+ 			}
+Index: linux/hpc/remote.c
+===================================================================
+--- linux.orig/hpc/remote.c	2006-11-02 22:51:34.000000000 +0100
++++ linux/hpc/remote.c	2006-11-02 22:51:55.000000000 +0100
+@@ -160,10 +160,10 @@
+ 	struct kcom_task *send_tsk;
+ 	// task_t *kcomd_task;
+ 
+-	printk("FUNCTION: remote_do_signal\n");
++	printk(KERN_DEBUG "FUNCTION: remote_do_signal\n");
+ 	memcpy(&s, pkt->data, pkt->len);
+ 	// error = comm_recv(p->om.contact, &s, sizeof(s));
+-	printk("received signal %d\n", s.signr);
++	printk(KERN_DEBUG "received signal %d\n", s.signr);
+ 
+ 
+ 	spin_lock_irqsave(&p->sighand->siglock, flags);
+@@ -187,11 +187,11 @@
+ 	#endif
+ 
+ 	if (kcomd_task) {
+-		printk("Signaling kcomd\n");
++		printk(KERN_DEBUG "Signaling kcomd\n");
+ 		send_sig(SIGHUP, kcomd_task, 0);
+ 	} else
+-		printk("Unable to signal kcomd\n");
+-	printk("leaving FUNCTION: remote_do_signal\n");
++		printk(KERN_ERR "Unable to signal kcomd\n");
++	printk(KERN_DEBUG "leaving FUNCTION: remote_do_signal\n");
+ 	return 0;
+ }
+ 
+@@ -214,11 +214,11 @@
+ 		#endif
+ 		break;
+ 	case DEP_COMING_HOME:
+-		printk("remote_do_comm(): got DEP_COMING_HOME\n");
++		printk(KERN_DEBUG "remote_do_comm(): got DEP_COMING_HOME\n");
+ 		error = task_remote_expel(p);
+ 		break;
+ 	default:
+-		printk("remote_do_comm(): got default\n");
++		printk(KERN_ERR "remote_do_comm(): got default\n");
+ 		goto fail;
+ 	}
+ 
+@@ -242,7 +242,7 @@
+ 	int i;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+ 
+-	printk("FUNCTION: remote_do_syscall\n");
++	printk(KERN_DEBUG "FUNCTION: remote_do_syscall\n");
+ 
+ 	OMDEBUG_SYS(1, "[remote] remote syscall %d\n", n);
+ 
+@@ -250,7 +250,7 @@
+ 	for (i = 0; i < NR_MAX_SYSCALL_ARG; i++)
+ 		s.arg[i] = arch_get_sys_arg(i, regs);
+ 
+-	printk("syscall: [%d]\n", s.n);
++	printk(KERN_DEBUG "syscall: [%d]\n", s.n);
+ 	kcom_send_with_ack(MIG_SYSCALL | REM_FLG, sizeof(s), (char *)&s, 0, dest_ptr);
+ 
+ 	// Set interruptible so we can sleep, but if the remote sends syscall info requests (COPY_TO/FROM_USER, etc), then we have to answer those before sleeping.
+@@ -262,15 +262,15 @@
+ 	if ((n != __NR_exit_group) && (n != __NR_exit))
+ 		r.ret = remote_handle_user(p, REM_SYSCALL|REPLY);
+ 	else { // exit
+-		printk("leaving FUNCTION: remote_do_syscall; exit\n");
++		printk(KERN_DEBUG "leaving FUNCTION: remote_do_syscall; exit\n");
+ 		goto error;
+ 	}
+ 
+ 
+ 	// OMDEBUG_SYS(2, "[remote] sys[%d] = %ld\n", n, r.ret);
+-	printk("[remote] sys[%d] = %ld\n", n, r.ret);
++	printk(KERN_DEBUG "[remote] sys[%d] = %ld\n", n, r.ret);
+ 
+-	printk("leaving FUNCTION: remote_do_syscall\n");
++	printk(KERN_DEBUG "leaving FUNCTION: remote_do_syscall\n");
+ 	return r.ret;
+ 
+ error:
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-11-02 22:51:38.000000000 +0100
++++ linux/hpc/task.c	2006-11-02 22:51:55.000000000 +0100
+@@ -155,7 +155,7 @@
+ 	task_t *parent = current;
+ 
+ 	memset(&p->om, 0, sizeof(om_task_t));
+-	printk("leaving FUNCTION: task_local_bring\n");
++	printk(KERN_DEBUG "leaving FUNCTION: task_local_bring\n");
+ 
+ 	if (p->pid == 1)
+ 		task_set_stay(p, DSTAY_SYSTEM);

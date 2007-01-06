@@ -1,0 +1,57 @@
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:52:01.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:52:02.000000000 +0100
+@@ -323,11 +323,11 @@
+ 	pmd_t * pmd;
+ 	pte_t * pte;
+ 
+-	/* FIXME:   another way?*/
+-	/* Must be done from process context.*/
++ 	/*
++ 	FIXME:   another way?
++ 	Must be done from process context.
++ 	*/
+ 
+-	/* recv_page = alloc_page(GFP_HIGHUSER);*/
+-	/* kfree(pkt->data);*/
+ 
+ 
+ 	addr=pkt->addr;
+@@ -341,36 +341,13 @@
+ 	kmpage=kmap(recv_page);
+ 	memcpy(kmpage, pkt->data, pkt->len);
+ 	kunmap(recv_page);
+-	/**/
+ 
+ 	/* add the page at correct place */
+ 
+-	pgd = pgd_offset(mm, addr);
+ 
+-	pud = pud_alloc(mm, pgd, addr);
+-	if (!pud)
+-		goto out;
+-	pmd = pmd_alloc(mm, pud, addr);
+-	if (!pmd)
+-		goto out;
+-	pte = pte_alloc_map(mm, pmd, addr);
+-	if (!pte)
+-		goto out;
+-	if (!pte_none(*pte))
+-		OMBUG("double page at addr %p\n", (void *) addr);
+-
+-	set_pte(pte, pte_mkdirty(mk_pte(recv_page, vma->vm_page_prot)));
+-	pte_unmap(pte);
+-	page_dup_rmap(recv_page);
+-	inc_mm_counter(mm, file_rss);
+-
+-
+-/*
+ 	down_write(&mm->mmap_sem);
+ 	install_arg_page(vma, recv_page, pkt->addr);
+ 	up_write(&mm->mmap_sem);
+-*/
+-	/* make_pages_present(pkt->addr, pkt->addr+PAGE_SIZE); // NOPE*/
+ 
+ 	kcom_send_ack(p, pkt);
+ 

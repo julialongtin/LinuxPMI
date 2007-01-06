@@ -1,0 +1,219 @@
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2006-11-02 22:50:49.000000000 +0100
++++ linux/hpc/migsend.c	2006-11-02 22:51:28.000000000 +0100
+@@ -31,6 +31,8 @@
+ #include <hpc/hpc.h>
+ #include <hpc/debug.h>
+ #include <hpc/service.h>
++#include <linux/in.h>
++#include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/mig.h>
+ #include <hpc/protocol.h>
+@@ -63,7 +65,7 @@
+ 		/* it's a no go ... */
+ 		OMBUG("no go\n");
+ 		return -1;
+-	}			
++	}
+ 
+ 	return 0;
+ }
+@@ -71,12 +73,20 @@
+ static int mig_send_fp(task_t *p)
+ {
+ 	struct omp_mig_fp m;
++	struct sockaddr_in *dest_ptr;
+ 
+-	if (!used_math())
++	dest_ptr=(void *)p->om.whereto;
++	if (!used_math()) {
++		printk("leaving FUNCTION: mig_send_fp, !used_math\n");
+ 		return 0;
++	}
+ 
+ 	arch_mig_send_fp(p, &m);
+-	return comm_send_hd(p->om.contact, MIG_FP, &m, sizeof(m));
++	if (task_test_dflags(p, DREMOTE))
++		kcom_send_with_ack(MIG_FP | REM_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
++	else
++		kcom_send_with_ack(MIG_FP | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
++	return 0;
+ }
+ 
+ 
+@@ -89,11 +99,18 @@
+  **/
+ static int mig_send_mm(task_t *p)
+ {
+-	struct omp_mig_mm s;
++	struct sockaddr_in *dest_ptr;
++	int ret;
+ 
+-	memcpy(&s, &p->mm->start_code, sizeof(s));
++	dest_ptr=(void *)p->om.whereto;
++	printk("FUNCTION: mig_send_mm.\n");
++	if (task_test_dflags(p, DREMOTE))
++		ret=kcom_send_with_ack(MIG_MM | REM_FLG, sizeof(struct omp_mig_mm), (char *)&p->mm->start_code, 0, dest_ptr);
++	else
++		ret=kcom_send_with_ack(MIG_MM | DEP_FLG, sizeof(struct omp_mig_mm), (char *)&p->mm->start_code, 0, dest_ptr);
++	printk("leaving FUNCTION: mig_send_mm\n");
+ 
+-	return comm_send_hd(p->om.contact, MIG_MM, &s, sizeof(s));
++	return ret;
+ }
+ 
+ static inline void mig_send_vma_file(task_t *p, struct vm_area_struct *vma,
+@@ -128,23 +145,29 @@
+ 	struct vm_area_struct *vma;
+ 	struct omp_mig_vma m;
+ 	int ret = 0;
++	struct sockaddr_in *dest_ptr;
+ 
++	dest_ptr=(void *)p->om.whereto;
+ 	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
+ 	{
+ 		m.vm_start= vma->vm_start;
+ 		m.vm_size = vma->vm_end - vma->vm_start;
+ 		m.vm_flags = vma->vm_flags;
+ 		m.vm_file = vma->vm_file;
+-		m.vm_pgoff = 0;
++		// m.vm_pgoff = 0;
++		m.vm_pgoff = vma->vm_pgoff;
+ 		if (vma->vm_file)
+ 			mig_send_vma_file(p, vma, &m);
+ 
+-		ret = comm_send_hd(p->om.contact, MIG_VMA, &m, sizeof(m));
+-		if (ret < 0) {
+-			OMBUG("send vma failed\n");
+-			break;
++		if (task_test_dflags(p, DREMOTE))
++			ret=kcom_send_with_ack(MIG_VMA | REM_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
++		else
++			ret=kcom_send_with_ack(MIG_VMA | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
++
++		if (ret != 0) {
++			printk("ERROR sending vmas\n");
++			return -1;
+ 		}
+-
+ 	}
+ 	return ret;
+ }
+@@ -161,29 +184,30 @@
+ {
+ 	struct vm_area_struct * vma;
+ 	unsigned long addr;
+-	int error;
++	struct sockaddr_in *dest_ptr;
++	char *data;
++
++	printk("FUNCTION: mig_send_pages\n");
++	data=kzalloc(PAGE_SIZE, GFP_KERNEL);
+ 
++	dest_ptr=(void *)p->om.whereto;
+ 	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
+ 	{
+ 		if (!(vma->vm_flags & VM_READ))
+ 			continue;
+ 		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE)
+ 		{
+-			error = comm_send_hd(p->om.contact, MIG_PAGE, &addr,
+-								sizeof(addr));
+-			if (error < 0)
+-				goto fail;
+-
+-			error = comm_send(p->om.contact, (void *) addr,
+-								PAGE_SIZE);
+-			if (error < 0)
+-				goto fail;
++			// FIXME:   mem pages need to be copied into a buffer, then send the buffer.   ???
++			memcpy(data, (void *)addr, PAGE_SIZE);
++			if (task_test_dflags(p, DREMOTE))
++				kcom_send_with_ack(MIG_PAGE | REM_FLG, PAGE_SIZE, (char *)data, addr, dest_ptr);
++			else
++				kcom_send_with_ack(MIG_PAGE | DEP_FLG, PAGE_SIZE, (char *)data, addr, dest_ptr);
++
+ 		}
+ 	}
++	kfree(data);
+ 	return 0;
+-fail:
+-	OMBUG("failed (addr: %p)\n", (void *) addr);
+-	return -1;
+ }
+ 
+ 
+@@ -194,8 +218,9 @@
+ static int mig_send_proc_context(task_t *p)
+ {
+ 	struct omp_mig_task m;
+-	struct omp_req req;
+-	int error;
++	struct sockaddr_in* dest_ptr;
++
++	dest_ptr=(void *)p->om.whereto;
+ 
+ 	m.ptrace = p->ptrace;
+ 
+@@ -232,18 +257,13 @@
+ 
+ 	arch_mig_send_proc_context(p, &m);
+ 
+-	error = comm_send_hd(p->om.contact, MIG_TASK, &m, sizeof(m));
+-	if (error < 0)
+-		goto fail;
+-
+-	error = comm_recv(p->om.contact, &req, sizeof(req));
++	if (task_test_dflags(p, DREMOTE))
++		kcom_send_with_ack(MIG_TASK | REM_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
++	else
++		kcom_send_with_ack(MIG_TASK | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+ 
+-	if (req.type == (MIG_TASK | REPLY))
+-		return 0; /* commit point */
++	return 0;
+ 
+-fail:
+-	OMBUG("failed\n");
+-	return -1;
+ }
+ 
+ /**
+@@ -255,8 +275,20 @@
+  **/
+ int mig_do_send(task_t *p)
+ {
++	struct sockaddr_in* dest_ptr=(void *)p->om.whereto;
++	unsigned int addr=dest_ptr->sin_addr.s_addr;
+ 	arch_mig_send_pre(p);
+ 
++	if (task_test_dflags(p, DREMOTE))  {
++		printk("Sending MIG_GO_HOME\n");
++		if (kcom_send_with_ack(MIG_GO_HOME | REM_FLG, 0, NULL, 0, dest_ptr))
++			goto fail_mig;
++	} else {
++		printk("Sending MIG_INIT\n");
++		if (kcom_send_with_ack(MIG_INIT | DEP_FLG, 0, NULL, 0, dest_ptr))
++			goto fail_mig;
++	}
++
+ 	if (mig_send_mm(p)) goto fail_mig;
+ 	if (mig_send_vmas(p)) goto fail_mig;
+ 	if (mig_send_pages(p)) goto fail_mig;
+@@ -266,9 +298,13 @@
+ 
+ 	arch_mig_send_post(p);
+ 
++	printk("Process %u now migrated to %u.%u.%u.%u\n", p->pid,
++					(0x000000FF & addr), (0x0000FF00 & addr)>>8,
++					(0x00FF0000 & addr)>>16, (0xFF000000 & addr) >> 24);
++
+ 	return 0;
+ fail_mig:
++	printk("error FUNCTION: mig_do_send\n");
+ 	OMBUG("failed\n");
+-	comm_send_req(p->om.contact, MIG_ABORT);
+ 	return -1;
+ }

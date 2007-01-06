@@ -1,0 +1,16 @@
+---
+ hpc/syscalls.c |    1 +
+ 1 file changed, 1 insertion(+)
+
+Index: linux/hpc/syscalls.c
+===================================================================
+--- linux.orig/hpc/syscalls.c	2007-01-04 17:06:59.000000000 +0100
++++ linux/hpc/syscalls.c	2007-01-04 17:07:07.000000000 +0100
+@@ -36,6 +36,7 @@
+ 	OMDEBUG_SYS(1, "[remote] local syscall %d\n", SYSNB());
+ 
+ 	ret = arch_exec_syscall(SYSNB(), (syscall_parameter_t *) &regs);
++	set_task_state(current, TASK_RUNNING);
+ 	return ret;
+ }
+ 

@@ -1,0 +1,204 @@
+Subject: [patch @num@/@total@] fix kcomd_thread error handling behavior
+
+kcomd_thread should not exit in case of packet error, instead, it should just 
+reset the connection to the corresponding node
+
+kcomd_thread should only quit when the module is unloaded
+
+FIXME: for now, the kcomd module does not send back all tasks (remote) and
+does not backup the deputy tasks when exiting.... It just delays it for 120sec
+and exit ... 
+
+(this problem will be addressed in another patch, I'll do that soon I hope)
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:42.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:46.000000000 +0100
+@@ -29,7 +29,8 @@
+ #include <hpc/prototype.h>
+ #include <hpc/debug.h>
+ 
+-static int kcomd_done=0;
++static int kcomd_done = 0;
++static int kcomd_module_exit = 0;
+ 
+ /**
+  * socket_listen - Creates the network socket and maps it to a file descriptor
+@@ -493,6 +494,49 @@
+ }
+ 
+ /**
++ * kcomd_leave_cluster
++ *
++ * Description:
++ *    This function is called before the kcomd_thread daeomon quits
++ *    because of module unloading (FIXME or kernel stop ??) and
++ *    return 0 if kcomd_thread can stop operations.
++ *    This function is responsible for sending back all remote
++ *    and retreiving all deputies back ...
++ **/
++
++int kcomd_leave_cluster(void)
++{
++
++	int ret = 0;
++	struct kcom_node* node;
++
++	read_lock(&kcom_nodes_lock);
++	list_for_each_entry(node, &kcom_nodes, list) {
++
++	    if (!list_empty(&node->tasks)) {
++	    /*
++	     * fdy, FIXME: when exiting kcomd we should ask all tasks to comeback ...
++	     * send back all tasks, then prevent new one to comeback ... this needs an
++	     * upgrade of this thread ... Moreover, there seems to have kcache_*alloc
++	     * misusage, before exit ... (for now just prevent exit ..., with a message
++	     */
++
++		OMBUG("kcomd FIXME, there are still remote/deputy "
++		       "tasks, I can't die now!\n");
++		ret = 1;
++		break;
++	    }
++
++	}
++
++	read_unlock(&kcom_nodes_lock);
++
++
++	return ret;
++}
++
++
++/**
+  * kcomd_thread
+  *
+  * Description:
+@@ -543,8 +587,6 @@
+ 
+ 	while (kcomd_done==0)
+ 	{
+-
+-
+ 		n = maxfds;
+ 
+ 		kcomd_thread_set_fds(n);
+@@ -559,7 +601,7 @@
+ 		/* Now wait for a signal or packet to arrive */
+ 
+ 		allow_signal (SIGHUP);
+-		timeout=-1;
++		timeout = -1;
+ 		ret = do_select(n + 1, &sockets_fds, &timeout);
+ 		disallow_signal (SIGHUP);
+ 		/* SIGHUP is sent by kcom_send to wake up kcomd so it can send the packet*/
+@@ -582,7 +624,7 @@
+ 			continue;
+ 
+ 		} else if (ret < 0) {/* -1=error; 0=signal*/
+-			printk(KERN_ERR "do_select returned an error. \n");
++			OMBUG("do_select returned an error. \n");
+ 			schedule_timeout_interruptible(HZ);
+ 		}
+ 
+@@ -605,8 +647,7 @@
+ 			if (test_bit(node->fd, sockets_fds.res_in)) {
+ 				err=pkt_read(node);
+ 				if (err!=0) {
+-					kcomd_done=1;
+-					printk(KERN_ERR "ERROR receiving data.\nQuitting.\n");
++					OMBUG(KERN_ERR "ERROR receiving data => ignoring packet.\n");
+ 					continue;
+ 				}
+ 			}
+@@ -615,21 +656,22 @@
+ 			}
+ 		}
+ 		write_unlock(&kcom_nodes_lock);
++
++ 		/* Check if we must leave ... */
++ 		if (kcomd_module_exit) {
++ 			if (0 == kcomd_leave_cluster()) kcomd_done = 1;
++ 		}
+ 	}
+ 
+ /* DONE*/
+-	printk(KERN_INFO "kcomd: cleaning up.\n");
++ 	printk(KERN_INFO "kcomd: openMosix kernel communication daemon cleaning up.\n");
+ 	if (fd4!=-1) {
++ 		if (lsock4) sock_release(lsock4);
+ 		sys_close(fd4);
+-		if (lsock4) {  /* doesn't like this.  Help????????*/
+-			sock_release(lsock4);
+-		}
+ 	}
+ 
+ 	if (fd6!=-1) {
+-		if (lsock6) { /* doesn't like this.  Help????????*/
+-			sock_release(lsock6);
+-		}
++ 		if (lsock6) sock_release(lsock6);
+ 		sys_close(fd6);
+ 	}
+ 
+@@ -708,19 +750,50 @@
+ 	return ret;
+ }
+ 
++
++/*
++ * Set the exit condition and signal kcomd
++ * kcomd cleans up after itself
++ */
+ static void __exit kcomd_exit(void)
+ {
++	int retries = 0;
++
++	if (!kcomd_task) {
++		OMBUG("Unable to find the kcomd_thread task !!\n");
++		return;
++	}
++
++
++	printk(KERN_INFO "openMosix, asking kcomd to exit gracefuly\n");
++
++	kcomd_module_exit = 1;
++
++	send_sig(SIGHUP, kcomd_task, 0);
++
++wait_for_kcomd:
++	if (0 == kcomd_done) {
++		if (120 > retries) {
++			goto kill_kcomd;
++		}
++
++		schedule_timeout(HZ);
++		retries ++;
++		goto wait_for_kcomd;
++	}
++
++	printk(KERN_INFO "openMosix, module unloading ... \n");
++
++	return;
++
++kill_kcomd:
++
++	OMBUG("kcomd did not gracefuly exited, killing it !\n");
++
++	kcomd_done = 1;
++	send_sig(SIGHUP, kcomd_task, 0);
+ 
+-	/*
+-	 * Set the exit condition and signal kcomd
+-	 * kcomd cleans up after itself
+-	 */
+-	kcomd_done=1;
+-
+-	if (kcomd_task)
+-		send_sig(SIGHUP, kcomd_task, 0);
+-	else
+-		printk(KERN_WARNING "Unable to to find kcomd daemon\n");
++	schedule_timeout(HZ);
+ 
+ }
+ 

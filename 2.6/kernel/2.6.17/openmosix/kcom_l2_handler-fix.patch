@@ -1,0 +1,95 @@
+Subject: [patch @num@/@total@] @name@ fix wrong L2 command flags
+
+
+This patch fix wrong command flags in the communication process...
+
+---
+ hpc/kcomd.c |   18 +++++++++---------
+ 1 file changed, 9 insertions(+), 9 deletions(-)
+
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2007-01-04 16:30:22.000000000 +0100
++++ linux/hpc/kcomd.c	2007-01-04 16:41:15.000000000 +0100
+@@ -720,7 +720,7 @@
+         /* Remote strncopy from user */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_STRNCPY_FROM_USER)] = {
+ 		.handle_pkt = remote_strncpy_from_user,
+-		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = KCOM_PERM_SYSCALL,
+                 .recv_size = sizeof(struct omp_usercopy_req),
+                 .answer_size = KCOM_NO_SIZE_CHECK,
+@@ -729,7 +729,7 @@
+         /* Remote copy from user */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_COPY_FROM_USER)] = {
+ 		.handle_pkt = remote_copy_from_user,
+-		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = KCOM_PERM_SYSCALL,
+                 .recv_size =sizeof(struct omp_usercopy_req),
+                 .answer_size =KCOM_NO_SIZE_CHECK,
+@@ -738,7 +738,7 @@
+         /* Remote get_user */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_GET_USER)] = {
+ 		.handle_pkt = remote_get_user,
+-		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = KCOM_PERM_SYSCALL,
+                 .recv_size =sizeof(struct omp_usercopy_req),
+                 .answer_size =sizeof(s64),
+@@ -747,7 +747,7 @@
+ 	/* Request during syscalls */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_COPY_TO_USER)] = {
+ 		.handle_pkt =remote_copy_to_user,
+-		.cmd_flags = KCOM_PKT_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_SYNC,
+ 		.perms = KCOM_PERM_SYSCALL,
+                 .recv_size = KCOM_NO_SIZE_CHECK,
+                 .answer_size =0,
+@@ -764,7 +764,7 @@
+         /* Remote asked for a fork */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_DO_FORK)] = {
+ 		.handle_pkt = deputy_do_fork,
+-		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = DDEPUTY,
+                 .recv_size =sizeof(struct omp_fork_req),
+                 .answer_size =sizeof(struct omp_fork_ret),
+@@ -773,7 +773,7 @@
+         /* Read a page on the deputy and send it back */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_GET_PAGE)] = {
+ 		.handle_pkt = deputy_do_readpage,
+-		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = DDEPUTY,
+                 .recv_size =sizeof(struct omp_page_req),
+                 .answer_size = PAGE_SIZE,
+@@ -782,7 +782,7 @@
+         /* Remote ask an mmap to its deputy */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_MMAP)] = {
+ 		.handle_pkt = deputy_do_mmap,
+-		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = DDEPUTY,
+                 .recv_size = sizeof(struct omp_mmap_req),
+                 .answer_size = sizeof(struct omp_mmap_ret),
+@@ -791,7 +791,7 @@
+         /* Remote informs ask execve */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_DO_EXECVE)] = {
+ 		.handle_pkt = deputy_do_execve,
+-		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = DDEPUTY,
+                 .recv_size = sizeof(struct omp_execve_req),
+                 .answer_size = sizeof(struct omp_execve_ret),
+@@ -800,7 +800,7 @@
+         /* remote strlen user */
+ 	[KCOM_L2_CMD_INDEX(KCOM_L2_REQ_STRNLEN_USER)] = {
+ 		.handle_pkt = remote_strnlen_user,
+-		.cmd_flags = KCOM_SYNC | KCOM_PKT_ANSWERED,
++		.cmd_flags = KCOM_TSK_ANSWERED,
+ 		.perms = DDEPUTY | DREMOTE,
+                 .recv_size =sizeof(struct omp_usercopy_req),
+                 .answer_size = sizeof(long),

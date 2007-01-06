@@ -1,0 +1,24 @@
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-02 22:52:04.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-02 22:52:05.000000000 +0100
+@@ -304,10 +304,6 @@
+ 	struct page *recv_page = NULL;
+ 	unsigned long addr;
+ 	void *kmpage;
+-	pgd_t * pgd;
+-	pud_t * pud;
+-	pmd_t * pmd;
+-	pte_t * pte;
+ 
+  	/*
+  	FIXME:   another way?
+@@ -339,7 +335,7 @@
+ 
+ 	return 0;
+ 
+-out:
++/*out:*/
+ 	printk(KERN_ERR "receive page failed at addr %p\n", (void *) addr);
+ 	OMBUG("receive page failed at addr %p\n", (void *) addr);
+ 	__free_page(recv_page);

@@ -1,0 +1,38 @@
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-02 22:51:55.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-02 22:52:13.000000000 +0100
+@@ -86,6 +86,8 @@
+ /**
+  * deputy_do_fork - process a fork coming from remote
+  **/
++
++#if 0
+ static int deputy_do_fork(task_t *p)
+ {
+ 	int error;
+@@ -159,6 +161,7 @@
+ 	}
+ 	return error;
+ }
++#endif
+ 
+ /**
+  * deputy_do_mmap_pgoff - really do a mmap on deputy
+@@ -202,6 +205,7 @@
+ /**
+  * deputy_do_mmap - process request to mmap a file
+  **/
++#if 0
+ static int deputy_do_mmap(task_t *p)
+ {
+ 	struct omp_mmap_req m;
+@@ -391,6 +395,8 @@
+ 	return error;
+ }
+ 
++#endif
++
+ /**
+  * deputy_do_sigpending - process signal pending
+  **/

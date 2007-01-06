@@ -1,0 +1,75 @@
+Subject: [patch @num@/@total@] @name@
+
+cleanup : this function should use kcom_send_ack (and so it does now...)
+Index: linux/hpc/deputy.c
+===================================================================
+--- linux.orig/hpc/deputy.c	2006-11-24 17:26:51.000000000 +0100
++++ linux/hpc/deputy.c	2006-11-24 17:57:50.000000000 +0100
+@@ -45,35 +45,26 @@
+  **/
+ static int deputy_do_syscall(task_t *p, struct kcom_pkt *pkt)
+ {
+-	struct omp_syscall_req s;
++	struct omp_syscall_req *s;
+ 	struct omp_syscall_ret r;
+ 	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+-	struct kcom_task *send_tsk;
+-	struct kcom_pkt *send_pkt;
+ 
+-	// Send MIG_SYSCALL ack
+-	send_tsk=kcom_task_find(p->pid);
+ 
+-	send_pkt=kcom_pkt_create(0, MIG_SYSCALL | PKT_ACK | DEP_FLG, PKT_ACK, NULL);
+-
+-	send_pkt->msgid=pkt->msgid; // responses have same msg id as pkt they are responding to.
+-	send_pkt->hpid=pkt->hpid;
+-	send_pkt->rpid=pkt->rpid;
+-	send_pkt->resp=pkt->resp;
+-
+-	kcom_add_packet(send_tsk, send_pkt);
++	if (sizeof(struct omp_syscall_req) != pkt->len) {
++		OMBUG("data size of %d does not match expected %lu\n"
++		     ,pkt->len, sizeof(struct omp_syscall_req));
++		kcom_send_nack(p, pkt);
++		return -EFAULT;
++	}
+ 
+-	if (kcomd_task != NULL)
+-		send_sig(SIGHUP,kcomd_task,0);
++	kcom_send_ack(p, pkt);
+ 
+-	if (sizeof(struct omp_syscall_req) != pkt->len)
+-		OMBUG("data size of %d does not match expected %lu\n", pkt->len, sizeof(struct omp_syscall_req));
+-	memcpy(&s, pkt->data, pkt->len);
++	s = (struct omp_syscall_req*) pkt->data;
+ 	
+-	OMDEBUG_SYS(1, "[deputy] receive syscall %d\n", s.n);
++	OMDEBUG_SYS(1, "[deputy] receive syscall %d\n", s->n);
+ 
+ 	/* do the syscall and put reply in r */
+-	r.ret = arch_exec_syscall(s.n, (syscall_parameter_t *) &s.arg);
++	r.ret = arch_exec_syscall(s->n, (syscall_parameter_t *) &s->arg);
+ 	
+ 	kcom_send_with_ack(MIG_SYSCALL | PKT_NEW_MSG | SYSCALL_DONE | DEP_FLG, 0, NULL, r.ret, dest_ptr);
+ 
+Index: linux/include/hpc/protocol.h
+===================================================================
+--- linux.orig/include/hpc/protocol.h	2006-11-24 17:35:47.000000000 +0100
++++ linux/include/hpc/protocol.h	2006-11-24 17:53:14.000000000 +0100
+@@ -24,6 +24,7 @@
+ #include <linux/types.h>
+ #include <linux/socket.h>
+ #include <asm/om-protocol.h>
++#include <asm/om.h>
+ 
+ /* Migration handshake*/
+ struct omp_mig_handshake
+@@ -170,7 +171,7 @@
+ struct omp_syscall_req
+ {
+ 	int n;			/* syscall number */
+-	unsigned long arg[7];	/* array of arguments */
++	unsigned long arg[NR_MAX_SYSCALL_ARG];	/* array of arguments */
+ };
+ 
+ struct omp_syscall_ret

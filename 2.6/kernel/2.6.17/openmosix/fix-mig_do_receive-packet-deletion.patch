@@ -1,0 +1,17 @@
+Subject: [patch @num@/@total@] @name@
+
+This patch fixes some wild packet deletion and add one that was forgotten :)
+
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-24 22:41:28.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-24 22:41:38.000000000 +0100
+@@ -172,8 +172,6 @@
+ 			send_tsk->hpid=recv_kcom_pkt->hpid;
+ 		}
+ 
+-		kcom_pkt_delete(recv_kcom_pkt);
+-
+ 		/* send_pkt->rpid=0; // set this to 0 or if same process migrates second time here, it'll keep old rpid*/
+ 		user_thread(mig_handle_migration, &rpid, 0);
+ 

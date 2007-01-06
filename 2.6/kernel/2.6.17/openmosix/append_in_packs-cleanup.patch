@@ -1,0 +1,116 @@
+Subject: [patch @num@/@total@] @name@
+
+This patch rewrites the append_in_packs function in a cleaner way...
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-24 16:13:19.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-24 23:37:43.000000000 +0100
+@@ -303,50 +303,46 @@
+ {
+ 	struct kcom_task *tsk;
+ 	task_t *sltsk;
++	pid_t pid = 0;
++	char *typename[] = { "", "home", "remote"};
++	int type = 1;
+ 
+ 
+ 	if ((recv_kcom_pkt->type & NODE_MASK) == DEP_FLG) {
+ 		/* command from dep to remote? */
++		pid = recv_kcom_pkt->rpid;
++		type = 2;
++	} else {
++		pid = recv_kcom_pkt->hpid;
++		type = 1;
++	}
+ 
+-		tsk=kcom_remote_task_find(recv_kcom_pkt->rpid);
+-		if (tsk) {
+-			write_lock(&tsk->in_packs_lock);
+-			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
+-			write_unlock(&tsk->in_packs_lock);
+-		} else {
+-			OMBUG("unable to find remote pid %u\n", recv_kcom_pkt->rpid);
+-			return -1;
++	tsk = __kcom_task_find(pid, type );
+ 
+-		}
+-		read_lock(&tasklist_lock);
+-		sltsk=find_task_by_pid(recv_kcom_pkt->rpid);
+-		read_unlock(&tasklist_lock);
+-		if (sltsk) {
+-			wake_up_process(sltsk);
+-		} else {
+-			OMBUG("Unable to find remote pid %u to wake up\n", recv_kcom_pkt->rpid);
+-			return -1;
+-		}
++	if (!tsk) {
++	    OMBUG("unable to find %s pid %u\n", typename[type],  recv_kcom_pkt->hpid);
++	    return -ENODEV;
++	}
++
++	/* append the packet */
+ 
++	write_lock(&tsk->in_packs_lock);
++	list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
++	write_unlock(&tsk->in_packs_lock);
++
++	/* Find the real task */
++
++	read_lock(&tasklist_lock);
++	sltsk = find_task_by_pid(pid);
++	read_unlock(&tasklist_lock);
++
++	/* Waking up the task */
++
++	if (sltsk) {
++	    wake_up_process(sltsk);
+ 	} else {
+-		tsk=kcom_home_task_find(recv_kcom_pkt->hpid);
+-		if (tsk) {
+-			write_lock(&tsk->in_packs_lock);
+-			list_add_tail(&recv_kcom_pkt->list, &tsk->in_packs);
+-			write_unlock(&tsk->in_packs_lock);
+-		} else {
+-			OMBUG("unable to find home pid %u\n", recv_kcom_pkt->hpid);
+-			return -1;
+-		}
+-		read_lock(&tasklist_lock);
+-		sltsk = find_task_by_pid(recv_kcom_pkt->hpid);
+-		read_unlock(&tasklist_lock);
+-		if (sltsk) {
+-			wake_up_process(sltsk);
+-		} else {
+-			OMBUG("Unable to find home pid %u to wake up\n", recv_kcom_pkt->hpid);
+-			return -1;
+-		}
++	    OMBUG("Unable to find %s pid %u to wake up\n", typename[type], recv_kcom_pkt->hpid);
++	    return -ENODEV;
+ 	}
+ 	return 0;
+ }
+@@ -441,10 +437,12 @@
+ 			case MIG_INIT:
+ 				OMDEBUG_PROTOCOL(2, "KCOMD: it's a MIG_INIT packet ... \n");
+ 				mig_do_receive_init(node, recv_kcom_pkt);
++				kcom_pkt_delete(recv_kcom_pkt);
+ 				break;
+ 			case MIG_GO_HOME:
+ 				OMDEBUG_PROTOCOL(2, "KCOMD: it's a MIG_GO_HOME packet ... \n");
+ 				mig_do_receive_home(node, recv_kcom_pkt);
++				kcom_pkt_delete(recv_kcom_pkt);
+ 				break;
+ 			case MIG_COME_HOME:
+ 			{
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- linux.orig/include/hpc/prototype.h	2006-11-24 17:23:18.000000000 +0100
++++ linux/include/hpc/prototype.h	2006-11-24 17:24:00.000000000 +0100
+@@ -123,6 +123,7 @@
+ 
+ struct kcom_task *kcom_remote_task_find(int);
+ struct kcom_task *kcom_home_task_find(int);
++struct kcom_task *__kcom_task_find(pid_t pid, int where);
+ int mig_do_receive_home(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt);
+ int mig_do_receive_init(struct kcom_node *node, struct kcom_pkt *recv_kcom_pkt);
+ 

@@ -1,0 +1,173 @@
+################################################################################
+# Included from the 20061114 pre-alpha release http://openmosix.unfreeze.net   #
+################################################################################
+
+# Openmosix patch : 20060908 (no kcomd)
+
+openmosix/openmosix-git.patch
+
+# Matt Dew patches ...
+openmosix/openmosix-documentation.patch
+openmosix/openmosix-cleanup.patch
+openmosix/openmosix-kcomd-base-functions.patch
+openmosix/openmosix-kcomd-migsend-to-kcomd.patch
+openmosix/openmosix-kcomd-proc-to-kcomd.patch
+openmosix/openmosix-kcomd-remote-to-kcomd.patch
+openmosix/openmosix-kcomd-task-to-kcomd.patch
+openmosix/openmosix-kcomd-migctl-to-kcomd.patch
+openmosix/openmosix-kcomd-migrecv-to-kcomd.patch
+openmosix/openmosix-kcomd-remote-preuser-to-kcomd-api.patch
+openmosix/openmosix-kcomd-move-copy-to-user-to-kcomd-api.patch
+openmosix/openmosix-kcomd-move-deputy-to-kcomd-api.patch
+openmosix/openmosix-kcomd-daemon-code.patch
+openmosix/openmosix-kcomd-typo-fix.patch
+openmosix/openmosix-fixed-printk-usage.patch
+openmosix/openmosix-fix-comment-style.patch
+openmosix/openmosix-remove-useless-debug.patch
+openmosix/openmosix-remove-dead-code-homemig_01.patch
+openmosix/openmosix-set-info_02.patch
+openmosix/openmosix-receive_page_03.patch
+openmosix/openmosix-page-protect_04.patch
+openmosix/openmosix-pre-kickstart_05.patch
+openmosix/openmosix-migrecv-fix-warnings.patch
+
+# Warning fixes
+#
+openmosix/openmosix-kcomd-fix-warnings.patch
+openmosix/openmosix-migsend-fix-warnings.patch
+openmosix/openmosix-deputy-fix-warning.patch
+openmosix/openmosix-copyuser-fix-warning.patch
+openmosix/openmosix-migctrl-fix-warning.patch
+
+# Bug fixes
+
+openmosix/openmosix-fix-proc_pid_set_where.patch
+openmosix/openmosix-pre-kickstart.patch
+openmosix/openmosix-fix-mig_send-x8664.patch
+openmosix/openmosix-kcomd_thread-spinlock-protection.patch
+openmosix/openmosix-alloc_fd_bitmap-spinlock-protection.patch
+openmosix/openmosix-simplify-kcomd_thread-code.patch
+
+# Last bunch ... 21 patches
+
+openmosix/openmosix-allow-migration-on-syscall-careful-return.patch
+openmosix/openmosix-__kcom_task_find-spinlocks.patch
+openmosix/openmosix-mig_send_pages-optimisation.patch
+openmosix/wait_for_response-wait_for_ack-fix.patch
+openmosix/mig_do_receive-size-checking.patch
+openmosix/mig_do_receive_cleanup.patch
+openmosix/migration_verbose_traces.patch
+openmosix/pkt_read-fix.patch
+openmosix/add_kcom_debug_macros.patch
+openmosix/fix_proc_pid_get_where.patch
+openmosix/fix-kcomd_thread-behaviour.patch
+openmosix/fix-spinlock_t-rwlock_t-usage.patch
+openmosix/use-ombug-macro.patch
+openmosix/data_protocol_debug_add.patch
+openmosix/use-sock_create_kern.patch
+openmosix/add-kcom_add_packet-function.patch
+openmosix/mig_do_receive_init-fix.patch
+openmosix/kcom_task_find-fix.patch
+openmosix/data_send-fix.patch
+openmosix/fix-packet-deletion.patch
+openmosix/i386-build-fix-g4sra.patch
+
+################################################################################
+# Included from the 20061116 pre-alpha release http://openmosix.unfreeze.net   #
+################################################################################
+
+openmosix/kcomd_thread-verbose-functionning.patch
+openmosix/fix-migrating-status.patch
+openmosix/fix-wrong-process-wakeup.patch
+openmosix/replace-TIF_NEED_RESCHED.patch
+
+################################################################################
+# Included from the 20061123 pre-alpha release http://openmosix.unfreeze.net   #
+################################################################################
+
+openmosix/i386-replace-TIF_NEED_RESCHED.patch
+openmosix/proc_pid_set_where-protection.patch
+openmosix/fix_pkread_potential_deadlock.patch
+openmosix/add-kcom_node-error-count.patch
+openmosix/data_write-process-rewrite.patch
+openmosix/deputy_main_loop-cleanup.patch
+openmosix/spinlock-on-sigpending.patch
+openmosix/remove-kcom_node_find-useless-code.patch
+
+################################################################################
+# Included from the 20061124 pre-alpha release http://openmosix.unfreeze.net   #
+################################################################################
+
+openmosix/append_in_packs-cleanup.patch
+openmosix/deputy_do_syscall-rewrite.patch
+openmosix/kcom_send_xxxx-refactoring.patch
+openmosix/fix-mig_do_receive-packet-deletion.patch
+openmosix/__pkt_read-list-init-fix.patch
+
+################################################################################
+# Included from the 20061222 pre-alpha release http://openmosix.unfreeze.net   #
+################################################################################
+
+openmosix/fix-__pkt_read-data-init.patch
+openmosix/pkt-header-end-mark.patch
+openmosix/fix-mig-syscall-return.patch
+openmosix/kcom_pkt-review.patch
+openmosix/fix-i386-arch_mig_send_proc_context.patch
+
+################################################################################
+# KGDB : Source: linux-2.6.17.tar.bz2                                          #
+# patches in this directory now contain openmosix modifications                #
+################################################################################
+
+kgdb/core-lite.patch 
+kgdb/8250.patch 
+kgdb/netpoll_pass_skb_to_rx_hook.patch
+kgdb/eth.patch 
+kgdb/i386-lite.patch 
+kgdb/powerpc-lite.patch 
+kgdb/mips-lite.patch 
+kgdb/ia64-lite.patch 
+kgdb/x86_64-no_context_hook.patch
+kgdb/x86_64-lite.patch 
+#kgdb/sh-lite.patch 
+#kgdb/arm-lite.patch 
+#kgdb/cfi_annotations.patch 
+kgdb/sysrq_bugfix.patch
+#kgdb/module.patch 
+kgdb/core.patch
+#kgdb/i386.patch
+#kgdb/powerpc.patch
+#kgdb/ia64.patch
+
+# This patch is a workaround for the gcc<4.1.2 weak symbol problem
+# kgdb/ensure_no_weak_symbol.patch
+
+
+# Debug purpose only 
+
+debug/build-no-optimize.patch
+#debug/build-no-optimize.patch
+#debug/check_task_set_dreqs.patch
+#debug/error_entry_bp.patch
+
+################################################################################
+# To be sorted                                                                 #
+################################################################################
+
+debug/vim_kernel_hooks.patch
+
+#debug/break_on_last_migrated.patch
+#debug/kgdb_freeze_time_on_break.patch
+#debug/event_analyser.patch
+
+
+openmosix/set_sockopts-fix-error.patch
+openmosix/fix-mig_do_receive_vma.patch
+openmosix/deputy_strncpy_from_user-fix.patch
+openmosix/remote_do_syscall-fix.patch
+openmosix/debug_log_filtering.patch
+openmosix/kcom_l2_handler-fix.patch
+
+openmosix/om_sys_local-fix.patch
+debug/nanosleep-verbose-on-remote.patch
+openmosix/ptrace-support.patch

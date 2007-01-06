@@ -1,0 +1,232 @@
+Subject: [patch @num@/@total@] pkt_*read fix
+
+fix error recognition in pkt*read calls (some caused leaks, some others caused crashes ...)
+
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:38.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:40.000000000 +0100
+@@ -329,24 +329,24 @@
+ {
+ 	struct kcom_pkt *recv_kcom_pkt;
+ 	int i=0;
+-	task_t *sltsk;
++
+ 
+ 	// read in hdr
+-	recv_kcom_pkt=pkt_hdr_read(node);
+-	if (recv_kcom_pkt==NULL) {
+-		printk(KERN_ERR "ERROR: incomplete header pkt\n");
+-		goto error_recv;
+-	}
++	recv_kcom_pkt = pkt_hdr_read(node);
++
++	if (recv_kcom_pkt==NULL) goto error_recv;
+ 
+ 	// read in any data
+ 	if (recv_kcom_pkt->len > 0) {
+ 		if ((recv_kcom_pkt->type & MSG_MASK) == PKT_NEW_MSG) {
+-			recv_kcom_pkt->data=kzalloc(recv_kcom_pkt->len, GFP_KERNEL);
+-			i=pkt_data_read(node, recv_kcom_pkt, recv_kcom_pkt->len, recv_kcom_pkt->data);
++
++			recv_kcom_pkt->data = kzalloc(recv_kcom_pkt->len, GFP_KERNEL);
++			i = pkt_data_read(node, recv_kcom_pkt, recv_kcom_pkt->len, recv_kcom_pkt->data);
+ 		} else {
+-			i=pkt_data_read(node, recv_kcom_pkt, recv_kcom_pkt->len, recv_kcom_pkt->resp);
++			i = pkt_data_read(node, recv_kcom_pkt, recv_kcom_pkt->len, recv_kcom_pkt->resp);
+ 		}
+-		if (i<recv_kcom_pkt->len) {
++
++		if (i < recv_kcom_pkt->len) {
+ 			printk(KERN_ERR "ERROR: incomplete data pkt\n");
+ 			goto error_recv;
+ 		}
+@@ -362,12 +362,18 @@
+ 				mig_do_receive_home(node, recv_kcom_pkt);
+ 				break;
+ 			case MIG_COME_HOME:
+-				sltsk=find_task_by_pid(recv_kcom_pkt->rpid);
++			{
++				task_t *sltsk;
++				sltsk = find_task_by_pid(recv_kcom_pkt->rpid);
++				if (!sltsk) {
++				    printk(KERN_ERR "openMosix: %s Unable to find the task %d ", __FUNCTION__, recv_kcom_pkt->rpid);
++				    goto error_recv;
++				}
+ 				task_register_migration(sltsk);
+ 				break;
++			}
+ 			default:
+ 				append_in_packs(recv_kcom_pkt);
+-
+ 				break;
+ 		}
+ 	} else { // PKT_ACK and PKT_RESP go straight to in_packs
+@@ -380,21 +386,10 @@
+ 	sys_close(node->fd);
+ 	sock_release(node->sock);
+ 
+-	#if 0
+-	node->fd=-1;
+-	printk("kfree(data)\n");
+-	kfree(pkt);
+-	printk("kfree(node->sock)\n");
+-	kfree(node->sock);
+-	printk("list_del\n");
+-	#endif
+-
+ 	list_del(&node->list);
+ 	kmem_cache_free(kcom_node_cachep, node);
+ 
+-	#if 0
+-	kfree(node);
+-	#endif
++
+ 	return -1;
+ 
+ }
+Index: linux/hpc/kcom.c
+===================================================================
+--- linux.orig/hpc/kcom.c	2006-11-13 16:01:33.000000000 +0100
++++ linux/hpc/kcom.c	2006-11-13 16:01:40.000000000 +0100
+@@ -1,5 +1,6 @@
+ /*
+  *	Copyright (C) 2006 Matt Dew <matt@osource.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -40,6 +41,7 @@
+ 	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
+ 	mm_segment_t oldfs;
+ 	int i;
++	int nb_retries = 0;
+ 	char buf[32];
+ 
+ 	iov.iov_base = data;
+@@ -55,26 +57,39 @@
+ 	set_fs(KERNEL_DS);
+ 
+ 	while (iov.iov_len > 0) {
++
+ 		i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
+ 		if ((i == -ENOSPC) || (i == -EAGAIN)) {
++
++			/* Prevent infinite loop 60s */
++			if (60000 > nb_retries) {
++				printk(KERN_ERR "openMosix %s too many retries\n", __FUNCTION__);
++				len = -1;
++				goto read_exit;
++			}
++
+ 			schedule_timeout(HZ/1000);
+ 			continue;
+ 		}
++
+ 		if (i < 0) {
+-			printk(KERN_ERR "ERROR %d receiving data.\n", i);
+-			set_fs(oldfs);
+-			return -1;
++			printk(KERN_ERR "openMosix %s: %d receiving data.\n", __FUNCTION__, i);
++			len = -1;
++			goto read_exit;
+ 		}
+ 		iov.iov_base += i;
+  	}
+ 
+-	set_fs(oldfs);
+ 
+ 	if (len < 32) {
+ 		memcpy(data, buf, len);
+ 	}
+ 
++read_exit:
++	set_fs(oldfs);
++
+ 	return len;
++
+ }
+ EXPORT_SYMBOL_GPL(pkt_data_read);
+ 
+@@ -94,32 +109,62 @@
+ 	mm_segment_t oldfs;
+ 	struct socket *sock=node->sock;
+ 	int i;
++ 	int retry = 0;
+ 
+-	recv_kcom_pkt=kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
++ 	recv_kcom_pkt = kmem_cache_alloc(kcom_pkt_cachep, SLAB_KERNEL);
+ 	iov.iov_base = recv_kcom_pkt;
+-	iov.iov_len = sizeof(*recv_kcom_pkt);
++ 	iov.iov_len = sizeof(struct kcom_pkt);
+ 
+ 	oldfs = get_fs();
+ 	set_fs(KERNEL_DS);
+-	while (iov.iov_len > 0) {
+-		i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
+-		if ((i == -ENOSPC) || (i == -EAGAIN)) {
+-			schedule_timeout(HZ/1000);
+-			continue;
+-		}
+-		if (i < 0) {
+-			printk(KERN_ERR "ERROR %d receiving header.\n", i);
+-			set_fs(oldfs);
+-			return NULL;
+-		}
+-		iov.iov_base += i;
++
++
++ receive_fragment:
++
++ 	i = sock_recvmsg(sock, &msg, iov.iov_len, msg.msg_flags);
++ 	if ((i == -ENOSPC) || (i == -EAGAIN)) {
++ 		/* prevent infinite loop */
++ 		if (60000 > retry) goto receive_timeout;
++
++ 		schedule_timeout(HZ/1000);
++ 		goto receive_fragment;
++ 	}
++
++ 	if (i < 0) {
++ 		printk(KERN_ERR "openMosix: %s %d receiving header.\n", __FUNCTION__, i);
++ 		goto receive_error;
+  	}
++ 	iov.iov_base += i;
++
++ 	/* sock_revmsg update the iov struct, and len */
++ 	if (iov.iov_len > 0) goto receive_fragment;
++
++
++ 	if (iov.iov_len != 0) goto receive_incomplete;
++
++
+ 	set_fs(oldfs);
+ 
+-	if (iov.iov_len==0) // all expected data received.
+-		return recv_kcom_pkt;
+-	else
+-		return NULL;
++ 	return recv_kcom_pkt;
++
++
++receive_timeout:
++ 	printk(KERN_ERR "openMosix %s Can't receive header %d fragment, too many (%d)\n"
++ 			 " retries)", __FUNCTION__, i, retry);
++ 	goto exit_error;
++
++receive_error:
++ 	printk(KERN_ERR "openMosix %s, %d receiving header.\n", __FUNCTION__,  i);
++ 	goto exit_error;
++
++receive_incomplete:
++ 	printk(KERN_ERR "openMosix %s incomplete packet received\n", __FUNCTION__);
++
++exit_error:
++
++ 	kmem_cache_free(kcom_pkt_cachep, recv_kcom_pkt);
++ 	set_fs(oldfs);
++ 	return NULL;
+ }
+ EXPORT_SYMBOL_GPL(pkt_hdr_read);
+ 

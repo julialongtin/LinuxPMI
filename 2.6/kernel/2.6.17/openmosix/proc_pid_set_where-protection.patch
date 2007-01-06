@@ -1,0 +1,51 @@
+Subject: [patch @num@/@total@] @name@ Sanity Check in migration order
+
+This patch checks that the given address is correctly given, and thus
+prevent crash on dummy echo to /proc/$/om/where
+
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-17 11:59:48.000000000 +0100
++++ linux/hpc/proc.c	2006-11-17 15:05:34.000000000 +0100
+@@ -51,8 +51,12 @@
+ 
+ 	OMDEBUG_MIG(2, "asking process %d migration ?\n", p->pid);
+ 	if (!dest_ptr) {
+-	    OMBUG("internal structure is not initialized for pid %d\n", p->pid);
+-	    return -EFAULT;
++		OMBUG("internal structure is not initialized for pid %d\n", p->pid);
++		return -EFAULT;
++	}
++	if(task_test_dflags(p, DPASSING)) {
++		printk(KERN_ERR "[oM] Can't migrate pid %d, process is currently migrating\n", p->pid );
++		return -EAGAIN;
+ 	}
+ 
+ 	buf[size-1]='\0';	 /* ensures no trailing crap in 'where' file*/
+@@ -81,6 +85,15 @@
+ 			task_register_migration(p);
+ 		}
+ 	} else {
++		/* Sanity Check FIXME: Only accepting ipv4 addresses for now */
++		int n, addr[4];
++		n = sscanf( buf, "%d.%d.%d.%d", &addr[0], &addr[1], &addr[2], &addr[3] );
++		if (4!=n) goto malformed_ip;
++		if (0==addr[0] || 0==addr[3]) goto malformed_ip;
++		for (n=0;n<3;n++) {
++		    if(addr[n]>254 || addr[n]<0) goto malformed_ip;
++		}
++
+ 		if (task_test_dflags(p, DDEPUTY)) {
+ 
+ 			OMDEBUG_MIG(3, "asking process %d to migrate to another place (DDEPUTY)?\n", p->pid);
+@@ -106,6 +119,10 @@
+ 	}
+ 
+ 	return size;
++
++malformed_ip:
++	printk(KERN_ERR"[oM] Can not move pid %d to '%s', malformed IP\n", p->pid, buf );
++	return -EFAULT;
+ }
+ 
+ static int proc_pid_get_where(struct task_struct *p, char *buf, size_t size)

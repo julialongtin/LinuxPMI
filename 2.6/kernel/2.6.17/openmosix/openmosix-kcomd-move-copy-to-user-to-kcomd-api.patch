@@ -1,0 +1,525 @@
+Index: linux/hpc/copyuser.c
+===================================================================
+--- linux.orig/hpc/copyuser.c	2006-11-02 22:50:47.000000000 +0100
++++ linux/hpc/copyuser.c	2006-11-02 22:51:45.000000000 +0100
+@@ -15,6 +15,8 @@
+ #include <linux/sched.h>
+ #include <hpc/protocol.h>
+ #include <hpc/debug.h>
++#include <linux/in.h>
++#include <hpc/kcom.h>
+ #include <hpc/prototype.h>
+ #include <hpc/hpc.h>
+ 
+@@ -29,7 +31,9 @@
+ unsigned long deputy_copy_from_user(void *to, const void __user *from, unsigned long n)
+ {
+ 	struct omp_usercopy_req u;
+-	int error;
++	task_t *p=current;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
++	int i;
+ 
+ 	if (in_atomic())
+ 		return n;
+@@ -39,18 +43,10 @@
+ 
+ 	OMDEBUG_CPYUSER(1, "copy user[0x%p]->[0x%p][%ld]\n", from, to, n);
+ 
+-	error = comm_send_hd(current->om.contact, DEP_COPY_FROM_USER, &u, sizeof(u));
+-	if (error < 0)
+-		goto error;
+-
+-	error = comm_recv(current->om.contact, to, n);
+-	if (error < 0)
+-		goto error;
++	i=kcom_send_with_response(DEP_COPY_FROM_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, (char *)to, dest_ptr);
++
+ 
+ 	return 0;
+-error:
+-	OMBUG("error %d\n", error);
+-	return -1;
+ }
+ EXPORT_SYMBOL(deputy_copy_from_user);
+ 
+@@ -63,25 +59,21 @@
+ unsigned long deputy_strncpy_from_user(char *dst, const char __user *src,
+ 							long count)
+ {
+-	struct omp_usercopy_req u;
+-	int error;
++	task_t *p=current;
++	struct omp_usercopy_req *u;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
++	int i;
+ 
+ 	OMDEBUG_CPYUSER(1, "strcpy user[0x%p]->[0x%p][%ld]\n", src, dst, count);
+-	u.addr = (unsigned long) src;
+-	u.len = count;
+-	error = comm_send_hd(current->om.contact, DEP_STRNCPY_FROM_USER, &u,
+-								sizeof(u));
+-	if (error < 0)
+-		goto error;
+-
+-	error = comm_recv(current->om.contact, dst, count);
+-	if (error < 0)
+-		goto error;
++	u=kzalloc(sizeof(*u), GFP_KERNEL);
++
++	u->addr = (unsigned long) src;
++	u->len = count;
++
++	i=kcom_send_with_response(DEP_STRNCPY_FROM_USER | PKT_NEW_MSG | DEP_FLG, sizeof(*u), (char *)u, 0, dst, dest_ptr);
+ 
+ 	return 0;
+-error:
+-	OMBUG("error %d\n", error);
+-	return -1;
++
+ }
+ 
+ /**
+@@ -92,29 +84,22 @@
+  **/
+ unsigned long deputy_copy_to_user(void __user *to, const void *from, unsigned long n)
+ {
+-	struct omp_usercopy_req u;
+-	int error;
++	int i;
++	char *buf;
++	task_t *p=current;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+ 
+ 	if (in_atomic())
+ 		return n;
+ 
+-	OMDEBUG_CPYUSER(1, "copy [0x%p]->user[0x%p][%ld]\n", from, to, n);
+-	u.addr = (unsigned long) to;
+-	u.len = n;
++	// Instead of sending two packets, we create one larger packet and send it.
++	buf=kzalloc(n, GFP_KERNEL);
++	memcpy(buf, from, n);
+ 
+-	error = comm_send_hd(current->om.contact, DEP_COPY_TO_USER, &u,
+-							sizeof(u));
+-	if (error < 0)
+-		goto error;
+-
+-	error = comm_send(current->om.contact, (void *) from, n);
+-	if (error < 0)
+-		goto error;
++	i=kcom_send_with_ack(DEP_COPY_TO_USER | PKT_NEW_MSG | DEP_FLG, n, buf, (unsigned long) to, dest_ptr);
+ 
+ 	return 0;
+-error:
+-	OMBUG("error %d\n", error);
+-	return -1;
++
+ }
+ EXPORT_SYMBOL(deputy_copy_to_user);
+ 
+@@ -124,25 +109,18 @@
+ unsigned long deputy_strnlen_user(const char *s, long n)
+ {
+ 	struct omp_usercopy_req u;
+-	int error;
+ 	long ret;
++	int i;
++	task_t *p=current;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+ 
+ 	OMDEBUG_CPYUSER(1, "strlen user[0x%p][%ld]\n", s, n);
+ 	u.addr = (unsigned long) s;
+ 	u.len = n;
+ 
+-	error = comm_send_hd(current->om.contact, DEP_STRNLEN_USER, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
+-
+-	error = comm_recv(current->om.contact, &ret, sizeof(ret));
+-	if (error < 0)
+-		goto out;
++	i=kcom_send_with_response(DEP_STRNLEN_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, (char *)&ret, dest_ptr);
+ 
+ 	return ret;
+-out:
+-	OMBUG("error %d\n", error);
+-	return 0;
+ }
+ EXPORT_SYMBOL(deputy_strnlen_user);
+ 
+@@ -152,7 +130,9 @@
+ static inline long deputy_put_userX(s64 value, const void *addr, size_t size)
+ {
+ 	struct omp_usercopy_emb u;
+-	int error;
++	int i;
++	task_t *p=current;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
+ 
+ 	OMDEBUG_CPYUSER(1, "put (%lld)->user[0x%p][%zd]\n", value, addr, size);
+ 
+@@ -160,13 +140,9 @@
+ 	u.len = size;
+ 	u.val = value;
+ 
+-	error = comm_send_hd(current->om.contact, DEP_PUT_USER, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
++	i=kcom_send_with_ack(DEP_PUT_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, dest_ptr);
++
+ 	return 0;
+-out:
+-	OMBUG("error %d\n", error);
+-	return -EFAULT;
+ }
+ 
+ /**
+@@ -195,32 +171,21 @@
+  **/
+ static inline long deputy_get_userX(s64 *value, const void *addr, size_t size)
+ {
++	task_t *p=current;
+ 	struct omp_usercopy_req u;
+-	int error;
+ 	s64 ret;
++	struct sockaddr_in *dest_ptr=(struct sockaddr_in *)p->om.whereto;
++	int i;
+ 
+ 	OMDEBUG_CPYUSER(1, "get user[0x%p][%zd]\n", addr, size);
+ 	u.addr = (unsigned long) addr;
+ 	u.len = size;
+ 
+-	error = comm_send_hd(current->om.contact, DEP_GET_USER, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
++	i=kcom_send_with_response(DEP_GET_USER | PKT_NEW_MSG | DEP_FLG, sizeof(u), (char *)&u, 0, (void *)&ret, dest_ptr);
+ 
+-	error = comm_recv(current->om.contact, &ret, sizeof(ret));
+-	if (error < 0)
+-		goto out;
++	*value=ret;
+ 
+-	switch (size) {
+-	case 1: { s8 *v = (s8 *) value; *v = (s8) ret; break; }
+-	case 2: { s16 *v = (s16 *) value; *v = (s16) ret; break; }
+-	case 4: { s32 *v = (s32 *) value; *v = (s32) ret; break; }
+-	case 8: *value = ret; break;
+-	}
+ 	return 0;
+-out:
+-	OMBUG("error %d\n", error);
+-	return -EFAULT;
+ }
+ 
+ /**
+@@ -249,105 +214,95 @@
+ /**
+  * remote_copy_user - Copy to or from user for deputy
+  **/
+-static int remote_copy_user(task_t *p, int request)
++static int remote_copy_from_user(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_usercopy_req u;
+ 	void *buf = NULL;
+-	int error;
++	int ret;
+ 
+-	error = comm_recv(p->om.contact, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
++	memcpy(&u, pkt->data, pkt->len);
+ 
+ 	buf = kmalloc(u.len, GFP_KERNEL);
+ 	if (!buf)
+ 		goto out;
+ 
+-	switch (request) {
+-	case DEP_COPY_FROM_USER:
+-		copy_from_user(buf, (const void __user *) u.addr, u.len);
+-
+-		error = comm_send(p->om.contact, buf, u.len);
+-		if (error < 0)
+-			goto out;
+-		break;
+-	case DEP_COPY_TO_USER:
+-		error = comm_recv(p->om.contact, buf, u.len);
+-		if (error < 0)
+-			goto out;
++	ret=copy_from_user(buf, (const void __user *) u.addr, u.len);
++
++	kcom_send_resp(p, u.len, buf, pkt);
++
++	return ret;
+ 
+-		copy_to_user((void __user *) u.addr, buf, u.len);
+-		break;
+-	}
+ out:
+ 	kfree(buf);
+-	return error;
++	return -1;
+ }
+ 
++static int remote_copy_to_user(task_t *p, struct kcom_pkt *pkt)
++{
++	int ret;
++	ret=copy_to_user((void __user *) pkt->addr, pkt->data, pkt->len);
++
++	kcom_send_ack(p, pkt);
++
++	return ret;
++
++}
+ /**
+  * remote_strncpy_from_user - strncpy from user for deputy
+  **/
+-static int remote_strncpy_from_user(task_t *p)
++static int remote_strncpy_from_user(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_usercopy_req u;
+ 	void *buf = NULL;
+-	int error;
++	int ret;
+ 
+-	error = comm_recv(p->om.contact, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
++	memcpy(&u, pkt->data, sizeof(u));
+ 
+ 	buf = kmalloc(u.len, GFP_KERNEL);
+ 	if (!buf)
+ 		goto out;
+ 
+-	strncpy_from_user(buf, (const char __user *) u.addr, u.len);
++	ret=strncpy_from_user(buf, (const char __user *) u.addr, u.len);
+ 
+-	error = comm_send(p->om.contact, buf, u.len);
+-	if (error < 0)
+-		goto out;
++	kcom_send_resp(p, u.len, buf, pkt);
++
++	return ret;
+ 
+ out:
+-	kfree(buf);
+-	return error;
++	return -1;
++
+ }
+ 
+ /**
+  * remote_strnlen_from_user - strnlen from user for deputy
+  **/
+-static int remote_strnlen_user(task_t *p)
++static int remote_strnlen_user(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_usercopy_req u;
+-	long ret;
+-	int error;
++	long *ret_ptr;
+ 
+-	error = comm_recv(p->om.contact, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
++	memcpy(&u, pkt->data, pkt->len);
++
++	ret_ptr=kzalloc(sizeof(long), GFP_KERNEL);
+ 
+-	ret = (u.len)
++	*ret_ptr = (u.len)
+ 		? strnlen_user((const char __user *) u.addr, u.len)
+ 		: strlen_user((const char __user *) u.addr);
+ 
+-	error = comm_send(p->om.contact, &ret, sizeof(ret));
+-	if (error < 0)
+-		goto out;
+-out:
+-	return error;
++	kcom_send_resp(p, sizeof(*ret_ptr), (char *)ret_ptr, pkt);
++
++	return 0;
+ }
+ 
+ /**
+  * remote_put_user - put user for deputy
+  **/
+-static int remote_put_user(task_t *p)
++static int remote_put_user(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_usercopy_emb u;
+ 	long ret;
+-	int error;
+ 
+-	error = comm_recv(p->om.contact, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
++	memcpy(&u, pkt->data, pkt->len);
+ 
+ 	switch (u.len) {
+ 	case 1: ret = put_user(u.val, (u8 *) u.addr); break;
+@@ -356,81 +311,112 @@
+ 	case 8: ret = put_user(u.val, (u64 *) u.addr); break;
+ 	default: ret = -EFAULT;
+ 	}
++
++	kcom_send_ack(p, pkt);
++
+ 	return ret;
+-out:
+-	return error;
+ }
+ 
+ /**
+  * remote_get_user - get user for deputy
+  **/
+-static int remote_get_user(task_t *p)
++static int remote_get_user(task_t *p, struct kcom_pkt *pkt)
+ {
+ 	struct omp_usercopy_req u;
+-	s64 ret;
+-	int error;
++	s64 *ret;
++
++	memcpy(&u, pkt->data, sizeof(struct omp_usercopy_req));
++	ret=kzalloc(sizeof(*ret), GFP_KERNEL);
+ 
+-	error = comm_recv(p->om.contact, &u, sizeof(u));
+-	if (error < 0)
+-		goto out;
+ 
+ 	switch (u.len) {
+-	case 1: get_user(ret, (u8 *) u.addr); break;
+-	case 2: get_user(ret, (u16 *) u.addr); break;
+-	case 4: get_user(ret, (u32 *) u.addr); break;
++	case 1: get_user(*ret, (u8 *) u.addr); break;
++	case 2: get_user(*ret, (u16 *) u.addr); break;
++	case 4: get_user(*ret, (u32 *) u.addr); break;
+ #if BITS_PER_LONG == 64
+-	case 8: get_user(ret, (u64 *) u.addr); break;
++	case 8: get_user(*ret, (u64 *) u.addr); break;
+ #endif
+ 	}
+ 
+-	error = comm_send(p->om.contact, &ret, sizeof(ret));
+-	if (error < 0)
+-		goto out;
+-out:
+-	return error;
++	kcom_send_resp(p, sizeof(*ret), (char *)ret, pkt);
++return 0;
+ }
+ 
+-
+ /**
+  * remote_handle_user - Handle user copy until receiving @endtype
+  **/
+ int remote_handle_user(task_t *p, int endtype)
+ {
+-	struct omp_req req;
+-	int ret = 1;
+-	int error;
+-
+-	while (ret != 0) {
+-		error = comm_recv(p->om.contact, &req, sizeof(req));
+-		if (error < 0)
+-			return error;
+-		if (req.type == endtype) {
+-			ret = 0;
+-			break;
++	int ret = 0;
++	struct kcom_pkt *pkt, *pkt_next, *send_pkt;
++	struct kcom_task *task;
++
++	task=kcom_task_find(p->pid);
++
++	while (1) {
++
++		set_current_state(TASK_INTERRUPTIBLE);
++		list_for_each_entry_safe(pkt, pkt_next, &task->in_packs, list) {
++
++			switch (pkt->type & SYSCALL_MASK) {
++
++				case DEP_STRNCPY_FROM_USER :
++					remote_strncpy_from_user(p, pkt);
++					break;
++
++			 	case DEP_GET_USER :
++					remote_get_user(p, pkt);
++					break;
++
++				case DEP_COPY_FROM_USER :
++					remote_copy_from_user(p, pkt);
++					break;
++
++				case DEP_COPY_TO_USER :
++					remote_copy_to_user(p, pkt);
++					break;
++
++				case DEP_PUT_USER :
++					remote_put_user(p, pkt);
++					break;
++
++			 	case SYSCALL_DONE :
++					send_pkt=kcom_pkt_create(0, MIG_SYSCALL | PKT_ACK | SYSCALL_DONE | REM_FLG, PKT_ACK, NULL);
++					send_pkt->msgid=pkt->msgid;
++					send_pkt->hpid=task->hpid;
++					send_pkt->rpid=task->rpid;
++					send_pkt->resp=pkt->resp;
++
++					list_add_tail(&send_pkt->list, &task->out_packs);
++
++					if (kcomd_task) {
++						send_sig(SIGHUP, kcomd_task, 0);
++					} else
++						printk("Unable to signal kcomd\n");
++
++					ret=pkt->addr;  /* the return value is stored in the addr field */
++					list_del(&pkt->list);
++					kmem_cache_free(kcom_pkt_cachep, pkt);
++					set_current_state(TASK_RUNNING);
++					schedule();
++					return ret;
++					break;
++
++			}
++
++			list_del(&pkt->list);
++			kmem_cache_free(kcom_pkt_cachep, pkt);
+ 		}
+ 
+-		switch (req.type) {
+-		case DEP_COPY_FROM_USER:
+-		case DEP_COPY_TO_USER:
+-			remote_copy_user(p, req.type);
+-			break;
+-		case DEP_STRNCPY_FROM_USER:
+-			remote_strncpy_from_user(p);
+-			break;
+-		case DEP_STRNLEN_USER:
+-			remote_strnlen_user(p);
+-			break;
+-		case DEP_PUT_USER:
+-			remote_put_user(p);
+-			break;
+-		case DEP_GET_USER:
+-			remote_get_user(p);
+-			break;
+-		default:
+-			OMBUG("unexpected type [%x]\n", req.type);
+-			remote_disappear();
+-			break;
++		if (list_empty(&task->in_packs)) {
++			schedule();
+ 		}
++
+ 	}
+-	return ret;
++
++	printk(KERN_ERR "openMosix: %s is not supposed to end that way ! (%s:%n)\n"
++	      , __FUNCTION__, __FILE__, __LINE__);
++
++	return -1;
++
+ }

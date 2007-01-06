@@ -1,0 +1,59 @@
+---
+ kernel/kgdb.c  |    5 +++++
+ kernel/timer.c |    6 ++++++
+ 2 files changed, 11 insertions(+)
+
+Index: linux/kernel/timer.c
+===================================================================
+--- linux.orig/kernel/timer.c	2006-12-18 15:34:31.000000000 +0100
++++ linux/kernel/timer.c	2006-12-18 16:07:59.000000000 +0100
+@@ -42,6 +42,8 @@
+ #include <asm/timex.h>
+ #include <asm/io.h>
+ 
++#include <linux/kgdb.h>
++
+ #ifdef CONFIG_TIME_INTERPOLATION
+ static void time_interpolator_update(long delta_nsec);
+ #else
+@@ -939,6 +941,10 @@
+ 
+ void do_timer(struct pt_regs *regs)
+ {
++	extern int kgdb_under_breakexpection;
++	if (kgdb_under_breakexpection)
++		return;
++
+ 	jiffies_64++;
+ 	/* prevent loading jiffies before storing new jiffies_64 value. */
+ 	barrier();
+Index: linux/kernel/kgdb.c
+===================================================================
+--- linux.orig/kernel/kgdb.c	2006-12-18 16:06:10.000000000 +0100
++++ linux/kernel/kgdb.c	2006-12-18 16:07:31.000000000 +0100
+@@ -998,6 +998,9 @@
+  * of a for_each_online_cpu.
+  *
+  */
++
++int kgdb_under_breakexpection = 0;
++
+ int kgdb_handle_exception(int ex_vector, int signo, int err_code,
+ 			  struct pt_regs *linux_regs)
+ {
+@@ -1020,6 +1023,7 @@
+ 	if (atomic_read(&debugger_active) == smp_processor_id() + 1)
+ 		return 0;
+ 
++	kgdb_under_breakexpection = 1;
+       acquirelock:
+ 
+ 	/* Call the I/O drivers pre_exception routine if the I/O
+@@ -1553,6 +1557,7 @@
+ 		mdelay(2);
+ #endif
+ kgdb_restore:
++	kgdb_under_breakexpection = 0;
+ 	/* Free debugger_active */
+ 	atomic_set(&debugger_active, 0);
+ 	local_irq_restore(flags);

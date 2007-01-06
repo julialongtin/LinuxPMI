@@ -1,0 +1,522 @@
+Index: linux/hpc/migsend.c
+===================================================================
+--- linux.orig/hpc/migsend.c	2006-11-13 16:01:31.000000000 +0100
++++ linux/hpc/migsend.c	2006-11-13 16:01:38.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -14,6 +15,7 @@
+  * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
+  *
+  * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ * - kcomd thread by Matt Dew and Florian Delizy
+  *
+  */
+ 
+@@ -45,6 +47,7 @@
+ 	struct omp_mig_handshake hshake, hshake_recv;
+ 	int error;
+ 
++	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
+ 	hshake.type = type;
+ 	hshake.version = OPENMOSIX_VERSION;
+ 	hshake.personality = p->personality;
+@@ -75,6 +78,8 @@
+ 	struct omp_mig_fp m;
+ 	struct sockaddr_in *dest_ptr;
+ 
++	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++
+ 	dest_ptr=(void *)p->om.whereto;
+ 	if (!used_math()) {
+ 		return 0;
+@@ -101,6 +106,8 @@
+ 	struct sockaddr_in *dest_ptr;
+ 	int ret;
+ 
++	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++
+ 	dest_ptr=(void *)p->om.whereto;
+ 	if (task_test_dflags(p, DREMOTE))
+ 		ret=kcom_send_with_ack(MIG_MM | REM_FLG, sizeof(struct omp_mig_mm), (char *)&p->mm->start_code, 0, dest_ptr);
+@@ -144,6 +151,8 @@
+ 	int ret = 0;
+ 	struct sockaddr_in *dest_ptr;
+ 
++	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++
+ 	dest_ptr=(void *)p->om.whereto;
+ 	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
+ 	{
+@@ -162,7 +171,7 @@
+ 			ret=kcom_send_with_ack(MIG_VMA | DEP_FLG, sizeof(m), (char *)&m, 0, dest_ptr);
+ 
+ 		if (ret != 0) {
+-			printk(KERN_ERR "ERROR sending vmas\n");
++			OMBUG("ERROR sending vmas\n");
+ 			return -1;
+ 		}
+ 	}
+@@ -184,6 +193,8 @@
+ 	struct sockaddr_in *dest_ptr;
+         int type = MIG_PAGE;
+ 
++	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
++
+ 	dest_ptr=(void *)p->om.whereto;
+ 
+         if (task_test_dflags(p, DREMOTE))
+@@ -193,11 +204,15 @@
+ 
+ 	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
+ 	{
++ 		OMDEBUG_MIG(3, "+ checking vma %d\n", p->pid);
+ 		if (!(vma->vm_flags & VM_READ))
+ 			continue;
++ 		OMDEBUG_MIG(3, "+ VM_READ!  %d\n", p->pid);
+ 
+-		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE)
++		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE) {
++ 			OMDEBUG_MIG(3, "++ sending page %d\n", p->pid);
+                         kcom_send_with_ack(type, PAGE_SIZE, (char *)addr, addr, dest_ptr);
++                }
+ 	}
+ 	return 0;
+ }
+@@ -212,6 +227,7 @@
+ 	struct omp_mig_task m;
+ 	struct sockaddr_in* dest_ptr;
+ 
++	OMDEBUG_MIG(2, "sending process %d\n", p->pid);
+ 	dest_ptr=(void *)p->om.whereto;
+ 
+ 	m.ptrace = p->ptrace;
+@@ -270,6 +286,10 @@
+ 	struct sockaddr_in* dest_ptr=(void *)p->om.whereto;
+ 	arch_mig_send_pre(p);
+ 
++	if (!p) goto fail_mig;
++
++	OMDEBUG_MIG(1, "mig_do_send migration of process %d\n", p->pid);
++
+ 	if (task_test_dflags(p, DREMOTE))  {
+ 		if (kcom_send_with_ack(MIG_GO_HOME | REM_FLG, 0, NULL, 0, dest_ptr))
+ 			goto fail_mig;
+@@ -278,19 +298,31 @@
+ 			goto fail_mig;
+ 	}
+ 
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 	if (mig_send_mm(p)) goto fail_mig;
++
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 	if (mig_send_vmas(p)) goto fail_mig;
++
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 	if (mig_send_pages(p)) goto fail_mig;
++
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 	if (mig_send_fp(p)) goto fail_mig;
++
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 	if (arch_mig_send_specific(p)) goto fail_mig;
++
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
+ 	if (mig_send_proc_context(p)) goto fail_mig;
+ 
++	OMDEBUG_MIG(3, "sending process %d\n", p->pid);
++
+ 	arch_mig_send_post(p);
+ 
+ 
+ 	return 0;
+ fail_mig:
+-	printk(KERN_ERR "error FUNCTION: mig_do_send\n");
+ 	OMBUG("failed\n");
+ 	return -1;
+ }
+Index: linux/hpc/migctrl.c
+===================================================================
+--- linux.orig/hpc/migctrl.c	2006-11-13 16:00:24.000000000 +0100
++++ linux/hpc/migctrl.c	2006-11-13 16:01:38.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -14,6 +15,7 @@
+  * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
+  *
+  * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ * - kcomd thread by Matt Dew and Florian Delizy
+  *
+  */
+ 
+@@ -40,6 +42,7 @@
+ int task_remote_expel(task_t *p)
+ {
+ 	BUG_ON(!task_test_dflags(p, DREMOTE));
++	OMDEBUG_MIG(3, "pid %d task expeled !!!\n", p->pid);
+ 
+ 	if (mig_do_send(p)) {
+ 		goto failed;
+@@ -70,6 +73,7 @@
+ static int task_local_send(task_t *p, struct sockaddr *whereto, int reason)
+ {
+ 	int error = 0;
++	OMDEBUG_MIG(3, "pid %d Sending task for reason %d, let's rock!\n", p->pid, reason);
+ 
+ 	if (task_test_dflags(p, DDEPUTY))
+ 		return 0;
+@@ -99,6 +103,7 @@
+ static int task_local_bring(task_t *p, int reason)
+ {
+ 	int error;
++	OMDEBUG_MIG(3, "pid %d Receiving task for reason %d, let's rock!\n", p->pid, reason);
+ 
+ 	if (!task_test_dflags(p, DDEPUTY))
+ 		return 0;
+@@ -149,6 +154,7 @@
+                                int reason)
+ {
+ 
++	OMDEBUG_MIG(3, "pid %d Moving task, let's rock!!!\n", p->pid);
+ 	task_set_dflags(p, DPASSING);
+ 
+ 	/*
+@@ -176,6 +182,7 @@
+ int task_move_to_node(struct task_struct *p, struct sockaddr * whereto,
+                       int reason)
+ {
++	OMDEBUG_MIG(3, "pid %d Moving task?\n", p->pid);
+ 	if (task_test_stay(p, DSTAY)) {
+ 		printk(KERN_DEBUG "oM: Task can't move. check stay reason\n");
+ 		return -1;
+@@ -189,6 +196,7 @@
+  **/
+ int task_go_home(task_t *p)
+ {
++	OMDEBUG_MIG(3, "pid %d Moving task home!\n", p->pid);
+ 	if (!task_test_dflags(p, DMIGRATED)) {
+ 		printk(KERN_INFO "oM: task %d at home: ignoring request.\n",
+ 				p->pid);
+@@ -208,6 +216,7 @@
+ int task_go_home_for_reason(task_t *p, int reason)
+ {
+ 	int ret;
++	OMDEBUG_MIG(3, "pid %d task must go home :( for reason %d!\n", p->pid, reason);
+ 
+ 	if (task_test_stay(p, reason) && task_test_dflags(p, DMIGRATED))
+ 		printk(KERN_ERR "oM: task should had migrated back earlier\n");
+Index: linux/hpc/proc.c
+===================================================================
+--- linux.orig/hpc/proc.c	2006-11-13 16:00:24.000000000 +0100
++++ linux/hpc/proc.c	2006-11-13 16:01:38.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -14,6 +15,7 @@
+  * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
+  *
+  * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ * - kcomd thread by Matt Dew and Florian Delizy
+  *
+  */
+ 
+@@ -45,9 +47,9 @@
+ 	struct sockaddr_in *cur_addr;
+ 	struct kcom_task *tsk;
+ 	struct kcom_node *node;
+-	/* task_t *kcomd_task;*/
+ 
+ 
++	OMDEBUG_MIG(2, "asking process %d migration ?\n", p->pid);
+ 	if (!dest_ptr) {
+ 	    printk(KERN_ERR "openmosix: openmosix internal structure is not initialized for pid %d\n", p->pid);
+ 	    return -EFAULT;
+@@ -56,31 +58,32 @@
+ 	buf[size-1]='\0';	 /* ensures no trailing crap in 'where' file*/
+ 
+ 	if (size >= 4 && strnicmp(buf, "home", 4) == 0) {
+-		/* p->om.whereto=NULL;*/
+-		/* ret = task_register_migration(p, NULL);*/
++
+ 		if (task_test_dflags(p, DDEPUTY)) { /* if already migrated and this is home node*/
++
++			OMDEBUG_MIG(3, "asking process %d to migrate home ?\n", p->pid);
+ 			node=kcom_node_find((struct sockaddr *)dest_ptr);
+ 			if (node==NULL)
+ 				return 1;
+ 			tsk=kcom_task_find(p->pid);
+ 			if (tsk==NULL)
+ 				return 1;
++
++			OMDEBUG_MIG(3, "asking process %d to migrate home (ready)?\n", p->pid);
++
+ 			kcom_task_send(tsk, MIG_COME_HOME | PKT_NEW_MSG | DEP_FLG, 0, NULL, NULL, 0);
+ 
+-			#if 0
+-			read_lock(&tasklist_lock);
+-			kcomd_task = find_task_by_pid(kcom_pid);
+-			read_unlock(&tasklist_lock);
+-			#endif
+-
+-			if (kcomd_task != NULL)
+-				send_sig(SIGHUP,kcomd_task,0);
+-			/* kcom_send(MIG_COME_HOME | PKT_NEW_MSG | DEP_FLG, 0, NULL, 0, dest_ptr);*/
++
++			if (kcomd_task != NULL) send_sig(SIGHUP,kcomd_task,0);
+ 		} else {
++
++			OMDEBUG_MIG(3, "asking process %d to migrate home (not a DDEPUTY)?\n", p->pid);
+ 			task_register_migration(p);
+ 		}
+ 	} else {
+ 		if (task_test_dflags(p, DDEPUTY)) {
++
++			OMDEBUG_MIG(3, "asking process %d to migrate to another place (DDEPUTY)?\n", p->pid);
+ 			tsk=kcom_task_find(p->pid);
+ 			if (tsk) {
+ 				cur_addr=(struct sockaddr_in *)&tsk->node->addr;
+@@ -91,6 +94,8 @@
+ 			}
+ 		} else {
+ 
++			OMDEBUG_MIG(3, "asking process %d to migrate to another place (Initial)?\n", p->pid);
++
+ 			dest_ptr->sin_family=AF_INET;
+ 			dest_ptr->sin_port=htons(DAEMON_IP4_PORT);
+ 			dest_ptr->sin_addr.s_addr=in_aton(buf);
+Index: linux/hpc/task.c
+===================================================================
+--- linux.orig/hpc/task.c	2006-11-13 16:00:24.000000000 +0100
++++ linux/hpc/task.c	2006-11-13 16:01:38.000000000 +0100
+@@ -1,6 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -26,6 +27,7 @@
+ #include <hpc/hpc.h>
+ #include <hpc/kcom.h>
+ #include <hpc/prototype.h>
++#include <hpc/debug.h>
+ 
+ /**
+  * task_set_comm - swap openMosix link for a process (return old one)
+@@ -57,6 +59,7 @@
+ 	mode_t mode;
+ 	int stay = 0;
+ 
++	OMDEBUG_MIG(3, "Checking task stay reason\n");
+ 	inode = vma->vm_file->f_dentry->d_inode;
+ 	if (!inode)
+ 		return 0;
+@@ -126,6 +129,7 @@
+ void task_request_move(task_t *p)
+ {
+ 	struct sockaddr *dest_ptr=p->om.whereto;
++	OMDEBUG_MIG(3, "pid %d clearing bits, moving to node\n", p->pid);
+ 
+ /*
+  * FIXME:
+@@ -222,6 +226,8 @@
+  **/
+ int task_register_migration(task_t *p)
+ {
++	OMDEBUG_MIG(3, "pid %d registering process migration ?\n", p->pid);
++
+ 	task_set_dreqs(p, DREQ_MOVE);
+ 	wake_up_process(p);
+ 	set_ti_thread_flag(p->thread_info, TIF_NEED_RESCHED);
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-13 16:01:36.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-13 16:01:38.000000000 +0100
+@@ -1,7 +1,7 @@
+ /*
+  *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
+  *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
+- *	Copyright (C) 2006-2007 Florian Delizy <fdy@e8dev.com>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -50,6 +50,7 @@
+ 	int error;
+ 	struct omp_mig_handshake hshake;
+ 
++	OMDEBUG_MIG(3, "receiving handshake ^^\n");
+ 	/* receive request of whatever */
+ 	error = comm_recv(mlink, &hshake, sizeof(hshake));
+ 	if (error < 0) {
+@@ -87,6 +88,8 @@
+ 	task_t *sltsk;
+ 
+ 
++	OMDEBUG_MIG(2, "receiving program home (home sweat home) ^^\n");
++
+ 	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {
+ 
+ 		recv_tsk=kcom_task_find(recv_kcom_pkt->hpid);
+@@ -138,6 +141,8 @@
+ 	struct sockaddr_in *saddr;
+ 	const unsigned int LO_IP=in_aton("127.0.0.1");
+ 
++	OMDEBUG_MIG(3, "receiving init packet\n");
++
+ 	if ((recv_kcom_pkt->type & MSG_MASK)==PKT_NEW_MSG) {	 /* incoming process*/
+ 		rpid=0;
+ 
+@@ -212,7 +217,7 @@
+ KCOMD_NSTATIC int mig_do_receive_mm(task_t *p, struct kcom_pkt *pkt)
+ {
+ 
+-	OMDEBUG_MIG(2, "MIG_MM\n");
++	OMDEBUG_MIG(3, "pid %d receiving mm struct packet\n", p->pid);
+ 
+ 
+ 	if (!pkt || sizeof(struct omp_mig_mm) != pkt->len) goto error_packet;
+@@ -250,12 +255,12 @@
+ 
+ 	int ret = 0;
+ 
++ 	OMDEBUG_MIG(3, "pid %d receiving vmas struct packet\n", p->pid);
++
+ 	if (!pkt || sizeof(struct omp_mig_vma) != pkt->len) goto error_packet;
+ 
+ 	a = (struct omp_mig_vma *)pkt->data;
+ 
+-	OMDEBUG_MIG(2, "MIG_VMA [%lx, %ld]\n", a->vm_start, a->vm_size);
+-
+ 	/* FIXME : Temporary disabled */
+ 		if (0 && a->vm_file) {
+ 			file = (task_test_dflags(p, DREMOTE))
+@@ -331,6 +336,7 @@
+  	Must be done from process context.
+  	*/
+ 
++ 	OMDEBUG_MIG(3, "pid %d receiving pages struct packet\n", p->pid);
+ 	if (!pkt || PAGE_SIZE != pkt->len) goto error_packet_size;
+ 
+ 	addr=pkt->addr;
+@@ -382,6 +388,8 @@
+ {
+ 	struct omp_mig_fp *fp;
+ 
++ 	OMDEBUG_MIG(3, "pid %d receiving fp struct packet\n", p->pid);
++
+ 	if (!pkt || sizeof(struct omp_mig_fp) != pkt->len) goto error_packet;
+ 
+ 	fp=(void *)pkt->data;
+@@ -417,6 +425,7 @@
+ {
+ 	struct omp_mig_task *m;
+ 
++ 	OMDEBUG_MIG(3, "pid %d receiving proc_context\n", p->pid);
+ 	if (!pkt || sizeof(struct omp_mig_task) != pkt->len) goto error_packet;
+ 
+ 	m=(struct omp_mig_task *)pkt->data;
+@@ -478,6 +487,8 @@
+ 	int waiting_time = 0;
+ 
+ 
++	OMDEBUG_MIG(2, "pid %d receiving process ??\n", p->pid);
++
+ 	task_set_dflags(p, DINCOMING);
+ 	/* clear_used_math();*/
+ 
+@@ -486,8 +497,9 @@
+ 		waiting_time++;
+ 		schedule_timeout_interruptible(HZ/1000);
+ 		mytsk=kcom_task_find(p->pid);
++ 		OMDEBUG_MIG(3, "pid %d waiting kcomd to do his work ! %d HZ\n", p->pid, waiting_time);
+ 		/* Preventing infinite loops */
+-		if (1000000 < waiting_time) {
++		if (60000 < waiting_time) {
+ 			printk(KERN_ERR "openMosix: kcomd task creation timeout exceeded, dying ... \n");
+ 			ret = -1;
+ 			goto init_exit;
+@@ -500,6 +512,7 @@
+ 		memcpy(p->om.whereto, &mytsk->node->addr, sizeof(mytsk->node->addr));
+ 	}
+ 
++	OMDEBUG_MIG(3, "pid %d kcomd did his work, all fine !\n", p->pid);
+ 	set_current_state(TASK_INTERRUPTIBLE);
+ 
+ 	write_lock(&mytsk->spinlock);
+@@ -532,6 +545,7 @@
+ 				/* this is the last thing we do in the chain of receiving,
+ 				 * so return 0 after we're done */
+ 				case MIG_TASK:
++					OMDEBUG_MIG(3, "pid %d last packet received (context)!\n", p->pid);
+ 					ret=mig_do_receive_proc_context(p, pkt);
+ 
+ 					task_clear_dflags(p, DINCOMING);
+@@ -572,6 +586,7 @@
+ 
+ protocol_exit:
+ 	write_unlock(&mytsk->spinlock);
++ 	OMDEBUG_MIG(3, "pid %d unlocking and returning, ret=%d!\n", p->pid, ret);
+ 
+ init_exit:
+ 
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2006-11-13 16:01:20.000000000 +0100
++++ linux/hpc/kcomd.c	2006-11-13 16:01:38.000000000 +0100
+@@ -1,5 +1,6 @@
+ /*
+  *	Copyright (C) 2006 Vincent Hanquez <vincent@snarc.org>
++ *	Copyright (C) 2006 Florian Delizy <fdy@e8dev.com>
+  *
+  * This program is free software; you can redistribute it and/or modify
+  * it under the terms of the GNU General Public License as published
+@@ -10,6 +11,8 @@
+  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  * GNU General Public License for more details.
+  *
++ * kcomd thread by Matt Dew and Florian Delizy
++ *
+  */
+ 
+ #include <linux/sched.h>
+@@ -515,7 +518,7 @@
+ 	fd4=-1;
+ 	fd6=-1;
+ 	kcomd_done=0;
+-	printk(KERN_INFO "kcomd: init\n");
++	printk(KERN_INFO "HPC: openMosix Communication Kernel Daemon Start\n");
+ 
+ 	kcomd_thread_initialize();
+ 
+Index: linux/include/hpc/debug.h
+===================================================================
+--- linux.orig/include/hpc/debug.h	2006-11-13 16:00:24.000000000 +0100
++++ linux/include/hpc/debug.h	2006-11-13 16:01:38.000000000 +0100
+@@ -43,7 +43,8 @@
+ 
+ #ifdef CONFIG_OPENMOSIX_DEBUG
+ #define OMDEBUG(var, lim, fmt...)	{ if (var >= lim) \
+-					printk(KERN_DEBUG "[OMDBG] " fmt); }
++						printk(KERN_DEBUG "[OMDBG] %s:%d ", __FUNCTION__,  __LINE__); \
++						printk(fmt); }
+ #else
+ #define OMDEBUG(var, lim, fmt...)	do {} while (0)
+ #endif

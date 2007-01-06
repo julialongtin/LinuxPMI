@@ -1,0 +1,203 @@
+[patch @num@/@total@] @name@ mig_do_receive* sanity check and NACK returns
+
+This patch add the size checking on the mig_do_receive calls, and send NACKS
+to deputy if packets seems corrupted for the remote system ... 
+
+Affected functions are :
+- mig_do_receive_mm
+- mig_do_receive_vma
+- mig_do_receive_fp
+- mig_do_receive_page
+- mig_do_receive_proc_context
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2006-11-13 16:00:25.000000000 +0100
++++ linux/hpc/migrecv.c	2006-11-13 16:01:34.000000000 +0100
+@@ -206,18 +206,28 @@
+  * Description:
+  *    Receives the process mmap info.
+  **/
+-KCOMD_NSTATIC void mig_do_receive_mm(task_t *p, struct kcom_pkt *pkt)
++KCOMD_NSTATIC int mig_do_receive_mm(task_t *p, struct kcom_pkt *pkt)
+ {
+ 
+ 	OMDEBUG_MIG(2, "MIG_MM\n");
+ 
++
++	if (!pkt || sizeof(struct omp_mig_mm) != pkt->len) goto error_packet;
++
+ 	down_write(&p->mm->mmap_sem);
+ 	memcpy(&p->mm->start_code, pkt->data, pkt->len);
+ 	p->mm->exec_vm=0; /* MSD debug*/
+ 	up_write(&p->mm->mmap_sem);
+ 
++
++
+ 	kcom_send_ack(p, pkt);
++	return 0;
+ 
++error_packet:
++	printk(KERN_ERR "openMosix: (mm receive) packet NULL or size mismatched\n");
++	kcom_send_nack(p, pkt);
++	return -1;
+ 
+ }
+ EXPORT_SYMBOL_GPL(mig_do_receive_mm);
+@@ -235,7 +245,9 @@
+ 	struct file *file = NULL;
+ 	extern asmlinkage long sys_madvise(unsigned long, size_t, int);
+ 
++	int ret = 0;
+ 
++	if (!pkt || sizeof(struct omp_mig_vma) != pkt->len) goto error_packet;
+ 
+ 	a = (struct omp_mig_vma *)pkt->data;
+ 
+@@ -268,23 +280,29 @@
+ 							flags, a->vm_pgoff);
+ 		up_write(&p->mm->mmap_sem);
+ 
+-		if (IS_ERR((const void *) result))
+-			return PTR_ERR((const void *) result);
++		if (IS_ERR((const void *) result)) {
++			ret = PTR_ERR((const void *) result);
++			goto error_packet;
++		}
+ 
+ 		if (a->vm_flags & VM_READHINTMASK) {
++
+ 			int behavior = (a->vm_flags & VM_SEQ_READ)
+ 					? MADV_RANDOM
+ 					: MADV_SEQUENTIAL;
+-			result=sys_madvise(a->vm_start, a->vm_size, behavior);
+-			if (result)
+-				kcom_send_nack(p, pkt);
+-				return result;
+-		}
+ 
++			ret=sys_madvise(a->vm_start, a->vm_size, behavior);
++			if (result) goto error_packet;
++
++		}
+ 
+ 	kcom_send_ack(p, pkt);
++	return ret;
+ 
+-	return 0;
++error_packet:
++	printk(KERN_ERR "openMosix:(vma receive) packet NULL, size mismatched, or corrupted\n");
++	kcom_send_nack(p, pkt);
++	return ret;
+ }
+ EXPORT_SYMBOL_GPL(mig_do_receive_vma);
+ 
+@@ -302,7 +320,7 @@
+ 	struct mm_struct *mm = p->mm;
+ 	struct vm_area_struct *vma;
+ 	struct page *recv_page = NULL;
+-	unsigned long addr;
++	unsigned long addr = 0xdeadc0de;
+ 	void *kmpage;
+ 
+  	/*
+@@ -310,15 +328,15 @@
+  	Must be done from process context.
+  	*/
+ 
+-
++	if (!pkt || PAGE_SIZE != pkt->len) goto error_packet_size;
+ 
+ 	addr=pkt->addr;
+ 	vma = find_vma(mm, addr);
+ 	if (!vma) {
+ 		OMBUG("vma not found (addr: %p)\n", (void *) addr);
+-		kcom_send_nack(p, pkt);
+-		return -1;
++		goto error_packet;
+ 	}
++
+ 	recv_page=alloc_zeroed_user_highpage(vma, addr);
+ 	kmpage=kmap(recv_page);
+ 	memcpy(kmpage, pkt->data, pkt->len);
+@@ -332,13 +350,19 @@
+ 	up_write(&mm->mmap_sem);
+ 
+ 	kcom_send_ack(p, pkt);
+-
+ 	return 0;
+ 
+-/*out:*/
++error_packet_size:
++	printk(KERN_ERR "openMosix: (page receive) packet NULL or size mismatch\n");
++
++error_packet:
++
+ 	printk(KERN_ERR "receive page failed at addr %p\n", (void *) addr);
+ 	OMBUG("receive page failed at addr %p\n", (void *) addr);
+-	__free_page(recv_page);
++	if (recv_page) __free_page(recv_page);
++
++	kcom_send_nack(p, pkt);
++
+ 	return -1;
+ 
+ }
+@@ -355,16 +379,24 @@
+ {
+ 	struct omp_mig_fp *fp;
+ 
++	if (!pkt || sizeof(struct omp_mig_fp) != pkt->len) goto error_packet;
++
+ 	fp=(void *)pkt->data;
+ 
+ 	OMDEBUG_MIG(2, "MIG_FP\n");
+ 	set_used_math();
++
+ 	arch_mig_receive_fp(p, fp);
+ 
+ 	kcom_send_ack(p, pkt);
+ 
+ 
+ 	return 0;
++
++error_packet:
++	printk(KERN_ERR "openMosix:(fp receive) packet NULL or size mismatched\n");
++	kcom_send_nack(p, pkt);
++	return -1;
+ }
+ 
+ /**
+@@ -382,6 +414,8 @@
+ {
+ 	struct omp_mig_task *m;
+ 
++	if (!pkt || sizeof(struct omp_mig_task) != pkt->len) goto error_packet;
++
+ 	m=(struct omp_mig_task *)pkt->data;
+ 
+ 	OMDEBUG_MIG(1, "MIG_TASK\n");
+@@ -419,6 +453,11 @@
+ 	kcom_send_ack(p, pkt);
+ 
+ 	return 0;
++
++error_packet:
++	printk(KERN_ERR "openMosix:(proc_context receive) packet NULL or size mismatched\n");
++	kcom_send_nack(p, pkt);
++	return -1;
+ }
+ 
+ /**
+@@ -461,9 +500,11 @@
+ 				switch (pkt->type & MIG_MASK) {
+ 
+ 					case MIG_MM:
+-						mig_do_receive_mm(p, pkt);
++						ret =  mig_do_receive_mm(p, pkt);
+ 						list_del(&pkt->list);
+ 						kmem_cache_free(kcom_pkt_cachep, pkt);
++						if (ret)
++							return ret;
+ 						break;
+ 
+ 					case MIG_VMA:

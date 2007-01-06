@@ -1,0 +1,32 @@
+[patch @num@/@total@] @name@ sysret_carefull hook
+
+This patch allow a process to migrate on the return of a syscall
+since for now openmosix is hijacking the TIF_NEEDRESCHED for it's
+own purpose, the call to openmosix_pre_usermode must be called
+before any schedule() call (since schedule() would clear the
+TIF_NEEDRESCHED flag ... )
+
+This patch is already present on tab's git repository (thanks tab)
+
+Index: linux-2.6.17/arch/x86_64/kernel/entry.S
+===================================================================
+--- linux-2.6.17.orig/arch/x86_64/kernel/entry.S	2006-11-16 22:38:45.000000000 +0100
++++ linux-2.6.17/arch/x86_64/kernel/entry.S	2006-11-16 22:44:40.000000000 +0100
+@@ -265,11 +265,17 @@
+ 	bt $TIF_NEED_RESCHED,%edx
+ 	jnc sysret_signal
+ 	sti
++#ifdef CONFIG_OPENMOSIX
++	SAVE_REST
++	call openmosix_pre_usermode
++	RESTORE_REST
++#endif /* CONFIG_OPENMOSIX */
+ 	pushq %rdi
+ 	CFI_ADJUST_CFA_OFFSET 8
+ 	call schedule
+ 	popq  %rdi
+ 	CFI_ADJUST_CFA_OFFSET -8
++
+ 	jmp sysret_check
+ 
+ 	/* Handle a signal */ 

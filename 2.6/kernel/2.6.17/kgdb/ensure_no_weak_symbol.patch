@@ -1,0 +1,114 @@
+Index: linux/kernel/kgdb.c
+===================================================================
+--- linux.orig/kernel/kgdb.c	2006-09-08 02:51:43.000000000 +0200
++++ linux/kernel/kgdb.c	2006-09-08 02:55:21.000000000 +0200
+@@ -142,7 +142,9 @@
+  */
+ int __attribute__ ((weak))
+     kgdb_arch_init(void)
+-{
++{	
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ 	return 0;
+ }
+ 
+@@ -157,6 +159,8 @@
+ void __attribute__ ((weak))
+     kgdb_disable_hw_debug(struct pt_regs *regs)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ }
+ 
+ /*
+@@ -167,6 +171,8 @@
+ int __attribute__ ((weak))
+ 	kgdb_skipexception(int exception, struct pt_regs *regs)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ 	return 0;
+ }
+ 
+@@ -177,6 +183,8 @@
+ int __attribute__ ((weak))
+     kgdb_set_hw_break(unsigned long addr)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ 	return 0;
+ }
+ 
+@@ -187,6 +195,8 @@
+ int __attribute__ ((weak))
+     kgdb_remove_hw_break(unsigned long addr)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ 	return 0;
+ }
+ 
+@@ -196,6 +206,8 @@
+ void __attribute__ ((weak))
+     kgdb_remove_all_hw_break(void)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ }
+ 
+ /**
+@@ -215,6 +227,8 @@
+ void __attribute__ ((weak))
+     kgdb_correct_hw_break(void)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ }
+ 
+ /**
+@@ -231,6 +245,8 @@
+ void __attribute__ ((weak))
+     kgdb_post_master_code(struct pt_regs *regs, int e_vector, int err_code)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ }
+ 
+ /**
+@@ -250,6 +266,8 @@
+ void __attribute__ ((weak))
+     kgdb_roundup_cpus(unsigned long flags)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ }
+ 
+ /**
+@@ -261,6 +279,8 @@
+ void __attribute__ ((weak))
+     kgdb_shadowinfo(struct pt_regs *regs, char *buffer, unsigned threadid)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ }
+ 
+ /**
+@@ -275,6 +295,8 @@
+ struct task_struct __attribute__ ((weak))
+     * kgdb_get_shadow_thread(struct pt_regs *regs, int threadid)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ 	return NULL;
+ }
+ 
+@@ -289,6 +311,8 @@
+ struct pt_regs __attribute__ ((weak))
+     * kgdb_shadow_regs(struct pt_regs *regs, int threadid)
+ {
++	printk( KERN_INFO "KGDB %s:%d default %s called ... doing nothing\n"
++	      , __FILE__, __LINE__, __FUNCTION__);
+ 	return NULL;
+ }
+ 
