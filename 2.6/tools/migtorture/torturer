@@ -1,0 +1,149 @@
+#! /bin/bash
+
+
+#set -x
+
+
+# Automatic migration torturer .... start a process, migrate it to a node, then
+# back then again, and again till the timeout end or the process dies ...      
+
+PIDFILE=$( mktemp )
+
+
+
+# Starts a process and outputs its pid ... 
+
+function StartWithPid()
+{
+
+    PROCESS=$( which $1 )
+    [ -z "$PROCESS" -a -x $PWD/$1 ] && PROCESS="$PWD/$1"
+
+    if [ -z "$PROCESS" ]; then
+    	echo "Can't locate $1"
+    fi
+
+    eval "$PROCESS &" 
+    sleep 1	# Wait the process to start
+    ps | grep "\\<$1\\>" | grep -v grep | awk '{ print $1 }' | tail -n 1 > $PIDFILE
+
+    PID=$( cat /$PIDFILE )
+
+    if [ "$PID" -a -d "/proc/$PID"  ]; then
+    	echo "Process $1 started => PID: $PID "
+    	return 0
+    else
+    	echo "Process $1 not started ô_O"
+    	return 1
+    fi
+}
+
+
+# Migrate a process $1 to $2 and wait at most $3 for the migration to be done 
+
+function MigrateProcess()
+{
+    local x
+
+    if [ -f /proc/$1/om/where ]; then 
+	echo "PID $1: Asking process to migrate to $2 "
+	echo $2 > /proc/$1/om/where
+
+	x=0
+	until [  "$( cat /proc/$1/om/where )" == $2  -o $3 -le $x -o ! -d /proc/$1 ]
+	do 
+	    sleep 1
+	    echo "PID $1: Checking process *did* migrate ($x) ... [$( cat /proc/$1/om/where)]"
+	    x=$( expr $x + 1 )
+	done
+
+	# Check the migration succeeded ??
+
+	if [ ! -d /proc/$1 ] ; then
+	
+	    echo "PID $1: process died T_T ?  ... "
+	    return 1
+
+	elif [ "$(cat /proc/$1/om/where )" == $2  ]; then
+
+	    echo "PID $1: Migration Succeeded ^_^ ... "    
+	    return 0
+
+	else
+	    echo "PID $1: Migration Failed x_x ... "
+
+	    if [ -f /proc/$1/om/stay ]; then
+		echo "PID $1: Stay reason : "
+		cat /proc/$1/om/stay
+	    fi
+	    return 1
+
+	fi
+
+
+    else 
+
+	echo "PID $1: Not an openmosix kernel -> Failed migration"
+	return 1
+    fi
+
+}
+
+
+# Execute a test for a given process
+
+function MigTest()
+{
+    local x
+
+    echo Running $1
+
+    StartWithPid $1 
+
+    PID=$( cat $PIDFILE )
+
+    if [ "$PID" -a -d /proc/$PID ]; then
+	
+	x=0
+	until [  ! -d /proc/$PID -o $3 -le $x ]
+	do
+	    MigrateProcess $PID $2 10
+	    [ ! $? -eq  0 ] && break
+	    sleep 2
+	    MigrateProcess $PID "home" 10
+	    [ ! $? -eq  0 ] && break
+	    sleep 2
+	    x=$( expr $x + 1 )
+	done
+
+	echo "PID $PID: killing process"
+	[ -d /proc/$PID ] && kill $PID
+	sleep 2
+	if [ -d /proc/$PID ]; then
+	    echo "PID $PID: killing badly process ò_ó"
+	    kill -9 $PID
+	fi
+    fi
+}
+
+
+# Main loop
+
+DEST=$2
+
+[ -z "$DEST" ] && DEST=192.168.168.12
+
+
+if [ -z $1 ]; then
+
+    for x in $( seq 0 $TORTURENB ); do
+	echo "Running migration test :  ${TORTURES[$x]}"
+	MigTest ${TORTURES[$x]} $DEST 20
+    done
+
+else
+    echo "Running migration test : $1"
+    MigTest $1 $DEST 20
+fi
+
+rm $PIDFILE
