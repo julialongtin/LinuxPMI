@@ -1,0 +1,31 @@
+#! /bin/bash
+
+cd linux-2.6.*
+
+filelist=$(mktemp )
+filelist2=$(mktemp )
+
+> $filelist
+
+# first headers :
+
+for x in $( find . -iname '.*o.cmd' ); do
+
+
+    grep '^[[:blank:]]*\$\?(\?\(wildcard \)\?\([^ [:blank:]]*\.[hcS]\))\? \\' $x | sed -e 's,^[[:blank:]]*\$\?(\?\(wildcard \)\?\([^ [:blank:]]*\.[hcS]\))\? \\,\2,' >> $filelist
+
+done
+
+for x in $( find . -iname '*.[hcS]' ); do 
+    obj=$( echo $x | sed -e 's,\.[chS]$,.o,' )
+    [ -e $obj ] && echo $x | sed -e 's,^\./,,' >> $filelist
+done
+
+sort -u $filelist > $filelist2
+
+ctags -L $filelist2 2>/dev/null
+
+rm -f $filelist $filelist2
+
+cd .. 
+

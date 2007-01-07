@@ -1,0 +1,111 @@
+#! /bin/bash
+
+VERSION=2.6.17
+
+BASEDIR="$(dirname $0)/../"
+
+function CreateEnv()
+{
+        if [ -z "$1" -o "help" == "$1" ]; then
+
+                echo "setupenv env <path> [version]"
+                echo " where <path> is the path where the env should"
+                echo " be created (no trailing / please) and [version]"
+                echo " the optionnal kernel version"
+                return
+        fi
+
+        DEST=$1
+        KVER=$VERSION
+        
+        [ "$2" ] && KVER=$2
+
+        if [ ! -d $BASEDIR/$KVER -o ! -e "$BASEDIR/tarballs/linux-$KVER.tar.bz2" ]; then
+                echo "Can't find $KVER kernel version"
+                return
+        fi
+
+        if [ ! -e "$DEST" ]; then
+                echo "creating directory $DEST"
+                mkdir -p $DEST
+        fi
+        
+        echo "Creating env in $DEST"
+
+
+        pushd $PWD >/dev/null 2>&1
+
+        cd $DEST
+        echo "uncompressing kernel ... (this may take a while)"
+        tar -jxf "$BASEDIR/tarballs/linux-$KVER.tar.bz2"
+        echo "applying patches"
+        cd linux-$KVER
+        ln -s $BASEDIR/$KVER patches
+        quilt push -av
+        
+        popd > /dev/null 2>&1
+
+        echo "$DEST ready to work, you can now use quilt to manage patches ..."
+}
+
+
+function SvnUpdate
+{
+        if [ "help" == $1 ]; then
+                echo "setupenv svnupdate [envpath]"
+                echo "  unapply all patches"
+                echo "  updates from the svn"
+                echo "  reapply all patches"
+                return
+        fi
+
+        DEST="."
+        [ "$1" ] && DEST=$1
+
+        pushd $PWD >/dev/null 2>&1
+
+        cd $DEST/linux-2.6.*
+
+        if [ ! -e "patches/series" ] ; then
+                echo "$DEST does not seem to be a dev environment ..."
+                popd > /dev/null 2>&1
+                return
+        fi
+
+        quilt pop -av || ( echo "Can't unapply all patches ... need refresh ?" )
+        cd patches
+        svn update || ( echo "Can't update ??" )
+        cd ../
+        quilt push -av || ( echo "Can't reapply all patches ... need refresh ?" )
+
+        echo "env $DEST updated"
+
+        popd
+}
+
+
+case $1 in
+        env)
+                shift
+                CreateEnv $*
+        ;;
+
+        svnupdate)
+                shift
+                SvnUpdate $*
+        ;;
+
+        *)
+                echo "setupenv: oM swiss knife script ..."
+                echo "Usage : "
+                echo "setupenv <command> [<args>]"
+                echo "Where : "
+                echo "        <command> can be : "
+                echo "                env : creates a dev env (uncompress the kernel and apply patches)"
+                echo "                svnupdate : updates an environment (unapply patches, update, re-apply)"
+                echo " "
+                echo "You can try 'setupenv <command> help' for more info"
+        ;;
+esac
+
+# vim:sw=8:
