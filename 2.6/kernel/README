@@ -1,0 +1,8 @@
+This is the openMosix 2.6 kernel sources.
+
+To start first make sure you have installed quilt, then
+add the 'devutils' script to your path, then just call
+
+setupenv env 'path_to_some_dir_to_create_a_dev_env'
+
+and here you go
