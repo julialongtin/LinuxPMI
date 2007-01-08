@@ -3,15 +3,19 @@
 VERSION=2.6.17
 
 BASEDIR="$(dirname $0)/../"
+PRG="$(basename $0)"
 
 function CreateEnv()
 {
         if [ -z "$1" -o "help" == "$1" ]; then
 
-                echo "setupenv env <path> [version]"
-                echo " where <path> is the path where the env should"
-                echo " be created (no trailing / please) and [version]"
-                echo " the optionnal kernel version"
+		echo "Usage:"
+		echo " "
+                echo "        $PRG env <path> [version]"
+                echo " "
+                echo " Where: "
+                echo "        <path>    : is the path of the new env (no trailing / please)"
+                echo "        [version] : the optionnal kernel version (default: $VERSION)"
                 return
         fi
 
@@ -48,14 +52,68 @@ function CreateEnv()
         echo "$DEST ready to work, you can now use quilt to manage patches ..."
 }
 
+function CreateEnvSplit()
+{
+        if [ -z "$1" -o "help" == "$1" ]; then
+
+		echo "Usage:"
+		echo " "
+                echo "        $PRG env <path> [version]"
+                echo " "
+                echo " Where: "
+                echo "        <path>    : is the path of the new split-env (no trailing / please)"
+                echo "        [version] : the optionnal kernel version (default: $VERSION)"
+                return
+        fi
+
+        DEST=$1
+        KVER=$VERSION
+        
+        [ "$2" ] && KVER=$2
+
+        if [ ! -d $BASEDIR/$KVER -o ! -e "$BASEDIR/tarballs/linux-$KVER.tar.bz2" ]; then
+                echo "Can't find $KVER kernel version"
+                return
+        fi
+
+        if [ ! -e "$DEST" ]; then
+                echo "creating directory $DEST"
+                mkdir -p $DEST
+        fi
+        
+        echo "Creating env in $DEST"
+
+
+        pushd $PWD >/dev/null 2>&1
+
+        cd $DEST
+        echo "uncompressing kernel ... (this may take a while)"
+        tar -jxf "$BASEDIR/tarballs/linux-$KVER.tar.bz2"
+        echo "applying patches"
+        cp -r $BASEDIR/$KVER patches
+        cd linux-$KVER
+        ln -s ../patches patches
+        quilt push -a
+        
+        popd > /dev/null 2>&1
+
+        echo "$DEST ready to work, you can now use quilt to manage patches ..."
+}
 
 function SvnUpdate
 {
         if [ "help" == $1 ]; then
-                echo "setupenv svnupdate [envpath]"
-                echo "  unapply all patches"
-                echo "  updates from the svn"
-                echo "  reapply all patches"
+        	echo "Usage:"
+        	echo " "
+                echo "        $PRG svnupdate [envpath]"
+                echo " "
+                echo "Where:"
+                echo " "
+                echo "        [envpath] : the path to the environment to update, default '.'"
+                echo " "
+                echo "- unapply all patches"
+                echo "- updates from the svn"
+                echo "- reapply all patches"
                 return
         fi
 
@@ -76,13 +134,138 @@ function SvnUpdate
         cd patches
         svn update || ( echo "Can't update ??" )
         cd ../
-        quilt push -av || ( echo "Can't reapply all patches ... need refresh ?" )
+        quilt push -a || ( echo "Can't reapply all patches ... need refresh ?" )
 
         echo "env $DEST updated"
 
         popd
 }
 
+
+function SyncEnv
+{
+	if [ $# -lt 2 -o "help" == "$1" ]; then
+		echo "Usage:"
+		echo " "
+                echo "        $PRG sync-env <srcpath> <dstpath> [version]"
+                echo " "
+                echo " Where: "
+                echo "        <srcpath> : the path of the source env (the one to update from)"
+                echo "        <dstpath> : the path of the dest env (the one to update)"
+                echo "        [version] : the optionnal kernel version (default: guessed, or $VERSION)"
+                echo " "
+                echo "- Look for the patches dir in both <srcpath> and <dstpath>"
+                echo "- For each file contained in src and in dst, apply diff to the dst"
+                echo "- For each file contained in src but not in dst, add it to dst and 'svn add' it"
+                echo "- For each file contained in dst but not in src, 'svn remove' it from dst"
+                echo " "
+                echo "WARNING: all modifications in <dstpath> are deleted,"
+                echo "at the end, <dstpath> is the exact copy of <srcpath> plus svn housekeeping"
+                echo "if you are looking for 'merging', you should take a look at the DirDiff plugin"
+                echo "of gvim, for now ..."
+                return 1
+	fi
+
+	if [ ! -d $1 ]; then
+		echo "$1 not found"
+		return 1
+	fi
+
+	if [ ! -d $2 ]; then
+		echo "$1 not found"
+		return 1
+	fi
+
+	SRC=$1
+	DEST=$2
+
+	# Guess the version or take it from the command line :
+
+	KVER=$VERSION
+	if [ -n "$3" ]; then
+		KVER=$3
+	else
+		pushd $PWD > /dev/null 2>&1
+		cd $SRC
+		GUESS="$( echo linux-2.6.* | grep -v '*' | awk '{ print $1 }' | awk -F'-' '{ print $2 }' )"
+		popd > /dev/null 2>&1
+
+		if [ -n "$GUESS" ]; then 
+			KVER=$GUESS
+		else
+			pushd $PWD > /dev/null 2>&1
+			cd $DEST
+			GUESS="$( echo 2.6.* | grep -v '*' | awk '{ print $1 }' )"
+			popd > /dev/null 2>&1
+			[ -n "$GUESS" ] && KVER=$GUESS
+		fi
+	fi
+
+	if [ ! -d "$DEST/$KVER" -o ! -f "$DEST/$KVER/series" ]; then
+		echo "Can't find $DEST/linux-$KVER  (or no series file in it) ... "
+		return 1
+	fi
+
+	SRCVER=linux-$KVER
+	[ ! -d "$SRC/$SRCVER" ] && SRCVER=linux
+	if [ ! -d "$SRC/$SRCVER" ]; then
+		echo "Can't find $SRC/linux-$KVER neither $SRC/$SRCVER"
+		return 1
+	fi
+
+	if [ ! -f "$SRC/$SRCVER/patches/series" ]; then
+		echo "Can not find a 'series' file in $SRC/$SRCVER/patches/"
+		return 1
+	fi
+
+	# Do the real thing
+
+	pushd $PWD > /dev/null 2>&1
+	cd "$SRC/$SRCVER/patches/"
+	list=$(echo * */**)
+	popd > /dev/null 2>&1
+
+	for x in $list ; do
+		if [ ! -e "$DEST/$KVER/$x" ]; then
+
+			if [ -d "$SRC/$SRCVER/patches/$x" ]; then
+				echo "Adding directory $x"
+				mkdir "$DEST/$KVER/$x"
+			else
+				echo "Adding $x"
+				cp "$SRC/$SRCVER/patches/$x" "$DEST/$KVER/$x"
+			fi
+			
+			pushd $PWD > /dev/null 2>&1
+			cd $DEST/$KVER
+			svn add $x
+			popd > /dev/null 2>&1
+		else
+			[ -d "$SRC/$SRCVER/patches/$x" ]  && continue
+
+			if ! cmp "$SRC/$SRCVER/patches/$x" "$DEST/$KVER/$x" 1>/dev/null 2>&1 ; then 
+				echo "Updating $x"
+				cp "$SRC/$SRCVER/patches/$x" "$DEST/$KVER/$x"
+			fi 
+		fi
+	done
+
+	pushd $PWD > /dev/null 2>&1
+	cd $DEST/$KVER/
+	list=$(echo * */**)
+	popd > /dev/null 2>&1
+
+	for x in $list ; do
+		if [ ! -e "$SRC/$SRCVER/patches/$x" ]; then
+			echo "Removing $x"
+			pushd $PWD > /dev/null 2>&1
+			cd $DEST/$KVER
+			svn remove $x
+			popd > /dev/null 2>&1
+		fi
+	done
+
+}
 
 case $1 in
         env)
@@ -95,14 +278,32 @@ case $1 in
                 SvnUpdate $*
         ;;
 
+	env-split)
+		shift
+		CreateEnvSplit $*
+	;;
+
+	sync-env)
+		shift
+		SyncEnv $*
+		;;
+
         *)
                 echo "setupenv: oM swiss knife script ..."
                 echo "Usage : "
-                echo "setupenv <command> [<args>]"
+                echo " "
+                echo "        $PRG <command> [<args>]"
+                echo " "
                 echo "Where : "
+                echo " "
                 echo "        <command> can be : "
-                echo "                env : creates a dev env (uncompress the kernel and apply patches)"
-                echo "                svnupdate : updates an environment (unapply patches, update, re-apply)"
+                echo " "
+                echo "        env 	: creates a dev env (uncompress the kernel and apply patches)"
+                echo "        env-split : creates a dev env, but copy instead of link "
+                echo " "
+                echo "        svnupdate : updates an environment (unapply patches, update, re-apply)"
+                echo " "
+                echo "        sync-env  : sync two dev environements "
                 echo " "
                 echo "You can try 'setupenv <command> help' for more info"
         ;;
