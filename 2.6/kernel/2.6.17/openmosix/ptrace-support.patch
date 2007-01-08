@@ -22,7 +22,7 @@ Mostly adding L1 commands ...
 Index: linux/hpc/kcomd.c
 ===================================================================
 --- linux.orig/hpc/kcomd.c	2007-01-05 14:54:00.000000000 +0100
-+++ linux/hpc/kcomd.c	2007-01-08 19:31:22.000000000 +0100
++++ linux/hpc/kcomd.c	2007-01-08 21:44:17.000000000 +0100
 @@ -335,6 +335,17 @@
                  .recv_size = sizeof(struct omp_signal),
  		.name = "Signal"},
@@ -34,7 +34,7 @@ Index: linux/hpc/kcomd.c
 +        /* Attach a remote process */
 +	[KCOM_L1_CMD_INDEX(KCOM_L1_PTRACE_ATTACH)] = {
 +		.handle_pkt = remote_ptrace_attach,
-+		.cmd_flags = KCOM_TSK_SYNC,
++		.cmd_flags = KCOM_ASYNC_SIMPLE,
 +                .recv_size = sizeof(int),
 +		.name = "Deputy Ptrace Attach"},
 +
