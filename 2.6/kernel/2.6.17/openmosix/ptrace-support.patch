@@ -8,7 +8,7 @@ This is the Attach and Stop part
 Mostly adding L1 commands ... 
 ---
  hpc/Makefile            |    2 
- hpc/kcomd.c             |   18 +++++
+ hpc/kcomd.c             |   22 ++++++
  hpc/migsend.c           |    3 
  hpc/ptrace.c            |  157 ++++++++++++++++++++++++++++++++++++++++++++++++
  hpc/task.c              |   16 ----
@@ -16,13 +16,13 @@ Mostly adding L1 commands ...
  include/hpc/protocol.h  |   24 +++++++
  include/hpc/prototype.h |    8 ++
  kernel/ptrace.c         |   31 +++++++++
- kernel/signal.c         |   34 +++++++++-
- 10 files changed, 276 insertions(+), 22 deletions(-)
+ kernel/signal.c         |   48 +++++++++++++-
+ 10 files changed, 293 insertions(+), 23 deletions(-)
 
 Index: linux/hpc/kcomd.c
 ===================================================================
 --- linux.orig/hpc/kcomd.c	2007-01-05 14:54:00.000000000 +0100
-+++ linux/hpc/kcomd.c	2007-01-08 21:44:17.000000000 +0100
++++ linux/hpc/kcomd.c	2007-01-09 18:10:46.000000000 +0100
 @@ -335,6 +335,17 @@
                  .recv_size = sizeof(struct omp_signal),
  		.name = "Signal"},
@@ -41,7 +41,17 @@ Index: linux/hpc/kcomd.c
  };
  EXPORT_SYMBOL_GPL(kcomd_l1_handlers);
  
-@@ -805,6 +816,13 @@
+@@ -625,7 +636,8 @@
+ 	return kcomd_l2_handlers[index].handle_pkt(tsk, pkt);
+ 
+ error:
+-	kcom_send_nack(tsk->task, pkt);
++	if (KCOM_ASYNC_SIMPLE != __kcom_cmd_flags(pkt->type))
++		kcom_send_nack(tsk->task, pkt);
+ 	return err;
+ 
+ 
+@@ -805,6 +817,14 @@
                  .recv_size =sizeof(struct omp_usercopy_req),
                  .answer_size = sizeof(long),
  		.name = "Remote strlen_user"},
@@ -50,8 +60,9 @@ Index: linux/hpc/kcomd.c
 +	[KCOM_L2_CMD_INDEX(KCOM_L2_NOTIFY_CLDSTOP)] = {
 +		.handle_pkt = deputy_do_notify_parent_cldstop,
 +		.cmd_flags = KCOM_ASYNC_SIMPLE,
++		.perms = DDEPUTY,
 +                .recv_size = sizeof(struct omp_do_notify_parent_cldstop),
-+		.name = "Remote Ptrace Stop"},
++		.name = "Remote do_notify_parent_cldstop"},
  };
  
  
@@ -364,8 +375,19 @@ Index: linux/kernel/ptrace.c
 Index: linux/kernel/signal.c
 ===================================================================
 --- linux.orig/kernel/signal.c	2007-01-05 23:19:58.000000000 +0100
-+++ linux/kernel/signal.c	2007-01-08 19:49:42.000000000 +0100
-@@ -591,7 +591,7 @@
++++ linux/kernel/signal.c	2007-01-09 17:40:48.000000000 +0100
+@@ -30,6 +30,10 @@
+ #include <asm/unistd.h>
+ #include <asm/siginfo.h>
+ 
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/prototype.h>
++#endif
++
+ /*
+  * SLAB caches for signal bits.
+  */
+@@ -591,7 +595,7 @@
  }
  
  /* forward decl */
@@ -374,7 +396,7 @@ Index: linux/kernel/signal.c
  
  /*
   * Handle magic process-wide effects of stop/continue signals.
-@@ -1481,14 +1481,24 @@
+@@ -1481,14 +1485,24 @@
  	spin_unlock_irqrestore(&psig->siglock, flags);
  }
  
@@ -386,7 +408,7 @@ Index: linux/kernel/signal.c
  	struct task_struct *parent;
  	struct sighand_struct *sighand;
  
-+#ifndef CONFIG_OPENMOSIX
++#ifdef CONFIG_OPENMOSIX
 +
 +	if (task_test_dflags(tsk, DREMOTE)) {
 +		remote_do_notify_parent_cldstop(tsk, why);
@@ -400,7 +422,7 @@ Index: linux/kernel/signal.c
  		parent = tsk->parent;
  	else {
  		tsk = tsk->group_leader;
-@@ -1505,6 +1515,14 @@
+@@ -1505,6 +1519,14 @@
  	info.si_stime = cputime_to_jiffies(tsk->stime);
  
   	info.si_code = why;
@@ -415,7 +437,7 @@ Index: linux/kernel/signal.c
   	switch (why) {
   	case CLD_CONTINUED:
   		info.si_status = SIGCONT;
-@@ -1518,7 +1536,9 @@
+@@ -1518,7 +1540,9 @@
   	default:
   		BUG();
   	}
@@ -426,15 +448,25 @@ Index: linux/kernel/signal.c
  	sighand = parent->sighand;
  	spin_lock_irqsave(&sighand->siglock, flags);
  	if (sighand->action[SIGCHLD-1].sa.sa_handler != SIG_IGN &&
-@@ -1559,11 +1579,18 @@
+@@ -1559,11 +1583,28 @@
  	spin_unlock_irq(&current->sighand->siglock);
  	try_to_freeze();
  	read_lock(&tasklist_lock);
 +
 +#ifdef CONFIG_OPENMOSIX
++	/*
++	 * On remote ptrace, the parent is the same as real_parent,
++	 * but the process is marked as PT_ATTACHED, finally there
++	 * are no real interest in checking current->parent->signal
++	 * since the real parent is not on this computer
++	 */
 +	if (likely(current->ptrace & PT_PTRACED) &&
-+	    likely(!(current->ptrace & PT_ATTACHED)) &&
-+	    (!unlikely(current->signal->flags & SIGNAL_GROUP_EXIT))) {/*}*/
++	    likely( current->parent != current->real_parent ||
++	    	    (task_test_dflags(current, DREMOTE) && (current->ptrace&PT_ATTACHED)) ||
++		   !(current->ptrace & PT_ATTACHED)) &&
++	    (unlikely(task_test_dflags(current, DREMOTE)) ||
++	     likely(current->parent->signal != current->signal) ||
++	     !unlikely(current->signal->flags & SIGNAL_GROUP_EXIT))) { /*}*/
 +#else
  	if (likely(current->ptrace & PT_PTRACED) &&
  	    likely(current->parent != current->real_parent ||
@@ -445,7 +477,7 @@ Index: linux/kernel/signal.c
  		do_notify_parent_cldstop(current, CLD_TRAPPED);
  		read_unlock(&tasklist_lock);
  		schedule();
-@@ -1582,6 +1609,7 @@
+@@ -1582,6 +1623,7 @@
  	 * last_siginfo, so that we are sure to have synchronized with
  	 * any signal-sending on another CPU that wants to examine it.
  	 */
