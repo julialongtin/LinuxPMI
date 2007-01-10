@@ -10,14 +10,15 @@ Mostly adding L1 commands ...
  hpc/Makefile            |    2 
  hpc/kcomd.c             |   22 ++++++
  hpc/migsend.c           |    3 
- hpc/ptrace.c            |  157 ++++++++++++++++++++++++++++++++++++++++++++++++
+ hpc/ptrace.c            |  166 ++++++++++++++++++++++++++++++++++++++++++++++++
  hpc/task.c              |   16 ----
- include/hpc/omtask.h    |    5 +
- include/hpc/protocol.h  |   24 +++++++
+ include/hpc/omtask.h    |   10 ++
+ include/hpc/protocol.h  |   28 ++++++++
  include/hpc/prototype.h |    8 ++
- kernel/ptrace.c         |   31 +++++++++
- kernel/signal.c         |   48 +++++++++++++-
- 10 files changed, 293 insertions(+), 23 deletions(-)
+ kernel/exit.c           |   66 +++++++++++++++----
+ kernel/ptrace.c         |   31 ++++++++
+ kernel/signal.c         |   48 +++++++++++++
+ 11 files changed, 366 insertions(+), 34 deletions(-)
 
 Index: linux/hpc/kcomd.c
 ===================================================================
@@ -83,8 +84,8 @@ Index: linux/hpc/migsend.c
 Index: linux/hpc/ptrace.c
 ===================================================================
 --- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ linux/hpc/ptrace.c	2007-01-08 21:00:46.000000000 +0100
-@@ -0,0 +1,157 @@
++++ linux/hpc/ptrace.c	2007-01-09 19:32:53.000000000 +0100
+@@ -0,0 +1,166 @@
 +/*
 + *	Copyright (C) 2006-2007 Florian Delizy <fdy@e8dev.com>
 + *
@@ -213,6 +214,10 @@ Index: linux/hpc/ptrace.c
 +	s.why = why;
 +	s.utime = tsk->utime;
 +	s.stime = tsk->stime;
++	s.state = tsk->state;
++	s.ptrace = tsk->ptrace;
++	s.exit_code = tsk->exit_code;
++	s.exit_state = tsk->exit_state;
 +
 + 	switch (why) {
 + 	case CLD_CONTINUED:
@@ -231,29 +236,39 @@ Index: linux/hpc/ptrace.c
 +int deputy_do_notify_parent_cldstop(struct kcom_task* tsk, const struct kcom_pkt * const pkt)
 +{
 +	struct omp_do_notify_parent_cldstop *s;
++	struct task_struct *p = tsk->task;
 +
 +	s = (struct omp_do_notify_parent_cldstop *) pkt->data;
 +
-+	current->utime = s->utime;
-+	current->stime = s->stime;
++	p->utime = s->utime;
++	p->stime = s->stime;
++	p->om.sig_status = s->sig_status;
++	p->om.sig_status_ready = 1;
++	p->om.remote_state = s->state;
++	p->om.remote_ptrace = s->ptrace;
++	p->om.remote_exit_state = s->exit_state;
++	p->exit_code = s->exit_code;
 +
-+	current->om.sig_status = s->sig_status;
-+	current->om.sig_status_ready = 1;
-+	do_notify_parent_cldstop(current, s->why);
++	do_notify_parent_cldstop(p, s->why);
 +	return 0;
 +}
 Index: linux/include/hpc/omtask.h
 ===================================================================
 --- linux.orig/include/hpc/omtask.h	2007-01-05 22:43:35.000000000 +0100
-+++ linux/include/hpc/omtask.h	2007-01-08 19:17:03.000000000 +0100
-@@ -32,7 +32,10 @@
++++ linux/include/hpc/omtask.h	2007-01-09 19:30:32.000000000 +0100
+@@ -32,7 +32,15 @@
  	struct socket *contact;		/* DEPUTY <==> REMOTE connection */
  	struct sockaddr *whereto;	/* sockaddr to send to if DREQ_MOVE */
  
 -	wait_queue_head_t wait_dist;	/* misc. wait for process */
++	/* ptrace specific fields */
++
 +	unsigned old_dumpable;		/* old mm->dumpable */
 +	int sig_status;			/* Used for do_notify_parent_cldstop */
 +	int sig_status_ready;		/* set to one when ready, 0 if not */
++	long remote_state;		/* The remote last reported state (ptrace) */
++	unsigned long remote_ptrace;	/* The remote ptrace var */
++	long remote_exit_state;
 +
  
  	struct list_head rfiles;	/* deputy held files */
@@ -261,7 +276,7 @@ Index: linux/include/hpc/omtask.h
 Index: linux/include/hpc/protocol.h
 ===================================================================
 --- linux.orig/include/hpc/protocol.h	2007-01-05 14:54:20.000000000 +0100
-+++ linux/include/hpc/protocol.h	2007-01-08 19:27:46.000000000 +0100
++++ linux/include/hpc/protocol.h	2007-01-09 19:30:19.000000000 +0100
 @@ -110,6 +110,12 @@
  	KCOM_L1_MIG_INIT,	       /* Send to initiate the migration */
  	KCOM_L1_MIG_COME_HOME,	       /* Ask the task to go home        */
@@ -285,7 +300,7 @@ Index: linux/include/hpc/protocol.h
  	KCOM_L2_CMD_MAX,
  
          /* FIXME not handled yet : */
-@@ -299,4 +308,19 @@
+@@ -299,4 +308,23 @@
  	siginfo_t siginfo;
  };
  
@@ -301,6 +316,10 @@ Index: linux/include/hpc/protocol.h
 +	int why;
 +	cputime_t utime;
 +	cputime_t stime;
++	long state;
++	unsigned long ptrace;
++	long exit_code;
++	long exit_state;
 +	int sig_status;
 +};
 +
@@ -549,3 +568,144 @@ Index: linux/hpc/Makefile
  obj-$(CONFIG_OPENMOSIX)		+= remote.o deputy.o copyuser.o files.o syscalls.o
  obj-$(CONFIG_OPENMOSIX)		+= migrecv.o migsend.o migctrl.o
  obj-$(CONFIG_OPENMOSIX)		+= service.o
+Index: linux/kernel/exit.c
+===================================================================
+--- linux.orig/kernel/exit.c	2007-01-09 18:55:59.000000000 +0100
++++ linux/kernel/exit.c	2007-01-10 17:39:08.000000000 +0100
+@@ -1018,6 +1018,8 @@
+ 
+ static int eligible_child(pid_t pid, int options, task_t *p)
+ {
++	unsigned long ptrace;
++
+ 	if (pid > 0) {
+ 		if (p->pid != pid)
+ 			return 0;
+@@ -1033,7 +1035,14 @@
+ 	 * Do not consider detached threads that are
+ 	 * not ptraced:
+ 	 */
+-	if (p->exit_signal == -1 && !p->ptrace)
++	ptrace = p->ptrace;
++
++#ifdef CONFIG_OPENMOSIX
++	if (task_test_dflags(p, DDEPUTY))
++		ptrace = p->om.remote_ptrace;
++#endif
++
++	if (p->exit_signal == -1 && !ptrace)
+ 		return 0;
+ 
+ 	/* Wait for all children (clone and not) if __WALL is set;
+@@ -1254,10 +1263,24 @@
+ 			     int __user *stat_addr, struct rusage __user *ru)
+ {
+ 	int retval, exit_code;
+-
++	unsigned long ptrace;
++	long state;
++	long exit_state;
++
++	ptrace = p->ptrace;
++	state = p->state;
++	exit_state = p->exit_state;
++
++#ifdef CONFIG_OPENMOSIX
++	if (task_test_dflags(p, DDEPUTY)) {
++		ptrace = p->om.remote_ptrace;
++		state = p->om.remote_state;
++		exit_state = p->om.remote_exit_state;
++	}
++#endif
+ 	if (!p->exit_code)
+ 		return 0;
+-	if (delayed_group_leader && !(p->ptrace & PT_PTRACED) &&
++	if (delayed_group_leader && !(ptrace & PT_PTRACED) &&
+ 	    p->signal && p->signal->group_stop_count > 0)
+ 		/*
+ 		 * A group stop is in progress and this is the group leader.
+@@ -1278,11 +1301,11 @@
+ 	if (unlikely(noreap)) {
+ 		pid_t pid = p->pid;
+ 		uid_t uid = p->uid;
+-		int why = (p->ptrace & PT_PTRACED) ? CLD_TRAPPED : CLD_STOPPED;
++		int why = (ptrace & PT_PTRACED) ? CLD_TRAPPED : CLD_STOPPED;
+ 
+ 		exit_code = p->exit_code;
+ 		if (unlikely(!exit_code) ||
+-		    unlikely(p->state & TASK_TRACED))
++		    unlikely(state & TASK_TRACED))
+ 			goto bail_ref;
+ 		return wait_noreap_copyout(p, pid, uid,
+ 					   why, (exit_code << 8) | 0x7f,
+@@ -1297,7 +1320,7 @@
+ 	 * race with the EXIT_ZOMBIE case.
+ 	 */
+ 	exit_code = xchg(&p->exit_code, 0);
+-	if (unlikely(p->exit_state)) {
++	if (unlikely(exit_state)) {
+ 		/*
+ 		 * The task resumed and then died.  Let the next iteration
+ 		 * catch it in EXIT_ZOMBIE.  Note that exit_code might
+@@ -1413,9 +1436,17 @@
+ 
+ static inline int my_ptrace_child(struct task_struct *p)
+ {
+-	if (!(p->ptrace & PT_PTRACED))
++	unsigned long ptrace;
++
++	ptrace = p->ptrace;
++
++#ifdef CONFIG_OPENMOSIX
++	if (task_test_dflags(p, DDEPUTY))
++		ptrace = p->om.remote_ptrace;
++#endif
++	if (!(ptrace & PT_PTRACED))
+ 		return 0;
+-	if (!(p->ptrace & PT_ATTACHED))
++	if (!(ptrace & PT_ATTACHED))
+ 		return 1;
+ 	/*
+ 	 * This child was PTRACE_ATTACH'd.  We should be seeing it only if
+@@ -1448,6 +1479,9 @@
+ 		struct task_struct *p;
+ 		struct list_head *_p;
+ 		int ret;
++		long state;
++		long exit_state;
++
+ 
+ 		list_for_each(_p,&tsk->children) {
+ 			p = list_entry(_p,struct task_struct,sibling);
+@@ -1456,7 +1490,17 @@
+ 			if (!ret)
+ 				continue;
+ 
+-			switch (p->state) {
++			state = p->state;
++			exit_state = p->exit_state;
++
++#ifdef CONFIG_OPENMOSIX
++			if (task_test_dflags(p, DDEPUTY)) {
++				state = p->om.remote_state;
++				exit_state = p->om.remote_exit_state;
++			}
++#endif
++			switch (state) {
++
+ 			case TASK_TRACED:
+ 				/*
+ 				 * When we hit the race with PTRACE_ATTACH,
+@@ -1490,10 +1534,10 @@
+ 				break;
+ 			default:
+ 			// case EXIT_DEAD:
+-				if (p->exit_state == EXIT_DEAD)
++				if (exit_state == EXIT_DEAD)
+ 					continue;
+ 			// case EXIT_ZOMBIE:
+-				if (p->exit_state == EXIT_ZOMBIE) {
++				if (exit_state == EXIT_ZOMBIE) {
+ 					/*
+ 					 * Eligible but we cannot release
+ 					 * it yet:
