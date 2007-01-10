@@ -172,3 +172,4 @@ openmosix/om_sys_local-fix.patch
 debug/nanosleep-verbose-on-remote.patch
 openmosix/ptrace-attach-support.patch
 openmosix/ptrace_check_attach-support.patch
+openmosix/ptrace_detach-support.patch
