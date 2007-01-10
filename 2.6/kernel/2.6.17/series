@@ -170,4 +170,5 @@ openmosix/kcom_l2_handler-fix.patch
 
 openmosix/om_sys_local-fix.patch
 debug/nanosleep-verbose-on-remote.patch
-openmosix/ptrace-support.patch
+openmosix/ptrace-attach-support.patch
+openmosix/ptrace_check_attach-support.patch

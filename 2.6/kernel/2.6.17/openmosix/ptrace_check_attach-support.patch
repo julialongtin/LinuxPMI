@@ -1,0 +1,215 @@
+Subject: [patch @num@/@total@] @name@ check for remote attached
+
+This patch allows ptrace_check_attach to check the remote state (and set it)
+
+---
+ hpc/kcomd.c             |   12 +++++++
+ hpc/ptrace.c            |   78 +++++++++++++++++++++++++++++++++++++++++++++++-
+ include/hpc/prototype.h |    5 +++
+ kernel/ptrace.c         |   44 ++++++++++++++++++++++++---
+ 4 files changed, 134 insertions(+), 5 deletions(-)
+
+
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2007-01-10 20:33:31.000000000 +0100
++++ linux/hpc/kcomd.c	2007-01-10 21:10:40.000000000 +0100
+@@ -346,7 +346,19 @@
+                 .recv_size = sizeof(int),
+ 		.name = "Deputy Ptrace Attach"},
+ 
++        /* Get the remote task state */
++	[KCOM_L1_CMD_INDEX(KCOM_L1_GET_TASK_STATE)] = {
++		.handle_pkt = remote_get_task_state,
++		.cmd_flags = KCOM_TSK_ANSWERED,
++                .recv_size = 0,
++                .answer_size = sizeof(struct omp_get_task_state),
++		.name = "Get Remote Task State"},
+     
++        /* Get the remote task state */
++	[KCOM_L1_CMD_INDEX(KCOM_L1_SET_TRACED)] = {
++		.handle_pkt = remote_set_traced,
++		.cmd_flags = KCOM_ASYNC_SIMPLE,
++		.name = "Set Remote TASK_TRACED"},
+ };
+ EXPORT_SYMBOL_GPL(kcomd_l1_handlers);
+ 
+Index: linux/hpc/ptrace.c
+===================================================================
+--- linux.orig/hpc/ptrace.c	2007-01-10 20:37:21.000000000 +0100
++++ linux/hpc/ptrace.c	2007-01-10 21:21:38.000000000 +0100
+@@ -39,7 +39,7 @@
+ 	local_irq_enable();
+ 	task_unlock(task);
+ 
+-	tsk = kcom_task_find(task->pid);
++	tsk = kcom_home_task_find(task->pid);
+ 	if (!tsk)
+ 		return;
+ 
+@@ -164,3 +164,79 @@
+ 	do_notify_parent_cldstop(p, s->why);
+ 	return 0;
+ }
++
++int deputy_get_remote_task_state(struct task_struct *child, struct omp_get_task_state *s)
++{
++	struct kcom_task *task;
++	struct kcom_pkt *pkt;
++	struct sockaddr_in *dest_ptr=(void *)child->om.whereto;
++	int ret;
++
++	task = kcom_find_task(child->pid);
++
++	if (!task || !s)
++		goto notask;
++
++	ret = __kcom_send_command(task, KCOM_L1_GET_TASK_STATE, 0, NULL, 0, dest_ptr, &pkt);
++
++	if (ret || !pkt)
++		goto notask;
++
++	memcpy(s, pkt->data, sizeof(*s));
++
++	kcom_pkt_delete(pkt);
++
++notask:
++	return ret;
++}
++int remote_get_task_state(struct kcom_node* node, const struct kcom_pkt *const pkt)
++{
++	struct kcom_task *tsk = __find_task_for_packet(pkt, node, NULL);
++	struct omp_get_task_state s;
++
++	if (!tsk)
++		goto err;
++
++	s.state = tsk->task->state;
++	s.ptrace = tsk->task->ptrace;
++
++	kcom_send_resp(tsk, sizeof(s), &s, pkt);
++
++	return 0;
++err:
++	return -ESRCH;
++}
++
++void deputy_set_remote_traced(struct task_struct *child)
++{
++	struct kcom_task *task;
++	struct kcom_pkt *pkt;
++	struct sockaddr_in *dest_ptr=(void *)child->om.whereto;
++	int ret;
++
++	task = kcom_home_task_find(child->pid);
++
++	if (!task || !s)
++		return;
++
++	ret = __kcom_send_command(task, KCOM_L1_SET_TRACED, 0, NULL, 0, dest_ptr, &pkt);
++}
++
++int remote_set_traced(struct kcom_node *node, const struct kcom_pkt *const pkt)
++{
++	struct task_struct *child;
++	struct kcom_task *tsk = __find_task_for_packet(pkt, node, NULL);
++
++	if (!tsk)
++		return -ESRCH;
++
++	child = tsk->task;
++
++	read_lock(&tasklist_lock);
++	spin_lock_irq(&child->sighand->siglock);
++	child->state = TASK_TRACED;
++	spin_unlock_irq(&child->sighand->siglock);
++	read_unlock(&tasklist_lock);
++}
++
++/* vim: set sw=8: */
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- linux.orig/include/hpc/prototype.h	2007-01-10 21:15:48.000000000 +0100
++++ linux/include/hpc/prototype.h	2007-01-10 21:15:55.000000000 +0100
+@@ -135,4 +135,9 @@
+ 
+ extern void deputy_ptrace_attach(struct task_struct*);
+ extern void remote_do_notify_parent_cldstop(struct task_struct *tsk, int why);
++
++extern int remote_set_traced(struct kcom_node *node, const struct kcom_pkt *const pkt);
++extern void deputy_set_remote_traced(struct task_struct *child);
++extern int remote_get_task_state(struct kcom_node* node, const struct kcom_pkt *const pkt);
++extern int deputy_get_remote_task_state(struct task_struct *child, struct omp_get_task_state *s);
+ #endif /* _HPC_PROTOTYPE_H */
+Index: linux/kernel/ptrace.c
+===================================================================
+--- linux.orig/kernel/ptrace.c	2007-01-10 20:30:35.000000000 +0100
++++ linux/kernel/ptrace.c	2007-01-10 21:17:29.000000000 +0100
+@@ -92,6 +92,32 @@
+ int ptrace_check_attach(struct task_struct *child, int kill)
+ {
+ 	int ret = -ESRCH;
++	long state;
++	int ptrace;
++#ifdef CONFIG_OPENMOSIX
++	long oldstate;
++#endif
++
++	state = child->state;
++	ptrace = child->ptrace;
++
++#ifdef CONFIG_OPENMOSIX
++	if (task_test_dflags(child, DDEPUTY)) {
++		struct omp_get_task_state s;
++		int ret;
++
++		ret = deputy_get_remote_task_state(child, &s);
++		if (ret)
++			goto notask;
++
++		state = s.state;
++		ptrace = s.ptrace;
++	}
++
++notask:
++
++	oldstate = state;
++#endif
+ 
+ 	/*
+ 	 * We take the read lock around doing both checks to close a
+@@ -101,20 +127,30 @@
+ 	 * be changed by us so it's not changing right after this.
+ 	 */
+ 	read_lock(&tasklist_lock);
+-	if ((child->ptrace & PT_PTRACED) && child->parent == current &&
+-	    (!(child->ptrace & PT_ATTACHED) || child->real_parent != current)
++	if ((ptrace & PT_PTRACED) && child->parent == current &&
++	    (!(ptrace & PT_ATTACHED) || child->real_parent != current)
+ 	    && child->signal != NULL) {
+ 		ret = 0;
+ 		spin_lock_irq(&child->sighand->siglock);
+-		if (child->state == TASK_STOPPED) {
++		if (state == TASK_STOPPED) {
++#ifndef CONFIG_OPENMOSIX
+ 			child->state = TASK_TRACED;
+-		} else if (child->state != TASK_TRACED && !kill) {
++#else
++			if (!task_test_dflags(child, DDEPUTY))
++				child->state = TASK_TRACED;
++			state = TASK_TRACED;
++#endif
++		} else if (state != TASK_TRACED && !kill) {
+ 			ret = -ESRCH;
+ 		}
+ 		spin_unlock_irq(&child->sighand->siglock);
+ 	}
+ 	read_unlock(&tasklist_lock);
+ 
++#ifdef CONFIG_OPENMOSIX
++	if (task_test_dflags(child, DDEPUTY) && state != oldstate)
++		deputy_set_remote_traced(child);
++#endif
+ 	if (!ret && !kill) {
+ 		wait_task_inactive(child);
+ 	}

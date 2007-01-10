@@ -3,7 +3,7 @@ Subject: [patch @num@/@total@] @name@ Add remote ptrace support (Attach and Stop
 This patch is intended to add the ability to trace a remote process
 from the deputy.
 
-This is the Attach and Stop part
+This is the Attach and Stop part (PTRACE_ATTACH and do_notify_parent_cldstop)
 
 Mostly adding L1 commands ... 
 ---
@@ -19,6 +19,7 @@ Mostly adding L1 commands ...
  kernel/ptrace.c         |   31 ++++++++
  kernel/signal.c         |   48 +++++++++++++
  11 files changed, 366 insertions(+), 34 deletions(-)
+
 
 Index: linux/hpc/kcomd.c
 ===================================================================
@@ -571,7 +572,7 @@ Index: linux/hpc/Makefile
 Index: linux/kernel/exit.c
 ===================================================================
 --- linux.orig/kernel/exit.c	2007-01-09 18:55:59.000000000 +0100
-+++ linux/kernel/exit.c	2007-01-10 17:39:08.000000000 +0100
++++ linux/kernel/exit.c	2007-01-10 20:01:32.000000000 +0100
 @@ -1018,6 +1018,8 @@
  
  static int eligible_child(pid_t pid, int options, task_t *p)
