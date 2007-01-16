@@ -1,0 +1,27 @@
+Subject: [patch @num@/@total@] @name@
+
+Add PTRACE_TRACEME scenario support:
+
+1. gdb starts a process
+2. The process reach a breakpoint
+3. The process is being migrated
+4. The process should still be ptraced, and notify its parent (gdb)
+
+
+---
+ hpc/migrecv.c |    2 ++
+ 1 file changed, 2 insertions(+)
+
+Index: linux/hpc/migrecv.c
+===================================================================
+--- linux.orig/hpc/migrecv.c	2007-01-11 15:15:14.000000000 +0100
++++ linux/hpc/migrecv.c	2007-01-11 15:15:17.000000000 +0100
+@@ -335,6 +335,8 @@
+  	p->sgid = m->sgid;
+  	p->fsgid = m->fsgid;
+ 
++ 	p->ptrace = m->ptrace;
++
+ 	/* signals stuffs */
+ 	p->blocked = m->blocked;
+ 	p->real_blocked = m->real_blocked;

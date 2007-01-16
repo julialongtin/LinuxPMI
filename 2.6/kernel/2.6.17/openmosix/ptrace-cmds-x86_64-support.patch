@@ -1,0 +1,316 @@
+---
+ arch/x86_64/kernel/ptrace.c |   74 ++++++++++++++++++++++++++++++++++++++++++
+ hpc/kcomd.c                 |    9 +++++
+ hpc/ptrace.c                |   77 ++++++++++++++++++++++++++++++++++++++++++++
+ include/hpc/protocol.h      |   11 ++++++
+ include/hpc/prototype.h     |   14 ++++----
+ 5 files changed, 179 insertions(+), 6 deletions(-)
+
+Index: linux/arch/x86_64/kernel/ptrace.c
+===================================================================
+--- linux.orig/arch/x86_64/kernel/ptrace.c	2007-01-16 16:38:44.000000000 +0100
++++ linux/arch/x86_64/kernel/ptrace.c	2007-01-16 17:13:25.000000000 +0100
+@@ -31,6 +31,10 @@
+ #include <asm/proto.h>
+ #include <asm/ia32.h>
+ 
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/prototype.h>
++#endif
++
+ /*
+  * does not yet catch signals sent when the child dies.
+  * in exit.c or in signal.c.
+@@ -310,6 +314,10 @@
+ 	long i, ret;
+ 	unsigned ui;
+ 
++#ifdef CONFIG_OPENMOSIX
++	int deputy = task_test_dflags(child, DDEPUTY);
++#endif
++
+ 	switch (request) {
+ 	/* when I and D space are separate, these will need to be fixed. */
+ 	case PTRACE_PEEKTEXT: /* read word at location addr. */ 
+@@ -317,10 +325,22 @@
+ 		unsigned long tmp;
+ 		int copied;
+ 
++#ifdef CONFIG_OPENMOSIX
++		if (deputy) {
++			ret = deputy_ptrace_get_set_long( child, request, addr, &tmp, 1);
++			if (ENACKED == ret) {
++				ret = -EIO;
++				break;
++			}
++			ret = put_user(tmp,(unsigned long __user *) data);
++			break;
++		}
++#endif
+ 		copied = access_process_vm(child, addr, &tmp, sizeof(tmp), 0);
+ 		ret = -EIO;
+ 		if (copied != sizeof(tmp))
+ 			break;
++
+ 		ret = put_user(tmp,(unsigned long __user *) data);
+ 		break;
+ 	}
+@@ -334,6 +354,17 @@
+ 		    addr > sizeof(struct user) - 7)
+ 			break;
+ 
++#ifdef CONFIG_OPENMOSIX
++		if (deputy) {
++			ret = deputy_ptrace_get_set_long( child, request, addr, &tmp, 1);
++			if (ENACKED == ret) {
++				ret = -EIO;
++				break;
++			}
++			ret = put_user(tmp,(unsigned long __user *) data);
++			break;
++		}
++#endif
+ 		switch (addr) { 
+ 		case 0 ... sizeof(struct user_regs_struct) - sizeof(long):
+ 			tmp = getreg(child, addr);
+@@ -360,6 +391,7 @@
+ 			tmp = 0;
+ 			break;
+ 		}
++
+ 		ret = put_user(tmp,(unsigned long __user *) data);
+ 		break;
+ 	}
+@@ -368,6 +400,15 @@
+ 	case PTRACE_POKETEXT: /* write the word at location addr. */
+ 	case PTRACE_POKEDATA:
+ 		ret = 0;
++
++#ifdef CONFIG_OPENMOSIX
++		if (deputy) {
++			ret = deputy_ptrace_get_set_long( child, request, addr, NULL, 0);
++			if (ENACKED == ret)
++				ret = -EIO;
++			break;
++		}
++#endif
+ 		if (access_process_vm(child, addr, &data, sizeof(data), 1) == sizeof(data))
+ 			break;
+ 		ret = -EIO;
+@@ -381,6 +422,14 @@
+ 		    addr > sizeof(struct user) - 7)
+ 			break;
+ 
++#ifdef CONFIG_OPENMOSIX
++		if (deputy) {
++			ret = deputy_ptrace_get_set_long( child, request, addr, NULL, 0);
++			if (ENACKED == ret)
++				ret = -EIO;
++			break;
++		}
++#endif
+ 		switch (addr) { 
+ 		case 0 ... sizeof(struct user_regs_struct) - sizeof(long):
+ 			ret = putreg(child, addr, data);
+@@ -472,6 +521,19 @@
+ 		   Works just like arch_prctl, except that the arguments
+ 		   are reversed. */
+ 	case PTRACE_ARCH_PRCTL: 
++#ifdef CONFIG_OPENMOSIX
++		if (deputy) {
++			long tmp;
++			ret = deputy_ptrace_get_set_long( child, request, addr, &tmp, 1);
++			if (ENACKED == ret)
++				ret = -EIO;
++
++			if (data)
++				ret = put_user(tmp,(unsigned long __user *) data);
++
++			break;
++		}
++#endif
+ 		ret = do_arch_prctl(child, data, addr);
+ 		break;
+ 
+@@ -481,6 +543,12 @@
+  * exit.
+  */
+ 	case PTRACE_KILL:
++#ifdef CONFIG_OPENMOSIX
++		if (deputy) {
++			ret = deputy_ptrace_get_set_long( child, request, 0, NULL, 0);
++			break;
++		}
++#endif
+ 		ret = 0;
+ 		if (child->exit_state == EXIT_ZOMBIE)	/* already dead */
+ 			break;
+@@ -492,6 +560,12 @@
+ 		break;
+ 
+ 	case PTRACE_SINGLESTEP:    /* set the trap flag. */
++#ifdef CONFIG_OPENMOSIX
++		if (deputy) {
++			ret = deputy_ptrace_get_set_long( child, request, addr, &data, 0);
++			break;
++		}
++#endif
+ 		ret = -EIO;
+ 		if (!valid_signal(data))
+ 			break;
+Index: linux/hpc/kcomd.c
+===================================================================
+--- linux.orig/hpc/kcomd.c	2007-01-15 15:53:54.000000000 +0100
++++ linux/hpc/kcomd.c	2007-01-16 17:14:03.000000000 +0100
+@@ -366,6 +366,15 @@
+ 		.cmd_flags = KCOM_ASYNC_SIMPLE,
+ 		.recv_size = sizeof( int ),
+ 		.name = "Deputy Ptrace Detach"},
++
++        /* detach the task*/
++	[KCOM_L1_CMD_INDEX(KCOM_L1_PTRACE_GETSET_LONG)] = {
++		.handle_pkt = remote_ptrace,
++		.cmd_flags = KCOM_TSK_ANSWERED,
++		.recv_size = sizeof(struct omp_ptrace_getset_long),
++		.answer_size = sizeof(long),
++		.name = "Deputy Ptrace Get/Set Long"},
++
+ };
+ EXPORT_SYMBOL_GPL(kcomd_l1_handlers);
+ 
+Index: linux/hpc/ptrace.c
+===================================================================
+--- linux.orig/hpc/ptrace.c	2007-01-15 15:42:40.000000000 +0100
++++ linux/hpc/ptrace.c	2007-01-16 18:20:28.000000000 +0100
+@@ -280,4 +280,81 @@
+ 	return 0;
+ }
+ 
++/*
++ * Ptrace commands part
++ */
++
++int deputy_ptrace_get_set_long(struct task_struct * child, long nb, long address, long * data, int get)
++{
++	struct kcom_task *task;
++	struct sockaddr_in *dest_ptr=(void *)child->om.whereto;
++	struct omp_ptrace_getset_long s;
++	struct kcom_pkt *pkt;
++
++	int ret = -ESRCH;
++
++	task = kcom_home_task_find(child->pid);
++
++	if (!task)
++		return ret;
++
++	s.data = *data;
++	s.get  = get;
++	s.address = address;
++	s.ptrace_nb = nb;
++
++	ret = __kcom_send_command(task, KCOM_L1_PTRACE_GETSET_LONG, sizeof(s), (char *)&s, 0, dest_ptr, &pkt );
++
++	if (!ret)
++		return ret;
++
++	if (get) {
++		struct omp_ptrace_getset_long *r;
++
++		r = (struct omp_ptrace_getset_long *) pkt->data;
++		*data = r->data;
++	}
++
++	kcom_pkt_delete( pkt );
++
++	return 0;
++}
++
++
++int remote_ptrace( struct kcom_node *node, const struct kcom_pkt *const pkt )
++{
++	struct omp_ptrace_getset_long *s;
++	long ret;
++	unsigned long data;
++	mm_segment_t oldfs = KERNEL_DS;
++
++	struct kcom_task *task;
++
++	task = __find_task_for_packet(pkt, node, NULL);
++	if (!task)
++		return -ESRCH;
++
++	s = (struct omp_ptrace_getset_long *) pkt->data;
++	data = s->data;
++
++	if (s->get) {
++		oldfs = get_fs();
++		set_fs(KERNEL_DS);
++	}
++
++	ret = arch_ptrace(task->task, s->ptrace_nb, s->address, (unsigned long) &data);
++
++	if (s->get) {
++		set_fs(oldfs);
++	}
++
++	if (ret) {
++		kcom_send_nack(task->task, pkt);
++	} else {
++		kcom_send_resp(task->task, sizeof(data), (char *)&data, pkt );
++	}
++	return 0;
++}
++
++
+ /* vim: set sw=8: */
+Index: linux/include/hpc/protocol.h
+===================================================================
+--- linux.orig/include/hpc/protocol.h	2007-01-15 15:46:44.000000000 +0100
++++ linux/include/hpc/protocol.h	2007-01-15 15:53:24.000000000 +0100
+@@ -118,6 +118,7 @@
+ 	KCOM_L1_GET_TASK_STATE,	       /*  get the remote task state     */
+ 	KCOM_L1_SET_TRACED,	       /* called to set to TASK_TRACED   */
+ 	KCOM_L1_PTRACE_DETACH,	       /* called to set the task free(tm)*/
++	KCOM_L1_PTRACE_GETSET_LONG,    /* called by several ptrace calls */
+ 
+ 	KCOM_L1_CMD_MAX,
+ 
+@@ -336,4 +337,14 @@
+ 	unsigned long ptrace;
+ };
+ 
++
++struct omp_ptrace_getset_long
++{
++	long ptrace_nb;
++	long address;
++	long data;
++	int get;
++	int set;
++};
++
+ #endif /*  _HPC_PROTOCOL_H */
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- linux.orig/include/hpc/prototype.h	2007-01-16 11:39:43.000000000 +0100
++++ linux/include/hpc/prototype.h	2007-01-16 16:45:29.000000000 +0100
+@@ -136,10 +136,12 @@
+ extern void deputy_ptrace_attach(struct task_struct*);
+ extern void remote_do_notify_parent_cldstop(struct task_struct *tsk, int why);
+ 
+-extern int remote_set_traced(struct kcom_node *node, const struct kcom_pkt *const pkt);
+-extern void deputy_set_remote_traced(struct task_struct *child);
+-extern int remote_get_task_state(struct kcom_node* node, const struct kcom_pkt *const pkt);
+-extern int deputy_get_remote_task_state(struct task_struct *child, struct omp_get_task_state *s);
+-void deputy_ptrace_detach(struct task_struct *child, unsigned int data);
+-int remote_ptrace_detach(struct kcom_node *node, const struct kcom_pkt *const pkt);
++extern int remote_set_traced(struct kcom_node *, const struct kcom_pkt *const);
++extern void deputy_set_remote_traced(struct task_struct *);
++extern int remote_get_task_state(struct kcom_node*, const struct kcom_pkt *const);
++extern int deputy_get_remote_task_state(struct task_struct *, struct omp_get_task_state *);
++extern void deputy_ptrace_detach(struct task_struct *, unsigned int);
++extern int remote_ptrace_detach(struct kcom_node *, const struct kcom_pkt *const);
++extern int remote_ptrace( struct kcom_node *, const struct kcom_pkt *const);
++extern int deputy_ptrace_get_set_long(struct task_struct *, long, long, long *, int);
+ #endif /* _HPC_PROTOTYPE_H */
