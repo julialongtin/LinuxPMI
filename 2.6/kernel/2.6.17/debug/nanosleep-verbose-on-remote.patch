@@ -10,7 +10,7 @@ Index: linux/kernel/hrtimer.c
  	if (!timespec_valid(&tu))
  		return -EINVAL;
  
-+	printk( KERN_DEBUG "nanosleep [%d] for %d s %d ns\n", current->pid, tu.tv_sec, tu.nsec);
++	printk( KERN_DEBUG "nanosleep [%d] for %ld s %ld ns\n", current->pid, tu.tv_sec, tu.tv_nsec);
  	return hrtimer_nanosleep(&tu, rmtp, HRTIMER_REL, CLOCK_MONOTONIC);
  }
  
