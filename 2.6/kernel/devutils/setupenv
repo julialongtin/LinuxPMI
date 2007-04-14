@@ -5,6 +5,11 @@ VERSION=2.6.17
 BASEDIR="$(dirname $0)/../"
 PRG="$(basename $0)"
 
+#change BASEDIR into an absolute path
+pushd $BASEDIR > /dev/null
+BASEDIR=`pwd`
+popd > /dev/null
+
 function CreateEnv()
 {
         if [ -z "$1" -o "help" == "$1" ]; then
