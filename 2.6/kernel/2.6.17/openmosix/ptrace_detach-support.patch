@@ -34,27 +34,10 @@ Index: linux/hpc/ptrace.c
 ===================================================================
 --- linux.orig/hpc/ptrace.c	2007-01-10 22:09:23.000000000 +0100
 +++ linux/hpc/ptrace.c	2007-01-11 14:33:52.000000000 +0100
-@@ -210,7 +210,6 @@
- void deputy_set_remote_traced(struct task_struct *child)
- {
- 	struct kcom_task *task;
--	struct kcom_pkt *pkt;
- 	struct sockaddr_in *dest_ptr=(void *)child->om.whereto;
- 	int ret;
- 
-@@ -219,7 +218,7 @@
- 	if (!task)
- 		return;
- 
--	ret = __kcom_send_command(task, KCOM_L1_SET_TRACED, 0, NULL, 0, dest_ptr, &pkt);
-+	ret = __kcom_send_command(task, KCOM_L1_SET_TRACED, 0, NULL, 0, dest_ptr, NULL);
- }
- 
- int remote_set_traced(struct kcom_node *node, const struct kcom_pkt *const pkt)
-@@ -240,4 +239,45 @@
+@@ -240,3 +239,45 @@
  	return 0;
  }
- 
++
 +void deputy_ptrace_detach(struct task_struct *child, unsigned int data)
 +{
 +	struct kcom_task *task;
@@ -96,7 +79,7 @@ Index: linux/hpc/ptrace.c
 +	return 0;
 +}
 +
- /* vim: set sw=8: */
+ 
 Index: linux/include/hpc/protocol.h
 ===================================================================
 --- linux.orig/include/hpc/protocol.h	2007-01-10 21:57:52.000000000 +0100

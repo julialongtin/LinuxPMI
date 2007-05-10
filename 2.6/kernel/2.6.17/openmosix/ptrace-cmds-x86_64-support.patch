@@ -182,10 +182,10 @@ Index: linux/hpc/ptrace.c
 ===================================================================
 --- linux.orig/hpc/ptrace.c	2007-01-15 15:42:40.000000000 +0100
 +++ linux/hpc/ptrace.c	2007-01-16 18:20:28.000000000 +0100
-@@ -280,4 +280,81 @@
+@@ -281,3 +281,78 @@
  	return 0;
  }
- 
++
 +/*
 + * Ptrace commands part
 + */
@@ -226,7 +226,6 @@ Index: linux/hpc/ptrace.c
 +	return 0;
 +}
 +
-+
 +int remote_ptrace( struct kcom_node *node, const struct kcom_pkt *const pkt )
 +{
 +	struct omp_ptrace_getset_long *s;
@@ -261,9 +260,7 @@ Index: linux/hpc/ptrace.c
 +	}
 +	return 0;
 +}
-+
-+
- /* vim: set sw=8: */
+ 
 Index: linux/include/hpc/protocol.h
 ===================================================================
 --- linux.orig/include/hpc/protocol.h	2007-01-15 15:46:44.000000000 +0100
@@ -276,8 +273,8 @@ Index: linux/include/hpc/protocol.h
  
  	KCOM_L1_CMD_MAX,
  
-@@ -336,4 +337,14 @@
- 	unsigned long ptrace;
+@@ -330,4 +331,21 @@
+ 	int sig_status;
  };
  
 +
@@ -288,6 +285,13 @@ Index: linux/include/hpc/protocol.h
 +	long data;
 +	int get;
 +	int set;
++};
++
++/* types stolen from include/linux/sched.h */
++struct omp_get_task_state
++{
++  volatile long state;
++  unsigned long ptrace;
 +};
 +
  #endif /*  _HPC_PROTOCOL_H */

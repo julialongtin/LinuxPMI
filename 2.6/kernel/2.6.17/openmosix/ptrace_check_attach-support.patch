@@ -14,7 +14,7 @@ Index: linux/hpc/kcomd.c
 ===================================================================
 --- linux.orig/hpc/kcomd.c	2007-01-10 20:33:31.000000000 +0100
 +++ linux/hpc/kcomd.c	2007-01-10 21:10:40.000000000 +0100
-@@ -346,7 +346,19 @@
+@@ -346,6 +346,19 @@
                  .recv_size = sizeof(int),
  		.name = "Deputy Ptrace Attach"},
  
@@ -25,7 +25,7 @@ Index: linux/hpc/kcomd.c
 +                .recv_size = 0,
 +                .answer_size = sizeof(struct omp_get_task_state),
 +		.name = "Get Remote Task State"},
-     
++
 +        /* Get the remote task state */
 +	[KCOM_L1_CMD_INDEX(KCOM_L1_SET_TRACED)] = {
 +		.handle_pkt = remote_set_traced,
@@ -59,9 +59,9 @@ Index: linux/hpc/ptrace.c
 +	struct sockaddr_in *dest_ptr=(void *)child->om.whereto;
 +	int ret;
 +
-+	task = kcom_find_task(child->pid);
++	task = kcom_home_task_find(child->pid);
 +
-+	if (!task || !s)
++	if (!task)
 +		goto notask;
 +
 +	ret = __kcom_send_command(task, KCOM_L1_GET_TASK_STATE, 0, NULL, 0, dest_ptr, &pkt);
@@ -103,7 +103,7 @@ Index: linux/hpc/ptrace.c
 +
 +	task = kcom_home_task_find(child->pid);
 +
-+	if (!task || !s)
++	if (!task)
 +		return;
 +
 +	ret = __kcom_send_command(task, KCOM_L1_SET_TRACED, 0, NULL, 0, dest_ptr, &pkt);
@@ -124,9 +124,10 @@ Index: linux/hpc/ptrace.c
 +	child->state = TASK_TRACED;
 +	spin_unlock_irq(&child->sighand->siglock);
 +	read_unlock(&tasklist_lock);
++	return 0;
 +}
 +
-+/* vim: set sw=8: */
+
 Index: linux/include/hpc/prototype.h
 ===================================================================
 --- linux.orig/include/hpc/prototype.h	2007-01-10 21:15:48.000000000 +0100

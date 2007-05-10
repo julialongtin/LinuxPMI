@@ -278,7 +278,7 @@ Index: linux/include/hpc/protocol.h
 ===================================================================
 --- linux.orig/include/hpc/protocol.h	2007-01-05 14:54:20.000000000 +0100
 +++ linux/include/hpc/protocol.h	2007-01-09 19:30:19.000000000 +0100
-@@ -110,6 +110,12 @@
+@@ -110,6 +110,14 @@
  	KCOM_L1_MIG_INIT,	       /* Send to initiate the migration */
  	KCOM_L1_MIG_COME_HOME,	       /* Ask the task to go home        */
  	KCOM_L1_DEP_SIGNAL,            /* Deputy send a signal to remote */
@@ -287,6 +287,8 @@ Index: linux/include/hpc/protocol.h
 +
 +	KCOM_L1_PTRACE_ATTACH,	       /* Notify the remote its attached */
 +	KCOM_L1_PTRACE_CALL,	       /* execute ptrace on deputy       */
++	KCOM_L1_GET_TASK_STATE,	       /*  get the remote task state     */
++	KCOM_L1_SET_TRACED,	       /* called to set to TASK_TRACED   */
 +
  	KCOM_L1_CMD_MAX,
  
@@ -533,7 +535,7 @@ Index: linux/hpc/task.c
 ===================================================================
 --- linux.orig/hpc/task.c	2007-01-08 19:31:59.000000000 +0100
 +++ linux/hpc/task.c	2007-01-08 19:32:17.000000000 +0100
-@@ -220,22 +220,6 @@
+@@ -223,22 +223,6 @@
  	return 0;
  }
  
