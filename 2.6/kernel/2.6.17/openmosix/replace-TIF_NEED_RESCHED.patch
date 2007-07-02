@@ -18,7 +18,7 @@ if some i386 kernel devs could have a look at it, that would be better
 Index: linux/include/asm-x86_64/thread_info.h
 ===================================================================
 --- linux.orig/include/asm-x86_64/thread_info.h	2006-11-16 22:31:54.000000000 +0100
-+++ linux/include/asm/thread_info.h	2006-11-16 22:32:09.000000000 +0100
++++ linux/include/asm-x86_64/thread_info.h	2006-11-16 22:32:09.000000000 +0100
 @@ -101,6 +101,7 @@
  #define TIF_IRET		5	/* force IRET */
  #define TIF_SYSCALL_AUDIT	7	/* syscall auditing active */
