@@ -1,0 +1,4728 @@
+[patch @num@/@total@] @name@ Official git repository
+
+this patch corresponds to the current tab's git position
+
+Index: linux/hpc/kernel.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/kernel.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,214 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/smp_lock.h>
++#include <linux/mm.h>
++#include <asm/mmu_context.h>
++#include <hpc/prototype.h>
++#include <hpc/hpc.h>
++#include <hpc/task.h>
++#include <hpc/comm.h>
++#include <hpc/mig.h>
++
++struct openmosix_options om_opts;
++EXPORT_SYMBOL_GPL(om_opts);
++
++/* kernel calls hooks */
++int openmosix_pre_clone(int flags)
++{
++	task_t *p = current;
++	struct mm_struct *mm = p->mm;
++
++	if (!(flags & CLONE_VM))
++		return 0;
++	if (mm)
++		atomic_inc(&mm->mm_realusers);
++
++	task_set_stay(p, DSTAY_CLONE);
++	return 0;
++}
++
++void openmosix_post_clone(int flags)
++{
++	task_t *p = current;
++	struct mm_struct *mm = p->mm;
++
++	if (!(flags & CLONE_VM))
++		return;
++	if (mm && atomic_read(&mm->mm_realusers) == 1)
++		task_clear_stay(p, DSTAY_CLONE);
++}
++
++/**
++ * task_maps_inode - Check if a task @p maps the inode @ip
++ **/
++int task_maps_inode(struct task_struct *p, struct inode *ip)
++{
++	return 0;
++}
++
++void openmosix_no_longer_monkey(struct inode *ip)
++{
++	task_t *p;
++
++	read_lock(&tasklist_lock);
++	for_each_process(p)
++		if (task_maps_inode(p, ip))
++			task_set_dreqs(p, DREQ_CHECKSTAY);
++	read_unlock(&tasklist_lock);
++}
++
++int stay_me_and_my_clones(int reasons)
++{
++	task_t *p, *me = current;
++	struct mm_struct *mm = me->mm;
++
++	task_lock(me);
++	task_set_stay(me, reasons);
++	task_unlock(me);
++	if (atomic_read(&mm->mm_realusers) > 1) {
++		read_lock(&tasklist_lock);
++		for_each_process(p) {
++			if (p->mm == mm && p != me) {
++				task_lock(p);
++				task_set_stay(p, reasons);
++				task_unlock(p);
++			}
++		}
++		read_unlock(&tasklist_lock);
++	}
++	return 0;
++}
++
++/**
++ * obtain_mm - obtain an mm context
++ *
++ * Description:
++ * Get an mm_struct and initialize it. Associate
++ * with our process.
++ **/
++int obtain_mm(task_t *p)
++{
++	struct mm_struct *mm, *active_mm;
++	int err;
++
++	if (p->mm && !task_test_dflags(p, DDEPUTY))
++		panic("openmosix: process->mm context had already");
++	/*
++	if (p->mm && task_test_dflags(p, DDEPUTY))
++		exit_mm(p);
++	*/
++	mm = mm_alloc();
++	if (!mm)
++		return -ENOMEM;
++	err = init_new_context(p, mm);
++	if (err) {
++		task_unlock(p);
++		mmdrop(mm);
++		return err;
++	}
++
++	spin_lock(&mmlist_lock);
++	list_add(&mm->mmlist, &init_mm.mmlist);
++	spin_unlock(&mmlist_lock);
++
++	task_lock(p);
++	active_mm = p->active_mm;
++	p->mm = mm;
++	p->active_mm = mm;
++	task_unlock(p);
++
++	activate_mm(active_mm, mm);
++	mmdrop(active_mm);
++	return 0;
++}
++
++void unstay_mm(struct mm_struct *mm)
++{
++	task_t *p;
++
++	if (atomic_read(&mm->mm_realusers) == 1 && mm == current->mm)
++	{
++		task_set_dreqs(current, DREQ_CHECKSTAY);
++		return;
++	}
++	read_lock(&tasklist_lock);
++	for_each_process(p)
++		if (p->mm == mm)
++			task_set_dreqs(p, DREQ_CHECKSTAY);
++	read_unlock(&tasklist_lock);
++}
++
++static inline int remote_pre_usermode(void)
++{
++	task_t *p = current;
++
++	if (p->om.contact && comm_peek(p->om.contact))
++		remote_do_comm(p);
++	return 0;
++}
++
++static inline int deputy_pre_usermode(void)
++{
++	deputy_main_loop();
++	return 0;
++}
++
++/**
++ * openmosix_pre_usermode - process some pre usermode events for current
++ **/
++asmlinkage int openmosix_pre_usermode(struct pt_regs regs)
++{
++	unsigned long flags;
++
++	if (task_test_dreqs(current, ~0)) {
++		local_save_flags(flags);
++		local_irq_enable();
++
++		task_do_request();
++
++		local_irq_restore(flags);
++	}
++
++	if (task_test_dflags(current, DMIGRATED)) {
++		local_save_flags(flags);
++		local_irq_enable();
++
++		if (task_test_dflags(current, DREMOTE))
++			return remote_pre_usermode();
++		if (task_test_dflags(current, DDEPUTY))
++			return deputy_pre_usermode();
++
++		local_irq_restore(flags);
++	}
++	return 0;
++}
++
++/**
++ * openmosix_init - Init all global variables and subsystem at boot
++ **/
++static int __init openmosix_init(void)
++{
++	/* kick off the kernel threads: */
++	kernel_thread(openmosix_mig_daemon, NULL, 0);
++
++	return 0;
++}
++
++subsys_initcall(openmosix_init);
+Index: linux/hpc/Makefile
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/Makefile	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,19 @@
++# communication part
++obj-$(CONFIG_KCOMD)     += kcomd.o
++
++# core part
++obj-$(CONFIG_OPENMOSIX)		+= kernel.o task.o comm.o
++obj-$(CONFIG_OPENMOSIX)		+= remote.o deputy.o copyuser.o files.o syscalls.o
++obj-$(CONFIG_OPENMOSIX)		+= migrecv.o migsend.o migctrl.o
++obj-$(CONFIG_OPENMOSIX)		+= service.o
++obj-$(CONFIG_OPENMOSIX)		+= arch-$(ARCH).o
++
++# legacy
++obj-$(CONFIG_OPENMOSIX)		+= proc.o
++
++# new ctrl fs
++obj-$(CONFIG_OPENMOSIX_CTRL_FS)	+= ctrlfs.o
++
++# debug
++obj-$(CONFIG_OPENMOSIX_DEBUG)	+= debug.o debug-$(ARCH).o
++obj-$(CONFIG_OPENMOSIX_DEBUG_FS)+= debugfs.o
+Index: linux/hpc/migctrl.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/migctrl.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,254 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/errno.h>
++#include <linux/mm.h>
++#include <linux/mman.h>
++#include <hpc/comm.h>
++#include <hpc/task.h>
++#include <hpc/hpc.h>
++#include <hpc/debug.h>
++#include <hpc/service.h>
++#include <hpc/prototype.h>
++#include <hpc/mig.h>
++#include <hpc/protocol.h>
++
++/**
++ * task_remote_expel - call from REMOTE to send a task to DEPUTY
++ * @p:		task which will come back
++ **/
++int task_remote_expel(task_t *p)
++{
++	struct socket *link;
++
++	BUG_ON(!task_test_dflags(p, DREMOTE));
++
++	if (mig_send_hshake(p, p->om.contact, HSHAKE_MIG_REQUEST))
++		goto failed;
++
++	if (mig_do_send(p)) {
++		goto failed;
++	}
++
++	link = task_set_comm(p, NULL);
++	comm_close(link);
++
++	do_exit(SIGKILL);
++	return 0;
++failed:
++	OMBUG("failed\n");
++	return -1;
++}
++
++/**
++ * task_remote_wait_expel - call from REMOTE to send a task to DEPUTY
++ * @p:		task which will come back
++ **/
++int task_remote_wait_expel(task_t *p)
++{
++	int error;
++	struct omp_req req;
++
++	comm_send_req(p->om.contact, REM_BRING_HOME);
++
++	error = comm_recv(p->om.contact, &req, sizeof(req));
++	if (error < 0)
++		return -1;
++	if (req.type != DEP_COMING_HOME) {
++		OMBUG("!DEP_COMING_HOME\n");
++		return -1;
++	}
++
++	return task_remote_expel(p);
++}
++
++/**
++ * task_local_send - Send a local task to remote
++ * @p:		task to send
++ * @whereto:	destination sockaddr
++ * @reason:	reason to send there (if any)
++ **/
++static int task_local_send(task_t *p, struct sockaddr *whereto, int reason)
++{
++	struct socket *mlink;
++	int error = 0;
++
++	if (task_test_dflags(p, DDEPUTY))
++		return 0;
++	sockaddr_setup_port(whereto, REMOTE_DAEMON_PORT);
++	mlink = comm_setup_connect(whereto, 0);
++	if (!mlink) {
++		OMBUG("error\n");
++
++		error = -1;
++		goto failed;
++	}
++
++	task_set_comm(p, mlink);
++	task_set_dflags(p, DDEPUTY);
++
++	/* see if other part is with on this */
++	if (mig_send_hshake(p, mlink, HSHAKE_MIG_REQUEST))
++		goto failed;
++
++	if (mig_do_send(p)) {
++		error = -1;
++		goto failed;
++	}
++
++	deputy_startup(p);
++	return 0;
++
++failed:
++	OMBUG("failed\n");
++	task_clear_dflags(p, DDEPUTY);
++	if (mlink)
++		comm_close(mlink);
++	return error;
++}
++
++
++
++/**
++ * task_local_bring - Receive task back in the deputy stub
++ * @p:		deputy task to receive
++ * @reason:	reason to send (if any)
++ **/
++static int task_local_bring(task_t *p, int reason)
++{
++	int error;
++	struct socket *link;
++
++	if (!task_test_dflags(p, DDEPUTY))
++		return 0;
++	if (obtain_mm(p)) {
++		printk(KERN_ERR "unable to obtain mm\n");
++		goto failed;
++	}
++
++	/* send remote request */
++	comm_send_req(p->om.contact, DEP_COMING_HOME);
++
++	/* see if other part is with on this */
++	if (mig_recv_hshake(p->om.contact))
++		goto failed;
++
++	/* receive the process back */
++	error = mig_do_receive(p);
++	if (error)
++		goto failed;
++
++	task_clear_dflags(p, DDEPUTY);
++	link = task_set_comm(p, NULL);
++	comm_close(link);
++
++	return 0;
++failed:
++	OMBUG("failed\n");
++	return -1;
++}
++
++/**
++ * task_move_remote2remote - migrate a task from remote to remote
++ * @p:		task to send
++ * @whereto:	whereto
++ * @reason:	reason to send (if any)
++ **/
++static int task_move_remote2remote(task_t *p, struct sockaddr * whereto,
++								int reason)
++{
++	OMBUG("not implemented.\n");
++	return 0;
++}
++
++/**
++ * task_move_to_node - send a task to a node
++ * @p:		task to send
++ * @whereto:	destination sockaddr
++ * @reason:	why
++ **/
++static int __task_move_to_node(struct task_struct *p,
++                               struct sockaddr * whereto,
++                               int reason)
++{
++	int error;
++
++	task_set_dflags(p, DPASSING);
++
++	error = (task_test_dflags(p, DREMOTE))
++		? (whereto)
++			? task_move_remote2remote(p, whereto, reason)
++			: task_remote_wait_expel(p)
++		: (whereto)
++			? task_local_send(p, whereto, reason)
++			: task_local_bring(p, reason);
++
++	task_clear_dflags(p, DPASSING);
++
++	return error;
++}
++
++int task_move_to_node(struct task_struct *p, struct sockaddr * whereto,
++                      int reason)
++{
++	if (task_test_stay(p, DSTAY)) {
++		printk(KERN_DEBUG "oM: Task can't move. check stay reason\n");
++		return -1;
++	}
++	__task_move_to_node(p, whereto, reason);
++	return 0;
++}
++
++/**
++ * task_go_home - Migrate task to home
++ **/
++int task_go_home(task_t *p)
++{
++	if (!task_test_dflags(p, DMIGRATED)) {
++		printk(KERN_INFO "oM: task %d at home: ignoring request.\n",
++				p->pid);
++		return -1;
++	}
++
++	__task_move_to_node(p, NULL, 0);
++
++	if (task_test_dflags(p, DMIGRATED))
++		printk(KERN_ERR "oM: task %d fail to go back home\n", p->pid);
++	return 0;
++}
++
++/**
++ * task_go_home_for_reason - Migrate back a task for a reason
++ **/
++int task_go_home_for_reason(task_t *p, int reason)
++{
++	int ret;
++
++	if (task_test_stay(p, reason) && task_test_dflags(p, DMIGRATED))
++		printk(KERN_ERR "oM: task should had migrated back earlier\n");
++	task_set_stay(p, reason);
++
++	if (!task_test_dflags(p, DMIGRATED))
++		return 0;
++	ret = __task_move_to_node(p, NULL, 0);
++	if (!ret)
++		task_clear_stay(p, reason);
++	return ret;
++}
+Index: linux/hpc/migrecv.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/migrecv.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,411 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/errno.h>
++#include <linux/mm.h>
++#include <linux/rmap.h>
++#include <linux/mman.h>
++#include <linux/stddef.h>
++#include <linux/highmem.h>
++#include <linux/personality.h>
++#include <asm/mmu_context.h>
++#include <asm/tlbflush.h>
++#include <hpc/comm.h>
++#include <hpc/task.h>
++#include <hpc/hpc.h>
++#include <hpc/service.h>
++#include <hpc/mig.h>
++#include <hpc/debug.h>
++#include <hpc/protocol.h>
++#include <hpc/prototype.h>
++#include <hpc/version.h>
++#include <hpc/arch.h>
++
++/* handshake with the remote part */
++int mig_recv_hshake(struct socket *mlink)
++{
++	int error;
++	struct omp_mig_handshake hshake;
++
++	/* receive request of whatever */
++	error = comm_recv(mlink, &hshake, sizeof(hshake));
++	if (error < 0) {
++		OMBUG("recv failed %d\n", error);
++		return -1;
++	}
++
++	/* FIXME: sanity checks here */
++
++	/* reply of mig_requests */
++	hshake.type = hshake.type | HSHAKE_REPLY;
++	hshake.version = OPENMOSIX_VERSION;
++
++	error = comm_send(mlink, &hshake, sizeof(hshake));
++	if (error < 0) {
++		OMBUG("send failed %d\n", error);
++		return -1;
++	}
++
++	return 0;
++}
++
++/*****************************************************************************/
++
++/**
++ * mig_do_receive_mig_mm - Receive some parameters for a mm
++ **/
++static void mig_do_receive_mm(task_t *p, struct omp_mig_mm *s)
++{
++	OMDEBUG_MIG(2, "MIG_MM\n");
++	/* copy all mm's parameter from start_code to env_end */
++	memcpy(&p->mm->start_code, s, sizeof(*s));
++}
++
++/**
++ * mig_do_receive_mm_area - Set up an mmap
++ **/
++static int mig_do_receive_vma(task_t *p, struct omp_mig_vma *a)
++{
++	unsigned long result, prot, flags;
++	struct file *file = NULL;
++	extern asmlinkage long sys_madvise(unsigned long, size_t, int);
++
++	OMDEBUG_MIG(2, "MIG_VMA [%lx, %ld]\n", a->vm_start, a->vm_size);
++
++	/* FIXME : Temporary disabled */
++	if (0 && a->vm_file) {
++		file = (task_test_dflags(p, DREMOTE))
++			? task_rfiles_get(p, a->vm_file, -1, a->i_size)
++			: a->vm_file;
++	}
++
++	/* unconvert prot+flags: */
++	flags = MAP_FIXED | MAP_PRIVATE;
++	prot = 0;
++	if (a->vm_flags & VM_GROWSDOWN)
++		flags |= MAP_GROWSDOWN;
++	if (a->vm_flags & VM_DENYWRITE)
++		flags |= MAP_DENYWRITE;
++	if (a->vm_flags & VM_EXECUTABLE)
++		flags |= MAP_EXECUTABLE;
++
++	/* copy VM_(READ|WRITE|EXEC) bits to prot */
++	prot |= (a->vm_flags & (VM_READ | VM_WRITE | VM_EXEC));
++
++	/* mmap stuff */
++	result = do_mmap_pgoff(file, a->vm_start, a->vm_size, prot,
++						flags, a->vm_pgoff);
++	if (IS_ERR((const void *) result))
++		return PTR_ERR((const void *) result);
++
++	if (a->vm_flags & VM_READHINTMASK) {
++		int behavior = (a->vm_flags & VM_SEQ_READ)
++				? MADV_RANDOM
++				: MADV_SEQUENTIAL;
++		sys_madvise(a->vm_start, a->vm_size, behavior);
++	}
++	return 0;
++}
++
++
++/**
++ * mig_do_receive_page - Receive one page
++ **/
++static int mig_do_receive_page(task_t *p, unsigned long addr)
++{
++	struct mm_struct *mm = p->mm;
++	struct vm_area_struct *vma;
++	struct page *recv_page = NULL;
++	void *kmpage; /* kmapped page */
++	int error;
++	pgd_t * pgd;
++	pud_t * pud;
++	pmd_t * pmd;
++	pte_t * pte;
++
++	OMDEBUG_MIG(3, "MIG_PAGE [%lx]\n", addr);
++
++	vma = find_vma(mm, addr);
++	if (!vma) {
++		OMBUG("vma not found (addr: %p)\n", (void *) addr);
++		return -1;
++	}
++
++	/* check if enough memory */
++
++	/* alloc page */
++	recv_page = alloc_page(GFP_HIGHUSER);
++	if (!recv_page) {
++		OMBUG("unable to allocate page\n");
++		return -ENOMEM;
++	}
++
++	kmpage = kmap(recv_page);
++
++	/* receive the data into the page */
++	error = comm_recv(p->om.contact, kmpage, PAGE_SIZE);
++
++	kunmap(recv_page);
++	if (error < 0) {
++		OMBUG("failed to receive data\n");
++		goto out;
++	}
++
++	/* add the page at correct place */
++	pgd = pgd_offset(mm, addr);
++	pud = pud_alloc(mm, pgd, addr);
++	if (!pud)
++		goto out;
++	pmd = pmd_alloc(mm, pud, addr);
++	if (!pmd)
++		goto out;
++	pte = pte_alloc_map(mm, pmd, addr);
++	if (!pte)
++		goto out;
++	if (!pte_none(*pte))
++		OMBUG("double page at addr %p\n", (void *) addr);
++
++	set_pte(pte, pte_mkdirty(mk_pte(recv_page, vma->vm_page_prot)));
++	pte_unmap(pte);
++	page_dup_rmap(recv_page);
++	inc_mm_counter(mm, file_rss);
++
++	return 0;
++out:
++	OMBUG("receive page failed at addr %p\n", (void *) addr);
++	__free_page(recv_page);
++	return -1;
++}
++
++/**
++ * mig_do_receive_fp - Receive floating points registers
++ * @p:		task
++ * @fpr:	floating point registers
++ **/
++static void mig_do_receive_fp(task_t *p, struct omp_mig_fp *fp)
++{
++	OMDEBUG_MIG(2, "MIG_FP\n");
++	set_used_math();
++	arch_mig_receive_fp(p, fp);
++}
++
++/**
++ * mig_do_receive_misc - Receive normal registers, limits
++ **/
++static void mig_do_receive_proc_context(task_t *p, struct omp_mig_task *m)
++{
++	OMDEBUG_MIG(1, "MIG_TASK\n");
++	/* arch specific proc receive context */
++	arch_mig_receive_proc_context(p, m);
++
++	/* copy id */
++	p->om.pid = m->pid;
++	p->om.tgid = m->tgid;
++
++	/* copy credentials */
++	p->uid = m->uid;
++	p->euid = m->euid;
++	p->suid = m->suid;
++	p->fsuid = m->fsuid;
++
++	p->gid = m->gid;
++	p->egid = m->egid;
++	p->sgid = m->sgid;
++	p->fsgid = m->fsgid;
++
++	/* signals stuffs */
++	p->blocked = m->blocked;
++	p->real_blocked = m->real_blocked;
++	p->sas_ss_sp = m->sas_ss_sp;
++	p->sas_ss_size = m->sas_ss_size;
++	memcpy(p->sighand->action, m->sighand, sizeof(struct k_sigaction)
++								* _NSIG);
++
++	/* FIXME we don't trust the other node anyway so copy rlimit from node[nr] */
++
++	memcpy(p->comm, m->comm, sizeof(m->comm));
++
++	p->personality = m->personality;
++	arch_pick_mmap_layout(p->mm);
++}
++
++/**
++ * mig_do_receive - Receive all process stuff (mm, pages, fpr, ..)
++ **/
++int mig_do_receive(task_t *p)
++{
++	int error;
++	unsigned int got_not_coming = 0;
++	unsigned long data;
++	struct omp_req req;
++
++	data = __get_free_page(GFP_KERNEL);
++	if (!data)
++		goto fail;
++
++	task_set_dflags(p, DINCOMING);
++	clear_used_math();
++
++	while (1) {
++		error = comm_recv(p->om.contact, &req, sizeof(req));
++		if (error < 0)
++			goto fail;
++
++		BUG_ON(req.dlen > PAGE_SIZE);
++		error = comm_recv(p->om.contact, (void *) data, req.dlen);
++		if (error < 0)
++			goto fail;
++
++		switch (req.type) {
++		case MIG_MM:
++			mig_do_receive_mm(p, (struct omp_mig_mm *) data);
++			break;
++		case MIG_VMA:
++			if (mig_do_receive_vma(p, (struct omp_mig_vma *) data))
++				goto fail;
++			break;
++		case MIG_PAGE:
++			if (mig_do_receive_page(p, *((unsigned long *) data)))
++				goto fail;
++			break;
++		case MIG_FP:
++			mig_do_receive_fp(p, (struct omp_mig_fp *) data);
++			break;
++		case MIG_ARCH:
++			if (arch_mig_receive_specific(p, (struct omp_mig_arch *) data))
++				goto fail;
++			break;
++		/* this is the last thing we do in the chain of receiving,
++		 * so return 0 after we're done */
++		case MIG_TASK:
++			mig_do_receive_proc_context(p, (struct omp_mig_task *) data);
++			comm_send_req(p->om.contact, MIG_TASK | REPLY);
++			task_clear_dflags(p, DINCOMING);
++
++			flush_tlb_mm(p->mm); /* for all the new pages */
++			return 0;
++		case MIG_ABORT:
++			printk("mig_do_recv(): got MIG_ABORT\n");
++			got_not_coming = 1;
++			goto fail;
++		default:
++			printk("mig_do_recv(): got default\n");
++			goto fail;
++		}
++	}
++fail:
++	task_clear_dflags(p, DINCOMING);
++	free_page(data);
++
++	OMBUG("failed\n");
++	return -1;
++}
++
++static NORET_TYPE int mig_handle_migration(void *ptr)
++{
++	task_t *p = current;
++	/* link against the other end */
++	struct socket *link = (struct socket *) ptr;
++	int error;
++
++	OM_VERBOSE_MIG("[OM] receiving new process\n");
++
++	task_set_comm(p, link);
++
++	error = obtain_mm(p);
++	if (error)
++		goto fail;
++	if (mig_recv_hshake(link))
++		goto fail;
++
++	error = mig_do_receive(p);
++
++	if (error)
++		goto fail;
++
++	OM_VERBOSE_MIG("[OM] starting process(%d)\n", p->pid);
++	reparent_to_init();
++	arch_kickstart(p);
++	/*NOTREACHED*/
++
++fail:
++	OMBUG("failed\n");
++	do_exit(SIGKILL);
++	/*NOTREACHED*/
++}
++
++/**
++ * openmosix_mig_daemon - openMosix migration daemon
++ * @nothing:	unused
++ *
++ * Description:
++ * 	start the migration daemon.
++ * 	wait for communication, and if it is a remote request
++ * 	then start a user-thread with the new program to run
++ **/
++int openmosix_mig_daemon(void *nothing)
++{
++	task_t *p = current;
++	int error;
++	struct socket *mlink;
++	struct sockaddr saddr;
++
++	om_daemonize("omkmigd", 0);
++
++	task_set_dflags(p, DREMOTEDAEMON);
++
++	set_our_addr(AF_INET, &saddr, REMOTE_DAEMON_PORT);
++
++restart:
++	if (!p->om.contact) {
++		p->om.contact = comm_setup_listen(&saddr);
++		if (!p->om.contact) {
++			printk(KERN_WARNING
++				"omkmigd: failed to open mig service\n");
++			flush_signals(p);
++			set_current_state(TASK_INTERRUPTIBLE);
++			schedule_timeout(HZ);
++			goto restart;
++		}
++	}
++
++	/* migration daemon loop */
++	while (1)
++	{
++		error = comm_accept(p->om.contact, &mlink, &saddr, 0UL);
++		if (error == -EINTR || error == -ERESTART || error == -EAGAIN
++		   || error == -ERESTARTSYS)
++		{
++			if (sigismember(&(p->pending.signal), SIGCHLD)) {
++				printk("omigd: SIGCHLD caught\n");
++			}
++			flush_signals(p);
++			continue;
++		} else if (error) {
++			OMBUG("failed to accept\n");
++			comm_close(mlink);
++			goto restart;
++		}
++
++		error = user_thread(mig_handle_migration, (void *) mlink, 0);
++		if (error < 0)
++			comm_close(mlink);
++	}
++}
+Index: linux/hpc/migsend.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/migsend.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,241 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/errno.h>
++#include <linux/mm.h>
++#include <linux/mman.h>
++#include <linux/stddef.h>
++#include <linux/highmem.h>
++#include <linux/personality.h>
++#include <asm/tlbflush.h>
++#include <asm/mmu_context.h>
++#include <hpc/comm.h>
++#include <hpc/task.h>
++#include <hpc/hpc.h>
++#include <hpc/debug.h>
++#include <hpc/service.h>
++#include <hpc/prototype.h>
++#include <hpc/mig.h>
++#include <hpc/protocol.h>
++#include <hpc/version.h>
++#include <hpc/arch.h>
++
++/* handle sending of migration request, and check answer */
++int mig_send_hshake(task_t *p, struct socket *mlink, int type)
++{
++	struct omp_mig_handshake hshake, hshake_recv;
++	int error;
++
++	hshake.type = type;
++	hshake.version = OPENMOSIX_VERSION;
++	hshake.personality = p->personality;
++
++	error = comm_send(mlink, &hshake, sizeof(hshake));
++        if (error < 0) {
++		OMBUG("send failed: %d\n", error);
++		return -1;
++	}
++
++	error = comm_recv(mlink, &hshake_recv, sizeof(hshake_recv));
++        if (error < 0) {
++		OMBUG("recv failed %d\n", error);
++                return -1;
++        }
++
++	if (hshake_recv.type != (hshake.type | HSHAKE_REPLY)) {
++		/* it's a no go ... */
++		OMBUG("no go\n");
++		return -1;
++	}			
++
++	return 0;
++}
++
++static int mig_send_fp(task_t *p)
++{
++	struct omp_mig_fp m;
++
++	if (!used_math())
++		return 0;
++
++	arch_mig_send_fp(p, &m);
++	return comm_send_hd(p->om.contact, MIG_FP, &m, sizeof(m));
++}
++
++
++static int mig_send_mm(task_t *p)
++{
++	struct omp_mig_mm s;
++
++	memcpy(&s, &p->mm->start_code, sizeof(s));
++
++	return comm_send_hd(p->om.contact, MIG_MM, &s, sizeof(s));
++}
++
++static inline void mig_send_vma_file(task_t *p, struct vm_area_struct *vma,
++							struct omp_mig_vma *m)
++{
++	struct inode *inode = vma->vm_file->f_dentry->d_inode;
++
++	m->vm_pgoff = vma->vm_pgoff;
++	m->i_size = inode->i_size;
++
++	if (task_test_dflags(p, DREMOTE)) {
++		struct rfile_inode_data *data;
++
++		data = (struct rfile_inode_data *) inode->u.generic_ip;
++		m->vm_file = data->file;
++	} else {
++		m->vm_file = vma->vm_file;
++		m->f_dentry = vma->vm_file->f_dentry;
++	}
++}
++
++static int mig_send_vmas(task_t *p)
++{
++	struct vm_area_struct *vma;
++	struct omp_mig_vma m;
++	int ret = 0;
++
++	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
++	{
++		m.vm_start= vma->vm_start;
++		m.vm_size = vma->vm_end - vma->vm_start;
++		m.vm_flags = vma->vm_flags;
++		m.vm_file = vma->vm_file;
++		m.vm_pgoff = 0;
++		if (vma->vm_file)
++			mig_send_vma_file(p, vma, &m);
++
++		ret = comm_send_hd(p->om.contact, MIG_VMA, &m, sizeof(m));
++		if (ret < 0) {
++			OMBUG("send vma failed\n");
++			break;
++		}
++
++	}
++	return ret;
++}
++
++
++static int mig_send_pages(task_t *p)
++{
++	struct vm_area_struct * vma;
++	unsigned long addr;
++	int error;
++
++	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
++	{
++		if (!(vma->vm_flags & VM_READ))
++			continue;
++		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE)
++		{
++			error = comm_send_hd(p->om.contact, MIG_PAGE, &addr,
++								sizeof(addr));
++			if (error < 0)
++				goto fail;
++
++			error = comm_send(p->om.contact, (void *) addr,
++								PAGE_SIZE);
++			if (error < 0)
++				goto fail;
++		}
++	}
++	return 0;
++fail:
++	OMBUG("failed (addr: %p)\n", (void *) addr);
++	return -1;
++}
++
++
++static int mig_send_proc_context(task_t *p)
++{
++	struct omp_mig_task m;
++	struct omp_req req;
++	int error;
++
++	m.ptrace = p->ptrace;
++
++	m.pid = p->pid;
++	m.tgid = p->tgid;
++
++	/* credentials */
++	m.uid = p->uid;
++	m.euid = p->euid;
++	m.suid = p->suid;
++	m.fsuid = p->fsuid;
++
++	m.gid = p->gid;
++	m.egid = p->egid;
++	m.sgid = p->sgid;
++	m.fsgid = p->fsgid;
++
++	/* signals */
++	m.blocked = p->blocked;
++	m.real_blocked = p->real_blocked;
++	m.sas_ss_sp = p->sas_ss_sp;
++	m.sas_ss_size = p->sas_ss_size;
++	memcpy(m.sighand, p->sighand->action, sizeof(struct k_sigaction)
++								* _NSIG);
++
++	/* others */
++	m.nice = task_nice(p);
++	m.caps = p->cap_effective;
++	p->om.remote_caps = m.caps;
++
++	m.personality = p->personality;
++
++	memcpy(m.comm, p->comm, sizeof(m.comm));
++
++	arch_mig_send_proc_context(p, &m);
++
++	error = comm_send_hd(p->om.contact, MIG_TASK, &m, sizeof(m));
++	if (error < 0)
++		goto fail;
++
++	error = comm_recv(p->om.contact, &req, sizeof(req));
++
++	if (req.type == (MIG_TASK | REPLY))
++		return 0; /* commit point */
++
++fail:
++	OMBUG("failed\n");
++	return -1;
++}
++
++int mig_do_send(task_t *p)
++{
++	arch_mig_send_pre(p);
++
++	if (mig_send_mm(p)) goto fail_mig;
++	if (mig_send_vmas(p)) goto fail_mig;
++	if (mig_send_pages(p)) goto fail_mig;
++	if (mig_send_fp(p)) goto fail_mig;
++	if (arch_mig_send_specific(p)) goto fail_mig;
++	if (mig_send_proc_context(p)) goto fail_mig;
++
++	arch_mig_send_post(p);
++
++	return 0;
++fail_mig:
++	OMBUG("failed\n");
++	comm_send_req(p->om.contact, MIG_ABORT);
++	return -1;
++}
+Index: linux/hpc/proc.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/proc.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,384 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/errno.h>
++#include <linux/proc_fs.h>
++#include <linux/socket.h>
++#include <linux/ctype.h>
++#include <asm/uaccess.h>
++#include <hpc/hpc.h>
++#include <hpc/proc.h>
++#include <hpc/version.h>
++#include <hpc/service.h>
++#include <hpc/prototype.h>
++#include <hpc/task.h>
++#include <hpc/debug.h>
++#include <hpc/mig.h>
++
++/*
++ *	PID set/get accessor
++ */
++static int proc_pid_set_where(struct task_struct *p, char *buf, size_t size)
++{
++	int ret;
++	struct sockaddr destination;
++
++	if (size >= 4 && strnicmp(buf, "home", 4) == 0) {
++		printk("HOME detected\n");
++		ret = task_register_migration(p, NULL);
++	} else {
++		ret = string_to_sockaddr(buf, &destination);
++		if (ret >= 0)
++			task_register_migration(p, &destination);
++	}
++	return size;
++}
++
++static int proc_pid_get_where(struct task_struct *p, char *buf, size_t size)
++{
++	int length;
++	struct sockaddr address;
++
++	if (p->om.contact && task_test_dflags(p, DMIGRATED)) {
++		comm_getname(p->om.contact, &address, 1);
++		length = sockaddr_to_string(&address, buf);
++		length += sprintf(buf + length, "\n");
++	} else
++		length = sprintf(buf, "home\n");
++
++	return length;
++}
++
++static char *stayreason_string[32] = {
++	"monkey",	"mmap_dev",	"VM86_mode",	NULL,
++	"priv_inst",	"mem_lock",	"clone_vm",	"rt_sched",
++	"direct_io",	"system",	NULL,		NULL,
++	NULL,		NULL,		NULL,		NULL,
++	NULL,		NULL,		NULL,		NULL,
++	NULL,		NULL,		NULL,		NULL,
++	"extern_1",	"extern_2",	"extern_3",	"extern_4",
++	NULL,		NULL,		NULL,		"user_lock"
++};
++
++static int proc_pid_get_stay(struct task_struct *p, char *buf, size_t size)
++{
++	int length, i;
++
++	length = 0;
++	for (i = 0; i < 31; i++)
++		if (task_test_stay(p, 1 << i))
++			length += snprintf(buf + length, size - length,
++					"%s\n", stayreason_string[i]);
++	if (!length)
++		buf[0] = 0;
++	return length;
++}
++
++static int proc_pid_get_debug(struct task_struct *p, char *buf, size_t size)
++{
++	int length;
++
++	length = sprintf(buf, "debug: dflags: 0x%.8x\n", p->om.dflags);
++	return length;
++}
++
++static int proc_admin_set_bring(char *buf, size_t size)
++{
++	printk(KERN_DEBUG "oM: proc: set bring");
++	return size;
++}
++
++static int proc_admin_set_expel(char *buf, size_t size)
++{
++	printk(KERN_DEBUG "oM: proc: set expel");
++	return size;
++}
++
++static int proc_admin_get_version(char *buf, size_t size)
++{
++	int length;
++
++	length = sprintf(buf, "openMosix version: %d.%d.%d\n",
++			OPENMOSIX_VERSION_TUPPLE);
++	return length;
++}
++
++/* create /proc/hpc/admin/ entry */
++#define E(name,mode,s,g) {0,sizeof(name)-1,(name),(mode), \
++				proc_admin_set_##s, \
++				proc_admin_get_##g }
++
++static om_proc_entry_t proc_om_entry_admin[] =
++{
++	E("bring", S_IFREG|S_IRUGO|S_IWUGO, bring, 0),
++	E("expel", S_IFREG|S_IRUGO|S_IWUGO, expel, 0),
++	E("version", S_IFREG|S_IRUGO|S_IWUGO, 0, version),
++};
++
++#undef E
++
++/* create /proc/${pid}/ entry */
++#define E(name,s,g) {0,sizeof(name)-1,(name),0, \
++			proc_pid_set_##s, \
++			proc_pid_get_##g}
++
++static om_proc_pid_entry_t proc_om_entry_pid[] =
++{
++	E("where", where, where),
++	E("stay", 0, stay),
++	E("debug", 0, debug),
++};
++
++#undef E
++
++/**
++ * openmosix_proc_pid_getattr - Get attributes from task
++ * @p: the task we want attributes
++ * @name: name of the attributes
++ * @buf: the page to write the value to
++ * @size: unused
++ **/
++int openmosix_proc_pid_getattr(struct task_struct *p,
++			char *name, void *buf, size_t size)
++{
++	int length, i;
++
++	if (!size)
++		return -ERANGE;
++
++	length = -EINVAL;
++	for (i = 0; i < ARRAY_SIZE(proc_om_entry_pid); i++)
++	{
++		om_proc_pid_entry_t * tmpentry = &proc_om_entry_pid[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			length = (tmpentry->get)(p, buf, size);
++			break;
++		}
++	}
++	return length;
++}
++
++/**
++ * openmosix_proc_pid_setattr - Set attributes to task
++ * @p: the task we want attributes
++ * @name: name of the attributes
++ * @buf: the page to get the value from
++ * @size: size bytes to read
++ **/
++int openmosix_proc_pid_setattr(struct task_struct *p,
++			char *name, void *buf, size_t size)
++{
++	int error, i;
++
++	error = -EINVAL;
++	for (i = 0; i < ARRAY_SIZE(proc_om_entry_pid); i++)
++	{
++		om_proc_pid_entry_t * tmpentry = &proc_om_entry_pid[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			error = (tmpentry->set)(p, buf, size);
++			break;
++		}
++	}
++	return error;
++}
++
++/**
++ * proc_callback_read - read an attribute and return to userspace
++ *
++ * Handle page creation and correct verification then call the callback
++ **/
++static ssize_t proc_callback_read(struct file * file, char * buf,
++				  size_t count, loff_t *ppos,
++				  om_proc_entry_t *entry)
++{
++	unsigned long page;
++	ssize_t length;
++	ssize_t end;
++	char *name;
++	int i;
++
++	if (count > PAGE_SIZE)
++		count = PAGE_SIZE;
++	if (!(page = __get_free_page(GFP_KERNEL)))
++		return -ENOMEM;
++
++	name = (char *) file->f_dentry->d_name.name;
++
++	length = -EINVAL;
++	/* browse entry to find callback for file name */
++	for (i = 0; entry[i].name; i++)
++	{
++		om_proc_entry_t * tmpentry = &entry[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			length = (tmpentry->get)((char *) page, count);
++			break;
++		}
++	}
++
++	if (length < 0) {
++		free_page(page);
++		return length;
++	}
++	/* Static 4kB (or whatever) block capacity */
++	if (*ppos >= length) {
++		free_page(page);
++		return 0;
++	}
++	if (count + *ppos > length)
++		count = length - *ppos;
++	end = count + *ppos;
++	if (copy_to_user(buf, (char *) page + *ppos, count))
++		count = -EFAULT;
++	else
++		*ppos = end;
++	free_page(page);
++	return count;
++}
++
++/**
++ * proc_callback_write - set an attribute from userspace buf
++ *
++ * Handle page creation and correct verification then call the callback
++ **/
++static ssize_t proc_callback_write(struct file * file, const char * buf,
++				   size_t count, loff_t *ppos,
++				   om_proc_entry_t *entry)
++{
++	char *page, *name;
++	ssize_t length;
++	int i;
++
++	if (count > PAGE_SIZE)
++		count = PAGE_SIZE;
++	if (*ppos != 0) {
++		/* No partial writes. */
++		return -EINVAL;
++	}
++	page = (char*)__get_free_page(GFP_USER);
++	if (!page)
++		return -ENOMEM;
++	length = -EFAULT;
++	if (copy_from_user(page, buf, count))
++		goto out;
++
++	name = (char *) file->f_dentry->d_name.name;
++
++	/* browse entry to find callback for file name */
++	for (i = 0; entry[i].name; i++)
++	{
++		om_proc_entry_t * tmpentry = &entry[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			length = (tmpentry->set)(page, count);
++			break;
++		}
++	}
++
++out:
++	free_page((unsigned long) page);
++	return length;
++}
++
++/*
++ * openMosix proc dir file_ops handler
++ */
++#define PROC_OM_SUBSYS_READ(subsys)					\
++	static ssize_t proc_om_read_##subsys(struct file * file,	\
++						char *buf,		\
++						size_t count,		\
++						loff_t *ppos)		\
++	{								\
++		return proc_callback_read(file, buf, count,		\
++				ppos, proc_om_entry_##subsys);		\
++	}
++
++#define PROC_OM_SUBSYS_WRITE(subsys)					\
++	static ssize_t proc_om_write_##subsys(struct file * file,	\
++						const char *buf,	\
++						size_t count,		\
++						loff_t *ppos)		\
++	{								\
++		return proc_callback_write(file, buf, count,		\
++				ppos, proc_om_entry_##subsys);		\
++	}
++
++PROC_OM_SUBSYS_READ(admin)
++PROC_OM_SUBSYS_WRITE(admin)
++
++#undef PROC_OM_SUBSYS_READ
++#undef PROC_OM_SUBSYS_WRITE
++
++static struct file_operations proc_om_admin_operations = {
++	.read = proc_om_read_admin,
++	.write = proc_om_write_admin,
++};
++
++/**
++ * openmosix_proc_create_entry - create @entry in @dir with their callbacks
++ * @dir:	directory to create the entries into
++ * @entry:	entries to add into directory
++ * @r:		read callback
++ * @w:		write callback
++ */
++static void openmosix_proc_create_entry(struct proc_dir_entry *dir,
++					om_proc_entry_t *entry,
++					struct file_operations *fileops)
++{
++	struct proc_dir_entry *de;
++	int i;
++
++	for (i = 0; entry[i].name; i++)
++	{
++		om_proc_entry_t * tmp = &entry[i];
++		de = create_proc_entry(tmp->name, tmp->mode, dir);
++		if (!de) {
++			OMBUG("unable to create entry\n");
++			continue;
++		}
++		de->proc_fops = fileops;
++	}
++}
++
++/*
++ * init hpc proc directory
++ */
++void openmosix_proc_init(void)
++{
++	struct proc_dir_entry *dir_root, *dir_admin;
++
++	dir_root = proc_mkdir("hpc", NULL);
++	if (!dir_root) {
++		OMBUG("unable to create root directory\n");
++		return;
++	}
++
++	dir_admin = proc_mkdir("hpc/admin", NULL);
++
++	if (!dir_admin) {
++		OMBUG("unable to create admin directory\n");
++		return;
++	}
++
++	openmosix_proc_create_entry(dir_admin, proc_om_entry_admin,
++					&proc_om_admin_operations);
++}
+Index: linux/hpc/remote.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/remote.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,390 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/signal.h>
++#include <linux/mm.h>
++#include <linux/mman.h>
++#include <linux/syscalls.h>
++#include <linux/pagemap.h>
++#include <hpc/protocol.h>
++#include <hpc/mig.h>
++#include <hpc/comm.h>
++#include <hpc/task.h>
++#include <hpc/arch.h>
++#include <hpc/prototype.h>
++#include <hpc/service.h>
++#include <hpc/hpc.h>
++#include <hpc/debug.h>
++
++
++NORET_TYPE void remote_disappear(void)
++{
++	do_exit(SIGKILL);
++	/*NOTREACHED*/
++}
++
++struct vm_operations_struct remote_inode_mmap =
++{
++	.nopage = filemap_nopage,
++};
++
++int remote_file_mmap(struct file *file, struct vm_area_struct *vma)
++{
++	if (vma->vm_flags & VM_SHARED) {
++		printk(KERN_ERR "remote_file_mmap: VM_SHARED mmaping\n");
++		return -1;
++	}
++	vma->vm_ops = &remote_inode_mmap;
++	return 0;
++}
++
++int remote_readpage(struct file *file, struct page *page)
++{
++	int error;
++	void *kmpage;
++	struct omp_page_req m;
++
++	kmpage = kmap(page);
++
++	m.file = rfiles_inode_get_file(file->f_dentry->d_inode);
++	m.offset = page->index << PAGE_CACHE_SHIFT;
++
++	error = comm_send_hd(current->om.contact, REM_PAGE, &m, sizeof(m));
++	if (error < 0)
++		goto error;
++
++	error = comm_recv(current->om.contact, kmpage, PAGE_SIZE);
++	if (error < 0)
++		goto error;
++	
++	SetPageUptodate(page);
++	kunmap(page);
++	return 0;
++error:
++	OMBUG("error %d\n", error);
++	ClearPageUptodate(page);
++	SetPageError(page);
++	return error;
++}
++
++long remote_do_mmap(unsigned long addr, unsigned long len,
++		unsigned long prot, unsigned long flags,
++		unsigned long fd, unsigned long pgoff)
++{
++	struct omp_mmap_req m;
++	struct omp_mmap_ret r;
++	struct file *file;
++	long error;
++
++	m.addr = addr;
++	m.len = len;
++	m.prot = prot;
++	m.flags = flags;
++	m.fd = fd;
++	m.pgoff = pgoff;
++
++	error = comm_send_hd(current->om.contact, REM_MMAP, &m, sizeof(m));
++	if (error < 0)
++		goto out;
++
++	error = comm_recv(current->om.contact, &r, sizeof(r));
++	if (error < 0)
++		goto out;
++
++	file = task_rfiles_get(current, r.file, -1, r.isize);
++
++	down_write(&current->mm->mmap_sem);
++	error = do_mmap_pgoff(file, addr, len, prot, flags, pgoff);
++	up_write(&current->mm->mmap_sem);
++
++out:
++	return error;
++}
++
++/**
++ * remote_wait - wait @expect packet from deputy
++ **/
++int remote_wait(task_t *p, int expect, void *data, int len)
++{
++	int error;
++	struct omp_req req;
++
++	error = comm_recv(p->om.contact, &req, sizeof(req));
++	if (error < 0)
++		goto comm_error;
++
++	if (req.type != expect) {
++		OMBUG("unexpected [%x] expecting [%x]\n", req.type, expect);
++		return -1;
++	}
++
++	if (req.dlen != len) {
++		OMBUG("unexpected size\n");
++		return -1;
++	}
++
++	error = comm_recv(p->om.contact, data, len);
++	if (error < 0)
++		goto comm_error;
++	return 0;
++comm_error:
++	OMBUG("unexpected error %d\n", error);
++	return -1;
++}
++
++static int remote_do_signal(task_t *p)
++{
++	struct omp_signal s;
++	unsigned long flags;
++	int error;
++
++	error = comm_recv(p->om.contact, &s, sizeof(s));
++	printk("received signal %d\n", s.signr);
++
++	spin_lock_irqsave(&p->sighand->siglock, flags);
++	error = __group_send_sig_info(s.signr, &s.siginfo, p);
++	spin_unlock_irqrestore(&p->sighand->siglock, flags);
++
++	return 0;
++}
++
++/**
++ * remote_do_comm - process a communication
++ **/
++int remote_do_comm(task_t *p)
++{
++	int error;
++	struct omp_req req;
++
++	error = comm_recv(p->om.contact, &req, sizeof(req));
++	if (error < 0)
++		goto fail;
++
++	switch (req.type) {
++	case DEP_SIGNAL:
++		error = remote_do_signal(p);
++		break;
++	case DEP_COMING_HOME:
++		printk("remote_do_comm(): got DEP_COMING_HOME\n");
++		error = task_remote_expel(p);
++		break;
++	default:
++		printk("remote_do_comm(): got default\n");
++		goto fail;
++	}
++
++	return 0;
++fail:
++	OMBUG("failed\n");
++	do_exit(-1);
++	return -1;
++}
++
++/**
++ * remote_do_syscall - process a remote syscall
++ * @n:		the syscall number
++ * @regs:	userspace registers
++ **/
++long remote_do_syscall(int n, struct pt_regs *regs)
++{
++	task_t *p = current;
++	struct omp_syscall_req s;
++	struct omp_syscall_ret r;
++	int error, i;
++
++	OMDEBUG_SYS(1, "[remote] remote syscall %d\n", n);
++
++	s.n = n;
++	for (i = 0; i < NR_MAX_SYSCALL_ARG; i++)
++		s.arg[i] = arch_get_sys_arg(i, regs);
++
++	error = comm_send_hd(p->om.contact, REM_SYSCALL, &s, sizeof(s));
++	if (error < 0)
++		goto error;
++
++	OMDEBUG_SYS(3, "[remote] waiting deputy answer\n");
++
++	error = remote_handle_user(p, REM_SYSCALL|REPLY);
++	if (error < 0)
++		goto error;
++
++	error = comm_recv(p->om.contact, &r, sizeof(r));
++	if (error < 0)
++		goto error;
++
++	OMDEBUG_SYS(2, "[remote] sys[%d] = %ld\n", n, r.ret);
++
++	return r.ret;
++error:
++	remote_disappear();
++	return -1;
++}
++
++/**
++ * remote_do_fork - Fork a process on remote
++ **/
++long remote_do_fork(unsigned long clone_flags, unsigned long stack_start,
++	      struct pt_regs *regs, unsigned long stack_size,
++	      int __user *parent_tidptr, int __user *child_tidptr)
++{
++	task_t *child;
++	struct socket *childsock;
++	struct omp_fork_req m;
++	struct omp_fork_ret r;
++	int error, ret;
++	struct sockaddr sa;
++
++	printk(KERN_ERR "[REMOTE] do_fork\n");
++
++	sockaddr_inherit(current->om.contact, &sa);
++
++	m.clone_flags = clone_flags;
++	m.stack_start = stack_start;
++	m.stack_size = stack_size;
++	memcpy(&m.regs, regs, sizeof(struct pt_regs));
++
++	childsock = comm_setup_listen(&sa);
++	if (!childsock)
++		goto fail;
++
++	if (comm_getname(childsock, &sa, 0) < 0)
++		goto fail;
++
++	memcpy(&m.sockaddr, &sa, sizeof(struct sockaddr));
++
++	error = comm_send_hd(current->om.contact, REM_FORK, &m, sizeof(m));
++	if (error < 0)
++		goto fail;
++
++	ret = remote_wait(current, REM_FORK | REPLY, &r, sizeof(r));
++	if (ret < 0)
++		goto fail;
++	ret = do_fork(clone_flags, stack_start, regs, stack_size, parent_tidptr,
++								child_tidptr);
++	child = find_task_by_pid(ret);
++	if (!child) {
++		printk(KERN_ERR "error: child %d not found\n", r.pid);
++		return -1;
++	}
++	task_set_comm(child, childsock);
++
++	return ret;
++fail:
++	OMBUG("failed\n");
++	return -1;
++}
++
++/*
++ * this is a copy of count in fs/exec.c
++ */
++static int count_len(char __user * __user * argv, int max, int *len)
++{
++	int i = 0;
++
++	*len = 0;
++	if (!argv)
++		return 0;
++
++	for (;;) {
++		char __user * p;
++
++		if (get_user(p, argv))
++			return -EFAULT;
++		if (!p)
++			break;
++		*len += strlen_user(*argv);
++		argv++;
++		if (++i > max)
++			return -E2BIG;
++	}
++	return i;
++}
++
++/**
++ * remote_do_execve - do an execve syscall
++ **/
++long remote_do_execve(char __user * filename, char __user *__user *argv,
++		char __user *__user *envp, struct pt_regs * regs)
++{
++	struct omp_execve_req m;
++	struct omp_execve_ret r;
++	unsigned long p;
++	char *data, *ptr;
++	int error;
++	int sz;
++
++	p = PAGE_SIZE * MAX_ARG_PAGES - sizeof(void *);
++	//m.filename = filename;
++
++	m.filelen = strlen_user(filename);
++
++	error = m.argc = count_len(argv, p / sizeof(void *), &m.argvlen);
++	if (error < 0)
++		goto error;
++
++	error = m.envc = count_len(envp, p / sizeof(void *), &m.envplen);
++	if (error < 0)
++		goto error;
++
++	memcpy(&m.regs, regs, sizeof(struct pt_regs));
++
++	/* pack all data (filename, argv, envp) */
++	sz = m.filelen + m.argvlen + m.envplen + 3;
++	data = kmalloc(sz, GFP_KERNEL);
++	if (!data)
++		return -ENOMEM;
++
++	error = -EFAULT;
++
++	ptr = data;
++	if (copy_from_user(ptr, filename, m.filelen))
++		goto error;
++	ptr += m.filelen;
++	*ptr++ = '\0';
++
++	if (copy_from_user(ptr, argv, m.argvlen))
++		goto error;
++	ptr += m.argvlen;
++	*ptr++ = '\0';
++
++	if (copy_from_user(ptr, envp, m.envplen))
++		goto error;
++	ptr += m.envplen;
++	*ptr++ = '\0';
++
++	/* send request */
++	error = comm_send_hd(current->om.contact, REM_EXECVE, &m, sizeof(m));
++	if (error < 0)
++		goto error;
++
++	/* send packed data */
++	error = comm_send(current->om.contact, data, sz);
++	kfree(data);
++	if (error < 0)
++		goto error;
++
++	error = remote_wait(current, REM_EXECVE | REPLY, &r, sizeof(r));
++	if (error < 0)
++		goto error;
++
++	return 0;
++error:
++	return error;
++}
+Index: linux/hpc/service.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/service.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,153 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/socket.h>
++#include <linux/in.h>
++#include <linux/in6.h>
++#include <linux/ctype.h>
++#include <linux/errno.h>
++#include <hpc/comm.h>
++#include <hpc/comm-ipv4.h>
++#include <hpc/comm-ipv6.h>
++#include <hpc/service.h>
++#include <hpc/task.h>
++#include <hpc/arch.h>
++
++/**
++ * om_daemonize - create an oM daemon
++ * @name:	kernel thread name
++ * @highpri:	is this kernel thread high priority
++ *
++ * Description:
++ *	Create a kernel thread, and set priority.
++ *	SCHED_FIFO for high priority, hence stay for realtime
++ **/
++void om_daemonize(char *name, int highpri)
++{
++	task_t *p = current;
++
++	daemonize(name);
++
++	p->euid = 0;
++	p->suid = 0;
++	p->gid = 0;
++	p->group_info = groups_alloc(0);
++
++	/* clean blocked signal set */
++	spin_lock_irq(&p->sighand->siglock);
++	sigemptyset(&p->blocked);
++	recalc_sigpending_tsk(p);
++	spin_unlock_irq(&p->sighand->siglock);
++
++	/* set priority and stay reason of the task */
++	task_lock(p);
++	if (highpri)
++	{
++		p->policy = SCHED_FIFO;
++		task_set_stay(p, DSTAY_RT);
++		p->rt_priority = 0;
++	}
++	else
++	{
++		p->policy = SCHED_NORMAL;
++		task_clear_stay(p, DSTAY_RT);
++		set_user_nice(p, 0);
++	}
++	task_set_stay(p, DSTAY_SYSTEM);
++	task_unlock(p);
++}
++
++/**
++ * sockaddr_to_string - write an net address to a buffer returning length
++ **/
++int sockaddr_to_string(struct sockaddr *address, char *buf)
++{
++	switch (address->sa_family) {
++	case AF_INET:
++		return inet_to_string((struct sockaddr_in *) address, buf);
++	case AF_INET6:
++		return inet6_to_string((struct sockaddr_in6 *) address, buf);
++	}
++	printk(KERN_ERR "oM: network type not supported\n");
++	return 0;
++}
++
++
++/**
++ * string_to_sockaddr - convert a buffer, to a sockaddr
++ **/
++int string_to_sockaddr(char *buf, struct sockaddr *address)
++{
++	int l;
++
++	address->sa_family = 0;
++	/* try to parse an ipv4 */
++	l = string_to_inet(buf, (struct sockaddr_in *) address);
++	if (l > 0)
++		return l;
++	/* try to parse an ipv6 */
++	l = string_to_inet6(buf, (struct sockaddr_in6 *) address);
++	if (l > 0)
++		return l;
++	return 0;
++}
++
++/**
++ * sockaddr_setup - configure a socket address
++ **/
++void sockaddr_setup_port(struct sockaddr *sa, int port)
++{
++	switch (sa->sa_family) {
++	case AF_INET:
++		inet_setup_port((struct sockaddr_in *) sa, port);
++		break;
++	case AF_INET6:
++		inet6_setup_port((struct sockaddr_in6 *) sa, port);
++		break;
++	}
++}
++
++/**
++ * sockaddr_inherit - fullfill sa with the same type of mlink
++ **/
++int sockaddr_inherit(struct socket *mlink, struct sockaddr *sa)
++{
++	struct sockaddr tmp;
++
++	if (comm_getname(mlink, &tmp, 0) < 0)
++		return -1;
++
++	memset(sa, 0, sizeof(struct sockaddr));
++	sa->sa_family = tmp.sa_family;
++
++	switch (tmp.sa_family) {
++		case AF_INET: {
++			struct sockaddr_in *in = (struct sockaddr_in *) sa;
++			in->sin_addr.s_addr = INADDR_ANY;
++			break;
++		}
++		case AF_INET6: {
++			struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) sa;
++			memset(&in6->sin6_addr, 0, sizeof(struct in6_addr));
++			break;
++		}
++	}
++	return 0;
++}
+Index: linux/hpc/syscalls.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/syscalls.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,64 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/syscalls.h>
++#include <linux/types.h>
++#include <asm/ptrace.h>
++#include <asm/unistd.h>
++#include <hpc/prototype.h>
++#include <hpc/arch.h>
++#include <hpc/syscalls.h>
++#include <hpc/debug.h>
++#include <hpc/hpc.h>
++
++/* generic multiplexer */
++asmlinkage long om_sys_local(struct pt_regs regs)
++{
++	long ret;
++
++	OMDEBUG_SYS(1, "[remote] local syscall %d\n", SYSNB());
++
++	ret = arch_exec_syscall(SYSNB(), (syscall_parameter_t *) &regs);
++	return ret;
++}
++
++asmlinkage long om_sys_remote(struct pt_regs regs)
++{
++	return remote_do_syscall(SYSNB(), &regs);
++}
++
++/* specific remote syscalls */
++asmlinkage int om_sys_gettid(struct pt_regs regs)
++{
++	return current->om.pid;
++}
++
++asmlinkage int om_sys_getpid(struct pt_regs regs)
++{
++	return current->om.tgid;
++}
++
++asmlinkage int om_sys_execve(struct pt_regs regs)
++{
++	return remote_do_execve((char __user *) SYSARG(0),
++	                        (char __user *__user *) SYSARG(1),
++	                        (char __user *__user *) SYSARG(2),
++	                        &regs);
++}
+Index: linux/hpc/task.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/task.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,223 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/socket.h>
++#include <net/sock.h>
++#include <hpc/task.h>
++#include <hpc/comm.h>
++#include <hpc/mig.h>
++#include <hpc/prototype.h>
++#include <hpc/hpc.h>
++
++/**
++ * task_set_comm - swap openMosix link for a process (return old one)
++ * @p:		task to swap link
++ * @mlink:	new openMosix link
++ *
++ * Description:
++ *	Remove old link from task @p
++ *	Set @p socket to the new one @mlink
++ **/
++struct socket * task_set_comm(task_t *p, struct socket *mlink)
++{
++	struct socket *oldmlink;
++
++	oldmlink = p->om.contact;
++	p->om.contact = mlink;
++
++	if (mlink && test_bit(SOCK_OOB_IN, &mlink->flags))
++		task_set_dreqs(p, DREQ_URGENT);
++	return oldmlink;
++}
++
++/**
++ * task_file_check_stay - check if task should stay because of file mapping
++ **/
++static int task_file_check_stay(struct vm_area_struct *vma)
++{
++	struct inode *inode;
++	mode_t mode;
++	int stay = 0;
++
++	inode = vma->vm_file->f_dentry->d_inode;
++	if (!inode)
++		return 0;
++
++	mode = inode->i_mode;
++
++	/* FIXME Tab: maybe wrong */
++	if (!(vma->vm_flags & VM_NONLINEAR)) {
++		if (!prio_tree_empty(&inode->i_mapping->i_mmap))
++			stay |= DSTAY_MONKEY;
++	} else {
++		if (!list_empty(&vma->shared.vm_set.list))
++			stay |= DSTAY_MONKEY;
++	}
++	if (S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode))
++		stay |= DSTAY_DEV;
++
++	return stay;
++}
++
++/**
++ * task_request_checkstay - adjust stay reason of a task (considering mm)
++ **/
++void task_request_checkstay(task_t *p)
++{
++	struct mm_struct *mm;
++	int stay;
++	struct vm_area_struct *vma;
++
++	task_clear_dreqs(p, DREQ_CHECKSTAY);
++
++	printk(KERN_ERR "oM: [%d] do_request: DREQ_CHECKSTAY\n", p->pid);
++
++	/* check if there's a stay reason we can clean, else pass */
++	if (!task_test_stay(p, DSTAY_PER_MM | DSTAY_CLONE))
++		return;
++
++	task_lock(p);
++	mm = p->mm;
++	stay = p->om.stay & ~(DSTAY_PER_MM | DSTAY_CLONE);
++	if (!mm)
++		stay |= DSTAY_CLONE;
++	else {
++		/* FIXME: need verifying KIOBUF */
++		if (atomic_read(&mm->mm_realusers) > 1)
++			stay |= DSTAY_CLONE;
++		if (mm->def_flags & VM_LOCKED)
++			stay |= DSTAY_MLOCK;
++
++		for (vma = mm->mmap; vma; vma = vma->vm_next)
++		{
++			if (vma->vm_file)
++				stay |= task_file_check_stay(vma);
++			if (vma->vm_flags & VM_LOCKED)
++				stay |= DSTAY_MLOCK;
++		}
++	}
++	if (p->om.stay != stay)
++		p->om.stay = stay;
++	task_unlock(p);
++	return;
++}
++
++/**
++ * task_request_move - move a task
++ **/
++void task_request_move(task_t *p)
++{
++	struct sockaddr *addr;
++
++	task_clear_dreqs(p, DREQ_MOVE);
++	addr = p->om.whereto;
++	p->om.whereto = NULL;
++
++	task_move_to_node(p, addr, 0);
++	kfree(addr);
++}
++
++/**
++ * openmosix_task_init - Init all openMosix structure of a task @p
++ **/
++int openmosix_task_init(task_t *p)
++{
++	task_t *parent = current;
++
++	memset(&p->om, 0, sizeof(om_task_t));
++	
++	if (p->pid == 1)
++		task_set_stay(p, DSTAY_SYSTEM);
++
++	/* if father of task is a DREMOTEDAEMON, then the task is DREMOTE */
++	if (task_test_dflags(parent, DREMOTEDAEMON))
++		task_set_dflags(p, DREMOTE);
++	/* child of a DDEPUTY is a DDEPUTY */
++	if (task_test_dflags(parent, DDEPUTY))
++		task_set_dflags(p, DDEPUTY);
++
++	INIT_LIST_HEAD(&p->om.rfiles);
++	
++	return 0;
++}
++
++/**
++ * openmosix_task_exit - Exit current task
++ **/
++int openmosix_task_exit(void)
++{
++	task_t *p = current;
++	
++	if (!task_test_dflags(p, DDEPUTY | DREMOTE))
++		return 0;
++
++	task_heldfiles_clear(p);
++	
++	if (p->om.contact)
++		comm_close(p->om.contact);
++	return 0;
++}
++
++/**
++ * task_wait_contact - wait until the process got a contact with deputy
++ **/
++static inline void task_wait_contact(task_t *p)
++{
++	DECLARE_WAITQUEUE(wait, p);
++
++	add_wait_queue(&p->om.wait_dist, &wait);
++	while (!p->om.contact)
++	{
++		set_current_state(TASK_UNINTERRUPTIBLE);
++		schedule();
++	}
++	remove_wait_queue(&p->om.wait_dist, &wait);
++	set_current_state(TASK_RUNNING);
++}
++
++/**
++ * task_register_migration - register a migration for this process
++ * @p:		task to migrate
++ * @dest:	destination of the migration (NULL == home)
++ **/
++int task_register_migration(task_t *p, struct sockaddr *dest)
++{
++	if (dest) {
++		p->om.whereto = kmalloc(sizeof(struct sockaddr), GFP_KERNEL);
++		if (!p->om.whereto)
++			return -1;
++		memcpy(p->om.whereto, dest, sizeof(struct sockaddr));
++	}
++	task_set_dreqs(p, DREQ_MOVE);
++	wake_up_process(p);
++	set_ti_thread_flag(p->thread_info, TIF_NEED_RESCHED);
++	return 0;
++}
++
++/**
++ * task_do_request - current task processes requests coming from other tasks
++ **/
++void task_do_request(void)
++{
++	if (task_test_dreqs(current, DREQ_MOVE))
++		task_request_move(current);
++	if (task_test_dreqs(current, DREQ_CHECKSTAY))
++		task_request_checkstay(current);
++}
+Index: linux/include/asm-i386/om.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/asm-i386/om.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,44 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifdef CONFIG_X86
++#ifndef _HPC_ARCH_ARCH_H
++#define _HPC_ARCH_ARCH_H
++
++int cpu_feature_has_fxsr(void);
++
++static inline long arch_get_sys_arg(unsigned int n, struct pt_regs *regs)
++{
++	BUG_ON(n >= 6);
++	return *(((long *) regs) + n);
++}
++
++static inline int arch_get_sys_nb(struct pt_regs *regs)
++{
++	return regs->eax;
++}
++
++#define NR_MAX_SYSCALL_ARG	6
++
++#define ARCH_TASK_GET_USER_REGS(p)				\
++		(((struct pt_regs *) (THREAD_SIZE - 8 +		\
++		(unsigned long) p->thread_info)) - 1)
++
++#endif /* _HPC_ARCH_ARCH_H */
++#endif /* CONFIG_X86 */
+Index: linux/include/asm-i386/om-protocol.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/asm-i386/om-protocol.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,49 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifdef CONFIG_X86
++#ifndef _HPC_ARCHPROTOCOL_H
++#define _HPC_ARCHPROTOCOL_H
++
++#include <asm/i387.h>
++
++#define MIG_ARCH_I386_LDT	1
++
++struct omp_mig_fp
++{
++	int has_fxsr;
++	union i387_union data;
++};
++
++struct omp_mig_arch
++{
++	int type;
++};
++
++struct omp_mig_arch_task
++{
++	u32 features[NCAPINTS];
++	long debugreg[8];
++	long fs;
++	long gs;
++	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
++};
++
++#endif /*  _HPC_ARCHPROTOCOL_H */
++#endif /* CONFIG_X86 */
+Index: linux/include/asm-i386/uaccess.h
+===================================================================
+--- linux.orig/include/asm-i386/uaccess.h	2006-09-28 15:02:04.000000000 +0200
++++ linux/include/asm-i386/uaccess.h	2006-09-28 15:02:19.000000000 +0200
+@@ -34,6 +34,8 @@
+ 
+ #define segment_eq(a,b)	((a).seg == (b).seg)
+ 
++#include <hpc/uaccess.h>
++
+ /*
+  * movsl can be slow when source and dest are not both 8-byte aligned
+  */
+@@ -150,6 +152,10 @@
+ ({	int __ret_gu;							\
+ 	unsigned long __val_gu;						\
+ 	__chk_user_ptr(ptr);						\
++ 	if (openmosix_memory_away()) {					\
++ 		__ret_gu = deputy_get_user((long *) &__val_gu, ptr,	\
++						sizeof (*(ptr)));	\
++ 	} else 								\
+ 	switch(sizeof (*(ptr))) {					\
+ 	case 1:  __get_user_x(1,__ret_gu,__val_gu,ptr); break;		\
+ 	case 2:  __get_user_x(2,__ret_gu,__val_gu,ptr); break;		\
+@@ -196,10 +202,17 @@
+ #ifdef CONFIG_X86_WP_WORKS_OK
+ 
+ #define put_user(x,ptr)						\
+-({	int __ret_pu;						\
++({	int __ret_pu = 0;					\
+ 	__typeof__(*(ptr)) __pu_val;				\
+ 	__chk_user_ptr(ptr);					\
+ 	__pu_val = x;						\
++	if (openmosix_memory_away() && sizeof(*(ptr)) <= 8) {	\
++		if (sizeof(*(ptr)) < 8)				\
++			__ret_pu = deputy_put_user((long) x, ptr, sizeof(*(ptr)));\
++		else						\
++			deputy_put_user64_helper((x),		\
++						ptr, __ret_pu);	\
++	} else							\
+ 	switch(sizeof(*(ptr))) {				\
+ 	case 1: __put_user_1(__pu_val, ptr); break;		\
+ 	case 2: __put_user_2(__pu_val, ptr); break;		\
+@@ -216,6 +229,8 @@
+  	int __ret_pu;						\
+ 	__typeof__(*(ptr)) __pus_tmp = x;			\
+ 	__ret_pu=0;						\
++	if (openmosix_memory_away())				\
++		return deputy_put_user(ptr, &__pus_tmp, sizeof(*(ptr))); \
+ 	if(unlikely(__copy_to_user_ll(ptr, &__pus_tmp,		\
+ 				sizeof(*(ptr))) != 0))		\
+  		__ret_pu=-EFAULT;				\
+@@ -296,12 +311,32 @@
+ 		: "=r"(err)					\
+ 		: "A" (x), "r" (addr), "i"(-EFAULT), "0"(err))
+ 
+-#ifdef CONFIG_X86_WP_WORKS_OK
++#ifdef CONFIG_OPENMOSIX
++#define deputy_put_user64_helper(x, addr, ret)			\
++	__asm__ __volatile__(					\
++		"1: pushl %%eax\n"				\
++		"pushl %%edx\n"					\
++		"pushl %2\n"					\
++		"call deputy_put_user64\n"			\
++		"movl %%eax, %0\n"				\
++		"popl %%edx\n"					\
++		"popl %%eax\n"					\
++		: "=r"(ret)					\
++		: "A" (x), "r" (addr), "0"(ret))
++#endif
+ 
++#ifdef CONFIG_X86_WP_WORKS_OK
+ #define __put_user_size(x,ptr,size,retval,errret)			\
+ do {									\
+ 	retval = 0;							\
+ 	__chk_user_ptr(ptr);						\
++	if (openmosix_memory_away() && size <= 8) {			\
++		if (size < 8)						\
++			retval = deputy_put_user((long) x, ptr, size);	\
++		else							\
++			deputy_put_user64_helper((__typeof__(*ptr))(x),	\
++						ptr, retval);		\
++	} else								\
+ 	switch (size) {							\
+ 	case 1: __put_user_asm(x,ptr,retval,"b","b","iq",errret);break;	\
+ 	case 2: __put_user_asm(x,ptr,retval,"w","w","ir",errret);break; \
+@@ -318,6 +353,13 @@
+ 	__typeof__(*(ptr)) __pus_tmp = x;				\
+ 	retval = 0;							\
+ 									\
++	if (openmosix_memory_away() && size <= 8)			\
++		if (size < 8)						\
++			retval = deputy_put_user((long) x, ptr, size);	\
++		else							\
++			deputy_put_user64_helper((__typeof__(*ptr))(x),	\
++						ptr, retval);		\
++	else								\
+ 	if(unlikely(__copy_to_user_ll(ptr, &__pus_tmp, size) != 0))	\
+ 		retval = errret;					\
+ } while (0)
+@@ -362,6 +404,9 @@
+ do {									\
+ 	retval = 0;							\
+ 	__chk_user_ptr(ptr);						\
++ 	if (openmosix_memory_away()) {					\
++ 		retval = deputy_get_user((long *) &x, ptr, size);	\
++ 	} else 								\
+ 	switch (size) {							\
+ 	case 1: __get_user_asm(x,ptr,retval,"b","b","=q",errret);break;	\
+ 	case 2: __get_user_asm(x,ptr,retval,"w","w","=r",errret);break;	\
+@@ -416,6 +461,10 @@
+ static __always_inline unsigned long __must_check
+ __copy_to_user_inatomic(void __user *to, const void *from, unsigned long n)
+ {
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_copy_to_user(to, from, n);
++#endif
+ 	if (__builtin_constant_p(n)) {
+ 		unsigned long ret;
+ 
+@@ -461,6 +510,10 @@
+ static __always_inline unsigned long
+ __copy_from_user_inatomic(void *to, const void __user *from, unsigned long n)
+ {
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_copy_from_user(to, from, n);
++#endif
+ 	if (__builtin_constant_p(n)) {
+ 		unsigned long ret;
+ 
+@@ -508,7 +561,15 @@
+  * If there is a limit on the length of a valid string, you may wish to
+  * consider using strnlen_user() instead.
+  */
+-#define strlen_user(str) strnlen_user(str, ~0UL >> 1)
++#define strlen_user_local(str) strnlen_user(str, ~0UL >> 1)
++
++#ifdef CONFIG_OPENMOSIX
++#define strlen_user(str) (openmosix_memory_away())			\
++				? deputy_strnlen_user(str, 0)		\
++				: strlen_user_local(str)
++#else
++#define strlen_user(str) strlen_user_local(str)
++#endif
+ 
+ long strnlen_user(const char __user *str, long n);
+ unsigned long __must_check clear_user(void __user *mem, unsigned long len);
+Index: linux/include/asm-ppc/om.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/asm-ppc/om.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,43 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifdef CONFIG_PPC
++#ifndef _HPC_ARCH_ARCH_H
++#define _HPC_ARCH_ARCH_H
++
++static inline long arch_get_sys_arg(unsigned int n, struct pt_regs *regs)
++{
++	BUG_ON(n >= 31);
++	return regs->gpr[n + 1];
++}
++
++static inline int arch_get_sys_nb(struct pt_regs *regs)
++{
++	return regs->gpr[0] >> 2;
++}
++
++#define NR_MAX_SYSCALL_ARG	7
++
++#define ARCH_TASK_GET_USER_REGS(p)				\
++		(((struct pt_regs *) (THREAD_SIZE +		\
++		(unsigned long) p->thread_info)) - 1)
++
++#endif /* _HPC_ARCH_ARCH_H */
++#endif /* CONFIG_PPC */
++
+Index: linux/include/asm-ppc/om-protocol.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/asm-ppc/om-protocol.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,40 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifdef CONFIG_PPC
++#ifndef _HPC_ARCHPROTOCOL_H
++#define _HPC_ARCHPROTOCOL_H
++struct omp_mig_fp
++{
++	int has_altivec;
++	double fpr[32];
++	unsigned long fpscr_pad;
++	unsigned long fpscr;
++};
++
++struct omp_mig_arch
++{
++};
++
++struct omp_mig_arch_task
++{
++};
++
++#endif /* _HPC_ARCHPROTOCOL_H */
++#endif /* CONFIG_PPC */
+Index: linux/include/asm-x86_64/om.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/asm-x86_64/om.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,50 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifdef CONFIG_X86_64
++#ifndef _HPC_ARCH_ARCH_H
++#define _HPC_ARCH_ARCH_H
++
++static inline long arch_get_sys_arg(unsigned int n, struct pt_regs *regs)
++{
++	switch (n) {
++		case 0: return regs->rdi;
++		case 1: return regs->rsi;
++		case 2: return regs->rdx;
++		case 3: return regs->rcx;
++		case 4: return regs->r8;
++		case 5: return regs->r9;
++		default: BUG();
++	}
++	return -1;
++}
++
++static inline int arch_get_sys_nb(struct pt_regs *regs)
++{
++	return (int) (regs->rax & 0xffffffff);
++}
++
++#define NR_MAX_SYSCALL_ARG	6
++
++#define ARCH_TASK_GET_USER_REGS(p)				\
++		(((struct pt_regs *) (THREAD_SIZE + 		\
++		(unsigned long) p->thread_info)) - 1)
++
++#endif /* _HPC_ARCH_ARCH_H */
++#endif /* CONFIG_X86_64 */
+Index: linux/include/asm-x86_64/om-protocol.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/asm-x86_64/om-protocol.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,46 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifdef CONFIG_X86_64
++#ifndef _HPC_ARCHPROTOCOL_H
++#define _HPC_ARCHPROTOCOL_H
++
++#include <asm/i387.h>
++
++struct omp_mig_fp
++{
++	union i387_union data;
++};
++
++struct omp_mig_arch
++{
++	int type;
++};
++
++struct omp_mig_arch_task
++{
++	unsigned long userrsp;
++	unsigned long fs;
++	unsigned long gs;
++	unsigned int es, ds, fsindex, gsindex;
++	u64 tls_array[GDT_ENTRY_TLS_ENTRIES];
++};
++
++#endif /*  _HPC_ARCHPROTOCOL_H */
++#endif /* CONFIG_X86_64 */
+Index: linux/include/asm-x86_64/uaccess.h
+===================================================================
+--- linux.orig/include/asm-x86_64/uaccess.h	2006-09-28 15:02:04.000000000 +0200
++++ linux/include/asm-x86_64/uaccess.h	2006-09-28 15:02:19.000000000 +0200
+@@ -35,6 +35,8 @@
+ 
+ #define __addr_ok(addr) (!((unsigned long)(addr) & (current_thread_info()->addr_limit.seg)))
+ 
++#include <hpc/uaccess.h>
++
+ /*
+  * Uhhuh, this needs 65-bit arithmetic. We have a carry..
+  */
+@@ -95,6 +97,9 @@
+ ({	unsigned long __val_gu;						\
+ 	int __ret_gu; 							\
+ 	__chk_user_ptr(ptr);						\
++ 	if (openmosix_memory_away()) {					\
++ 		__ret_gu = deputy_get_user(&__val_gu, ptr, sizeof (*(ptr))); \
++ 	} else 								\
+ 	switch(sizeof (*(ptr))) {					\
+ 	case 1:  __get_user_x(1,__ret_gu,__val_gu,ptr); break;		\
+ 	case 2:  __get_user_x(2,__ret_gu,__val_gu,ptr); break;		\
+@@ -155,6 +160,9 @@
+ do {									\
+ 	retval = 0;							\
+ 	__chk_user_ptr(ptr);						\
++	if (openmosix_memory_away()) {					\
++		retval = deputy_put_user((long) x, ptr, size);		\
++	} else								\
+ 	switch (size) {							\
+ 	  case 1: __put_user_asm(x,ptr,retval,"b","b","iq",-EFAULT); break;\
+ 	  case 2: __put_user_asm(x,ptr,retval,"w","w","ir",-EFAULT); break;\
+@@ -247,6 +255,10 @@
+ static __always_inline int __copy_from_user(void *dst, const void __user *src, unsigned size)
+ { 
+        int ret = 0;
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_copy_from_user(dst, src, size);
++#endif
+ 	if (!__builtin_constant_p(size))
+ 		return copy_user_generic(dst,(__force void *)src,size);
+ 	switch (size) { 
+@@ -276,6 +288,10 @@
+ static __always_inline int __copy_to_user(void __user *dst, const void *src, unsigned size)
+ { 
+        int ret = 0;
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_copy_to_user(dst, src, size);
++#endif
+ 	if (!__builtin_constant_p(size))
+ 		return copy_user_generic((__force void *)dst,src,size);
+ 	switch (size) { 
+Index: linux/include/hpc/arch.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/arch.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,41 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_ARCH_H
++#define _HPC_ARCH_H
++
++#include <hpc/protocol.h>
++
++NORET_TYPE void arch_kickstart(struct task_struct *);
++int arch_mig_receive_proc_context(struct task_struct *, struct omp_mig_task *);
++void arch_mig_receive_fp(struct task_struct *, struct omp_mig_fp *);
++int arch_mig_receive_specific(struct task_struct *, struct omp_mig_arch *);
++
++void arch_mig_send_pre(struct task_struct *);
++void arch_mig_send_post(struct task_struct *);
++int arch_mig_send_fp(task_t *p, struct omp_mig_fp *);
++int arch_mig_send_proc_context(struct task_struct *, struct omp_mig_task *);
++int arch_mig_send_specific(struct task_struct *);
++
++#include <asm/om.h>
++#include <hpc/syscalls.h>
++
++long arch_exec_syscall(int, syscall_parameter_t *);
++
++#endif /* _HPC_ARCH_H */
+Index: linux/include/hpc/comm.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/comm.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,70 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_COMM_H
++#define _HPC_COMM_H
++
++#include <net/sock.h>
++#include <hpc/protocol.h>
++
++/* this was put in include/linux/net.h ..., me no like */
++#define	SOCK_INTER_OPENMOSIX	3	/* used internally in kernel-mode */
++#define	SOCK_OOB_IN		5	/* OOB received on openmosix socket */
++
++/* node-disconnection timeout: */
++#define	OPENMOSIX_CONNECTION_KEEPALIVE_INTERVAL	30
++#define	OPENMOSIX_CONNECTION_KEEPALIVE_MAXTRIES	6
++#define	OPENMOSIX_CONNECTION_KEEPALIVE_TOTAL	150 /* changed from 180 */
++
++#define COMM_REMOTE_TIMO	(200L * HZ)
++#define COMM_CONNECT_TIMO	(4L * HZ)
++#define COMM_RECONN_TIMO	(10L * HZ)
++
++/* the ports we use */
++#define MIG_DAEMON_PORT		0x3412
++
++/* external variables that need to be available */
++extern unsigned long comm_remote_timo;
++extern unsigned long comm_connect_timo;
++extern unsigned long comm_reconn_timo;
++
++/* routines inside comm.c */
++void comm_data_ready(struct sock *, int);
++struct socket * comm_socket(int, int, int);
++int comm_bind(struct socket *, struct sockaddr *);
++int comm_peek(struct socket *);
++void comm_close(struct socket *);
++int comm_wait(struct socket *);
++int comm_connect(struct socket *, struct sockaddr *, unsigned long);
++int comm_accept(struct socket *, struct socket **, struct sockaddr *, unsigned long);
++int comm_recv(struct socket *, void *, int);
++int comm_send(struct socket *, void *, int);
++int comm_getname(struct socket *, struct sockaddr *, int);
++
++void set_our_addr(int, struct sockaddr *, int);
++struct socket * comm_setup_listen(struct sockaddr *);
++struct socket * comm_setup_connect(struct sockaddr *, int);
++int comm_send_hd(struct socket *, int, void *, int);
++int comm_send_req(struct socket *link, int type);
++
++/* FIXME: oM task routines, this really should be in task.h,
++ * but it causes problems there */
++struct socket * task_set_comm(task_t *, struct socket *);
++
++#endif /* _HPC_COMM_H */
+Index: linux/include/hpc/comm-ipv4.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/comm-ipv4.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,60 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_COMM_IPV4_H
++#define _HPC_COMM_IPV4_H
++
++#ifdef CONFIG_INET
++#include <linux/in.h>
++
++inline int inet_to_string(struct sockaddr_in *address, char *buffer)
++{
++	return sprintf(buffer, "%u.%u.%u.%u",
++			NIPQUAD(address->sin_addr.s_addr));
++}
++
++int string_to_inet(char *buf, struct sockaddr_in *address)
++{
++	u32 iaddr;
++	unsigned int arr[4], ret;
++	char *endbuf;
++
++	ret = sscanf(buf, "%u.%u.%u.%u", &arr[0], &arr[1], &arr[2], &arr[3]);
++	if (ret != 4 || !(arr[0] < 256 && arr[1] < 256
++			&& arr[2] < 256 && arr[3] < 256))
++		return 0;
++	iaddr = (arr[0] << 24) + (arr[1] << 16) + (arr[2] << 8) + arr[3];
++	address->sin_addr.s_addr = htonl(iaddr);
++
++	endbuf = buf;
++	while (*endbuf && (*endbuf == '.' || (isdigit(*endbuf))))
++		endbuf++;
++	address->sin_family = AF_INET;
++	return endbuf - buf;
++}
++
++void inet_setup_port(struct sockaddr_in *sa_in, u16 port)
++{
++	sa_in->sin_port = port;
++}
++
++#else
++
++#endif /* CONFIG_INET */
++#endif /* _HPC_COMM_IPV4_H */
+Index: linux/include/hpc/comm-ipv6.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/comm-ipv6.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,67 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_COMM_IPV6_H
++#define _HPC_COMM_IPV6_H
++
++#ifdef CONFIG_IPV6
++
++#include <linux/in6.h>
++
++inline int inet6_to_string(struct sockaddr_in6 *address, char *buffer)
++{
++	return sprintf(buffer, "%4x:%4x:%4x:%4x:%4x:%4x:%4x:%4x",
++			NIP6(address->sin6_addr));
++}
++
++
++int string_to_inet6(char *buf, struct sockaddr_in6 *address)
++{
++	char *endbuf;
++	int arr[8], ret;
++
++	ret = sscanf(buf, "%4x:%4x:%4x:%4x:%4x:%4x:%4x:%4x",
++			&arr[0], &arr[1], &arr[2], &arr[3],
++			&arr[4], &arr[5], &arr[6], &arr[7]);
++	if (ret != 8)
++		return 0;
++
++	for (ret = 0; ret < 8; ret++)
++		address->sin6_addr.s6_addr16[ret] = htons(arr[ret]);
++
++	endbuf = buf;
++	while (*endbuf && (*endbuf == ':' || (isxdigit(*endbuf))))
++		endbuf++;
++	address->sin6_family = AF_INET6;
++	return endbuf - buf;
++}
++
++inline void inet6_setup_port(struct sockaddr_in6 *sa_in6, u16 port)
++{
++	sa_in6->sin6_port = port;
++}
++
++#else
++
++#define inet6_to_string(s, c)		-1
++#define string_to_inet6(str, s)		-1
++#define inet6_setup_port(s, i)
++
++#endif /* CONFIG_IPV6 */
++#endif /* _HPC_COMM_IPV6_H */
+Index: linux/include/hpc/debug.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/debug.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,56 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_DEBUG_H
++#define _HPC_DEBUG_H
++
++#include <hpc/protocol.h>
++#include <hpc/comm.h>
++#include <hpc/hpc.h>
++
++int proc_debug_get_loadinfo(char *value, size_t size);
++int proc_debug_get_admin(char *value, size_t size);
++
++int proc_debug_get_lfree_mem(char *value, size_t size);
++int proc_debug_get_pkeep_free(char *value, size_t size);
++
++int proc_debug_get_nodes(char *value, size_t size);
++
++
++/* for packets */
++void om_debug_regs(struct pt_regs *);
++void debug_mlink(struct socket *);
++
++void debug_page(unsigned long);
++void debug_regs(void);
++void debug_vmas(struct mm_struct *);
++
++#ifdef CONFIG_OPENMOSIX_DEBUG
++#define OMDEBUG(var, lim, fmt...)	{ if (var >= lim) \
++					printk(KERN_DEBUG "[OMDBG] " fmt); }
++#else
++#define OMDEBUG(var, lim, fmt...)	do {} while (0)
++#endif
++
++#define OMDEBUG_MIG(lim, fmt...)	OMDEBUG(om_opts.debug_mig, lim, fmt)
++#define OMDEBUG_SYS(lim, fmt...)	OMDEBUG(om_opts.debug_sys, lim, fmt)
++#define OMDEBUG_RINO(lim, fmt...)	OMDEBUG(om_opts.debug_rino, lim, fmt)
++#define OMDEBUG_CPYUSER(lim, fmt...)	OMDEBUG(om_opts.debug_copyuser, lim, fmt)
++
++#endif /* _HPC_DEBUG_H */
+Index: linux/include/hpc/hpc.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/hpc.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,74 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_HPC_H
++#define _HPC_HPC_H
++
++#include <linux/sched.h>
++#include <linux/fs.h>
++
++/* arch specific */
++int user_thread(int (*fn)(void *), void * arg, unsigned long flags);
++
++/* init.c */
++void info_startup(void);
++
++/* proc.c */
++int openmosix_proc_pid_getattr(struct task_struct *, char *, void *, size_t);
++int openmosix_proc_pid_setattr(struct task_struct *, char *, void *, size_t);
++void openmosix_proc_init(void);
++
++/* kernel.c */
++int openmosix_pre_clone(int);
++void openmosix_post_clone(int);
++
++int stay_me_and_my_clones(int);
++void openmosix_no_longer_monkey(struct inode *);
++void unstay_mm(struct mm_struct *);
++
++int obtain_mm(task_t *p);
++
++/* task.c */
++int openmosix_task_init(struct task_struct *);
++int openmosix_task_exit(void);
++
++struct openmosix_options
++{
++#ifdef CONFIG_OPENMOSIX_DEBUG
++	int debug_mig;
++	int debug_sys;
++	int debug_rino;
++	int debug_copyuser;
++#endif
++};
++
++extern struct openmosix_options om_opts;
++
++unsigned long	deputy_do_mmap_pgoff(struct file * file, unsigned long addr,
++				unsigned long len, unsigned long prot,
++				unsigned long flags, unsigned long pgoff);
++long		remote_do_mmap(unsigned long addr, unsigned long len,
++				unsigned long prot, unsigned long flags,
++				unsigned long fd, unsigned long pgoff);
++long		remote_do_execve(char __user * filename,
++				char __user *__user *argv,
++				char __user *__user *envp,
++				struct pt_regs * regs);
++
++#endif /* _HPC_HPC_H */
+Index: linux/include/hpc/mig.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/mig.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,40 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_MIG_H
++#define _HPC_MIG_H
++
++#include <linux/sched.h>
++#include <net/sock.h>
++#include <hpc/comm.h>
++
++#define REMOTE_DAEMON_PORT  0x3412
++
++/* PROTOTYPES */
++int openmosix_mig_daemon(void *);
++
++int mig_do_receive(task_t *);
++int mig_do_send(task_t *);
++int mig_send_hshake(task_t *, struct socket *, int);
++int mig_recv_hshake(struct socket *);
++
++int task_move_to_node(task_t *, struct sockaddr *, int);
++int task_remote_expel(task_t *);
++
++#endif /* _HPC_MIG_H */
+Index: linux/include/hpc/omtask.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/omtask.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,48 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_OMTASK_H
++#define _HPC_OMTASK_H
++
++/* temporary fix for ppc */
++#ifndef NCAPINTS
++# define NCAPINTS 1
++#endif
++
++typedef struct openmosix_task {
++	volatile u32 dflags;		/* distributed flags */
++	volatile u32 stay;		/* reasons why process must stay */
++	atomic_t dreqs;			/* bits that others may request */
++	struct socket *contact;		/* DEPUTY <==> REMOTE connection */
++	struct sockaddr *whereto;	/* sockaddr to send to if DREQ_MOVE */
++
++	wait_queue_head_t wait_dist;	/* misc. wait for process */
++
++	struct list_head rfiles;	/* deputy held files */
++
++	/* the following variables are only use on remote */
++	kernel_cap_t remote_caps;	/* effective capabilities on REMOTE */
++	pid_t pid;			/* original PID */
++	pid_t tgid;			/* original TGID */
++
++	/* arch dependant */
++	u32 features[NCAPINTS];		/* CPU features on original node */
++} om_task_t;
++
++#endif /* _HPC_OMTASK_H */
+Index: linux/include/hpc/proc.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/proc.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,46 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_PROC_H
++#define _HPC_PROC_H
++
++int proc_pid_set_0(task_t *p, char *value, size_t size) { return -EINVAL; }
++int proc_pid_get_0(task_t *p, char *value, size_t size) { return -EINVAL; }
++int proc_admin_set_0(char *value, size_t size) { return -EINVAL; }
++int proc_admin_get_0(char *value, size_t size) { return -EINVAL; }
++
++typedef struct om_proc_entry {
++	int type;
++	int len;
++	char *name;
++	mode_t mode;
++	int (*set)(char *dummy, size_t);
++	int (*get)(char *dummy, size_t);
++} om_proc_entry_t;
++
++typedef struct om_proc_pid_entry {
++	int type;
++	int len;
++	char *name;
++	mode_t mode;
++	int (*set)(task_t *t, char *dummy, size_t);
++	int (*get)(task_t *t, char *dummy, size_t);
++} om_proc_pid_entry_t;
++
++#endif /* _HPC_PROC_H */
+Index: linux/include/hpc/protocol.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/protocol.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,212 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++#ifndef _HPC_PROTOCOL_H
++#define _HPC_PROTOCOL_H
++
++#include <linux/sched.h>
++#include <linux/fs.h>
++#include <linux/types.h>
++#include <linux/socket.h>
++#include <asm/om-protocol.h>
++
++/* Migration handshake*/
++struct omp_mig_handshake
++{
++	int type;		/* which type (look below) */
++	long version;		/* openmosix version */
++	int reason;		/* reason for mig or command */
++	int personality;	/* of process to be sent */
++};
++/* handshake types */
++#define HSHAKE_MIG_REQUEST	0x01
++#define HSHAKE_DEPUTY_PROBE	0x02
++#define HSHAKE_REPLY		0x04
++#define HSHAKE_NOTOK		0x08
++
++
++/* main structure for passing messages between
++ * DEPUTY and REMOTE. Denotes the type of request,
++ * and the length of it */
++struct omp_req
++{
++	int type;
++	int dlen;
++};
++
++#define DEP_FLG		0x100
++#define MIG_FLG		0x200
++#define REM_FLG		0x400
++#define REPLY		0x800
++
++/* commands sent during migration */
++#define MIG_MM		(MIG_FLG | 0x10)
++#define MIG_VMA		(MIG_FLG | 0x11)
++#define MIG_PAGE	(MIG_FLG | 0x12)
++#define MIG_FP		(MIG_FLG | 0x13)
++#define MIG_ARCH	(MIG_FLG | 0x14)
++#define MIG_TASK	(MIG_FLG | 0x15)
++#define MIG_ABORT	(MIG_FLG | 0x16)
++
++/* commands sent by deputy to remote */
++#define DEP_COPY_FROM_USER	(DEP_FLG | 0x01)
++#define DEP_COPY_TO_USER	(DEP_FLG | 0x02)
++#define DEP_STRNCPY_FROM_USER	(DEP_FLG | 0x03)
++#define DEP_STRNLEN_USER	(DEP_FLG | 0x04)
++#define DEP_GET_USER		(DEP_FLG | 0x05)
++#define DEP_PUT_USER		(DEP_FLG | 0x06)
++#define DEP_SIGNAL		(DEP_FLG | 0x07)
++#define DEP_COMING_HOME		(DEP_FLG | 0x10)
++
++/* commands sent by remote to deputy */
++#define REM_BRING_HOME	(REM_FLG | 0x10)
++#define REM_PAGE	(REM_FLG | 0x11)
++#define REM_SYSCALL	(REM_FLG | 0x12)
++#define REM_FORK	(REM_FLG | 0x14)
++#define REM_MMAP	(REM_FLG | 0x15)
++#define REM_EXECVE	(REM_FLG | 0x16)
++
++/* task_struct values that need to be passed */
++struct omp_mig_task
++{
++	unsigned long ptrace;
++	long nice;
++
++	kernel_cap_t caps;
++	struct rlimit rlim_cpu, rlim_data, rlim_stack, rlim_rss, rlim_as;
++
++	pid_t pid, tgid;
++	unsigned long personality;
++
++	/* process credentials */
++	uid_t uid, euid, suid, fsuid;
++	gid_t gid, egid, sgid, fsgid;
++
++	/* signals */
++	sigset_t blocked, real_blocked;
++	struct k_sigaction sighand[_NSIG];
++	unsigned long sas_ss_sp;
++	size_t sas_ss_size;
++
++	/* saved user space regs */
++	struct pt_regs regs;
++
++	struct omp_mig_arch_task arch;
++	char comm[TASK_COMM_LEN]; 
++};
++
++/* mm_struct values */
++struct omp_mig_mm
++{
++	unsigned long start_code, end_code, start_data, end_data;
++	unsigned long start_brk, brk, start_stack;
++	unsigned long arg_start, arg_end, env_start, env_end;
++};
++
++struct omp_mig_vma
++{
++	unsigned long vm_start;
++	unsigned long vm_size;
++	unsigned long vm_flags;
++	unsigned long vm_pgoff;
++	struct file *vm_file;
++	struct dentry *f_dentry;
++	loff_t i_size;
++};
++
++struct omp_syscall_req
++{
++	int n;			/* syscall number */
++	unsigned long arg[7];	/* array of arguments */
++};
++
++struct omp_syscall_ret
++{
++	long ret;		/* syscall return value */
++};
++
++struct omp_fork_req
++{
++	unsigned long clone_flags;
++	struct pt_regs regs;
++	struct sockaddr sockaddr;
++	unsigned long stack_start;
++	unsigned long stack_size;
++};
++
++struct omp_fork_ret
++{
++	pid_t pid, tgid;	/* child pid and tgid */
++};
++
++struct omp_usercopy_req
++{
++	unsigned long addr;
++	unsigned long len;
++};
++
++struct omp_usercopy_emb
++{
++	unsigned long addr;
++	unsigned long len;
++	s64 val;
++};
++
++struct omp_page_req
++{
++	struct file * file;
++	unsigned long offset;
++};
++
++struct omp_mmap_req
++{
++	unsigned long addr;
++	unsigned long len;
++	unsigned long flags;
++	unsigned long prot;
++	unsigned long fd;
++	unsigned long pgoff;
++};
++
++struct omp_execve_req
++{
++	int filelen;
++	int argc, envc;
++	int argvlen, envplen;
++	struct pt_regs regs;
++};
++
++struct omp_execve_ret
++{
++	int ret;
++};
++
++struct omp_mmap_ret
++{
++	long ret;
++	struct file * file;
++	unsigned long isize;
++};
++
++struct omp_signal
++{
++	int signr;
++	siginfo_t siginfo;
++};
++
++#endif /*  _HPC_PROTOCOL_H */
+Index: linux/include/hpc/prototype.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/prototype.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,86 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_PROTOTYPE_H
++#define _HPC_PROTOTYPE_H
++
++#ifdef CONFIG_OPENMOSIX_MIGRATION_VERBOSE
++#define OM_VERBOSE_MIG(fmt...)	printk(KERN_NOTICE fmt)
++#else
++#define OM_VERBOSE_MIG(fmt...)	do { } while (0)
++#endif
++
++#define OMBUG(f, a...)	printk(KERN_ERR "[OMBUG] %s: " f, __FUNCTION__, ## a)
++
++
++NORET_TYPE void		deputy_die_on_communication(void);
++void			deputy_main_loop(void);
++void			deputy_startup(task_t *p);
++
++/*****************************************************************************/
++
++struct om_held_file
++{
++	struct list_head list;
++	struct file *file;
++	unsigned long nb;
++	struct page *(*nopage)(struct vm_area_struct *, unsigned long, int *);
++};
++
++struct rfile_inode_data
++{
++	struct file *file;
++	unsigned long node;
++	loff_t isize;
++};
++
++struct vm_operations_struct; /* forward declaration */
++
++int			task_heldfiles_add(task_t *p, struct file *file,
++					struct vm_operations_struct *vm_ops);
++void			task_heldfiles_clear(task_t *p);
++struct om_held_file *	task_heldfiles_find(task_t *p, struct file *file);
++
++struct file *		task_rfiles_get(task_t *p, struct file *file,
++					unsigned long node, loff_t isize);
++
++struct file *		rfiles_inode_get_file(struct inode *inode);
++
++/*****************************************************************************/
++
++struct omp_mig_vma; /* forward declaration */
++
++NORET_TYPE void	remote_disappear(void);
++int		remote_mmap(struct omp_mig_vma *, int);
++long		remote_do_syscall(int, struct pt_regs *);
++int		remote_do_comm(task_t *);
++long		remote_do_fork(unsigned long clone_flags,
++				unsigned long stack_start,
++				struct pt_regs *regs,
++				unsigned long stack_size,
++				int __user *parent_tidptr,
++				int __user *child_tidptr);
++long		remote_do_mmap(unsigned long addr, unsigned long len,
++				unsigned long prot, unsigned long flags,
++				unsigned long fd, unsigned long pgoff);
++int		remote_file_mmap(struct file *file,
++				struct vm_area_struct *vma);
++int		remote_readpage(struct file *file, struct page *page);
++
++#endif /* _HPC_PROTOTYPE_H */
+Index: linux/include/hpc/service.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/service.h	2006-09-28 15:02:19.000000000 +0200
+@@ -0,0 +1,33 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_SERVICE_H
++#define _HPC_SERVICE_H
++
++#include <linux/types.h>
++#include <linux/socket.h>
++
++int sockaddr_to_string(struct sockaddr *address, char *buffer);
++int string_to_sockaddr(char *buf, struct sockaddr *address);
++void sockaddr_setup_port(struct sockaddr *, int port);
++int sockaddr_inherit(struct socket *mlink, struct sockaddr *sa);
++
++void om_daemonize(char *, int);
++
++#endif /* _HPC_SERVICE_H */
+Index: linux/include/hpc/syscalls.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/syscalls.h	2006-09-28 15:02:20.000000000 +0200
+@@ -0,0 +1,30 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_SYSCALL_H
++#define _HPC_SYSCALL_H
++
++#define SYSARG(n)	arch_get_sys_arg(n, &regs)
++#define SYSNB()		arch_get_sys_nb(&regs)
++
++typedef struct syscall_parameter_t { long arg[NR_MAX_SYSCALL_ARG]; }
++						syscall_parameter_t;
++typedef long (*syscall_func_t)(syscall_parameter_t);
++
++#endif /* _HPC_SYSCALL_H */
+Index: linux/include/hpc/task.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/task.h	2006-09-28 15:02:20.000000000 +0200
+@@ -0,0 +1,156 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_TASK_H
++#define _HPC_TASK_H
++
++#ifdef CONFIG_OPENMOSIX
++
++#include <linux/types.h>
++#include <linux/sched.h>
++#include <asm/atomic.h>
++
++#define OPENMOSIX_INIT_TASK(tsk) .om = {	\
++	.dflags = 0,				\
++	.dreqs = ATOMIC_INIT(0),                \
++	.rfiles = LIST_HEAD_INIT(tsk.om.rfiles),\
++}
++
++
++#define OPENMOSIX_INIT_MM()			\
++	.mm_realusers = ATOMIC_INIT(1),		\
++
++/*
++ * distributed flags (dflags):
++ * that are *ONLY* set by the process itself, but may be read by others:
++ */
++#define	DDEPUTY		0x00000001	/* process is a DEPUTY stub */
++#define	DREMOTE		0x00000002	/* process is running remotely */
++#define	DINCOMING	0x00000040	/* process coming here */
++#define	DPASSING	0x00000080	/* process is in migration */
++#define	DFINISHED	0x00000200	/* wants to become zombie */
++#define	DREMOTEDAEMON	0x00000400	/* set DREMOTE on "fork" */
++
++#define	DMIGRATED	(DDEPUTY | DREMOTE) /* if task has been migrated */
++
++/*
++ * distributed request (dreqs):
++ * Thoses flags are set by any process to interact with the process.
++ */
++#define DREQ_MOVE	(1 << 0)	/* the process has to move */
++#define	DREQ_CHECKSTAY	(1 << 1)	/* check whether still stay */
++#define	DREQ_URGENT	(1 << 2)	/* something urgent (R=>D) */
++
++/*
++ * stay reason (dstay):
++ */
++#define	DSTAY_MONKEY	(1 << 0)	/* using monkey vnode */
++#define	DSTAY_DEV	(1 << 1)	/* mapping a device */
++#define	DSTAY_86	(1 << 2)	/* running in 86 mode */
++#define	DSTAY_PRIV	(1 << 4)	/* privilleged inst. access (in/out) */
++#define	DSTAY_MLOCK	(1 << 5)	/* has locked memory */
++#define	DSTAY_CLONE	(1 << 6)	/* shared VM, eliminate this once DSM*/
++#define	DSTAY_RT	(1 << 7)	/* Real-Time scheduling */
++#define	DSTAY_IOPL	(1 << 8)	/* direct I/O permission */
++#define	DSTAY_SYSTEM	(1 << 9)	/* init process */
++#define	DSTAY_OTHER1	(1 << 24)	/* external reason for stay (1) */
++#define	DSTAY_OTHER2	(1 << 25)	/* external reason for stay (2) */
++#define	DSTAY_OTHER3	(1 << 26)	/* external reason for stay (3) */
++#define	DSTAY_OTHER4	(1 << 27)	/* external reason for stay (4) */
++#define	DNOMIGRATE	(1 << 31)	/* user requested no auto-migrations */
++
++#define	DSTAY		(~DNOMIGRATE)
++#define	DSTAY_PER_MM	(DSTAY_MONKEY|DSTAY_DEV|DSTAY_MLOCK)
++
++int task_set_where(struct task_struct *p, int value);
++int task_get_where(struct task_struct *p);
++
++/* dreqs */
++static inline void task_set_dreqs(struct task_struct *p, unsigned int val)
++{
++	atomic_set_mask(val, &p->om.dreqs);
++}
++
++static inline void task_clear_dreqs(struct task_struct *p, unsigned int val)
++{
++	atomic_clear_mask(val, &p->om.dreqs);
++}
++
++static inline int task_test_dreqs(struct task_struct *p, unsigned int val)
++{
++	return atomic_read(&p->om.dreqs) & val;
++}
++
++/* dflags */
++
++static inline void task_set_dflags(struct task_struct *p, unsigned int val)
++{
++	p->om.dflags |= val;
++}
++
++static inline void task_clear_dflags(struct task_struct *p, unsigned int val)
++{
++	p->om.dflags &= ~val;
++}
++
++static inline int task_test_dflags(struct task_struct *p, unsigned int val)
++{
++	return (p->om.dflags & val);
++}
++
++/* stay */
++
++static inline void task_set_stay(struct task_struct *p, unsigned int val)
++{
++	p->om.stay |= val;
++}
++
++static inline void task_clear_stay(struct task_struct *p, unsigned int val)
++{
++	p->om.stay &= ~val;
++}
++
++static inline int task_test_stay(struct task_struct *p, unsigned int val)
++{
++	return (p->om.stay & val);
++}
++
++#define task_dreqs_pending(p)	task_test_dreqs(p, ~0)
++
++void task_add_balance_reason(struct task_struct *p, int w);
++
++int task_go_home(struct task_struct *p);
++int task_go_home_for_reason(struct task_struct *p, int reason);
++
++int task_check_stay(struct task_struct *p);
++void task_do_request(void);
++
++struct sockaddr;
++int task_register_migration(task_t *p, struct sockaddr *);
++
++struct inode;
++int task_maps_inode(task_t *p, struct inode *);
++
++#else
++
++#define OPENMOSIX_INIT_TASK(tsk)	/* */
++#define OPENMOSIX_INIT_MM()		/* */
++
++#endif
++#endif /* _HPC_HPCTASK_H */
+Index: linux/include/hpc/uaccess.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/uaccess.h	2006-09-28 15:02:20.000000000 +0200
+@@ -0,0 +1,64 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_UACCESS_H
++#define _HPC_UACCESS_H
++
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/task.h>
++
++unsigned long	deputy_copy_from_user(void *to,
++					const void __user *from,
++					unsigned long n);
++unsigned long	deputy_copy_to_user(void __user *to,
++					const void *from,
++					unsigned long n);
++unsigned long	deputy_strncpy_from_user(char *dst, const char __user *src,
++							long count);
++unsigned long	deputy_strnlen_user(const char *s, long n);
++
++long		deputy_put_user(long value, const void *addr, size_t size);
++long		deputy_get_user(long *value, const void *addr, size_t size);
++
++#if BITS_PER_LONG < 64
++long		deputy_get_user64(s64 *value, const void *addr);
++long		deputy_put_user64(s64 value, const void *addr);
++#endif
++
++/**
++ * openmosix_memory_away - Test is memory is here
++ **/
++static inline int openmosix_memory_away(void)
++{
++	if (segment_eq(get_fs(), KERNEL_DS))
++		return 0;
++	if (task_test_dflags(current, DDEPUTY))
++		return 1;
++	return 0;
++}
++
++#else
++
++#define openmosix_memory_away() 0
++#define deputy_put_user(a, b, c) 0
++#define deputy_get_user(a, b, c) 0
++
++#endif
++
++#endif /* _HPC_UACCESS_H */
+Index: linux/include/hpc/version.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/hpc/version.h	2006-09-28 15:02:20.000000000 +0200
+@@ -0,0 +1,40 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifndef _HPC_VERSION_H
++#define _HPC_VERSION_H
++
++#define OPENMOSIX_VERSION_MAJOR		0
++#define OPENMOSIX_VERSION_MINOR		0
++#define OPENMOSIX_VERSION_MICRO		0
++
++#define OPENMOSIX_VERSION	(OPENMOSIX_VERSION_MAJOR * 10000) + \
++				(OPENMOSIX_VERSION_MINOR * 100) + \
++				(OPENMOSIX_VERSION_MICRO)
++
++#define OPENMOSIX_VERSION_TUPPLE \
++				OPENMOSIX_VERSION_MAJOR, \
++				OPENMOSIX_VERSION_MINOR, \
++				OPENMOSIX_VERSION_MICRO
++
++/* FIXME : need to create a scheme about version handling */
++#define OPENMOSIX_VERSION_BALANCE	0x1L
++#define OPENMOSIX_VERSION_MIGRATION	0x1L
++
++#endif /* _HPC_VERSION_H */
+Index: linux/include/linux/compiler.h
+===================================================================
+--- linux.orig/include/linux/compiler.h	2006-09-28 15:02:04.000000000 +0200
++++ linux/include/linux/compiler.h	2006-09-28 15:02:20.000000000 +0200
+@@ -36,6 +36,18 @@
+ 
+ #ifdef __KERNEL__
+ 
++#ifdef CONFIG_OPENMOSIX
++#define OM_NSTATIC
++#else
++#define OM_NSTATIC static
++#endif
++
++#ifdef CONFIG_KCOMD
++#define KCOMD_NSTATIC
++#else
++#define KCOMD_NSTATIC static
++#endif
++
+ #if __GNUC__ > 4
+ #error no compiler-gcc.h file for this gcc version
+ #elif __GNUC__ == 4
+Index: linux/include/linux/hpc.h
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/include/linux/hpc.h	2006-09-28 15:02:20.000000000 +0200
+@@ -0,0 +1,31 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez
++ *
++ */
++
++#ifndef _LINUX_HPC_H
++#define _LINUX_HPC_H
++
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/hpc.h>
++#include <hpc/task.h>
++#define OM_MM(task)		(task->mm)
++#else
++#define OM_MM(task)		(1)
++
++#endif
++
++#endif /* _LINUX_HPC_H */
+Index: linux/include/linux/init_task.h
+===================================================================
+--- linux.orig/include/linux/init_task.h	2006-09-28 15:02:04.000000000 +0200
++++ linux/include/linux/init_task.h	2006-09-28 15:02:20.000000000 +0200
+@@ -3,9 +3,10 @@
+ 
+ #include <linux/file.h>
+ #include <linux/rcupdate.h>
++#include <hpc/task.h>
+ 
+ #define INIT_FDTABLE \
+-{							\
++{ 							\
+ 	.max_fds	= NR_OPEN_DEFAULT, 		\
+ 	.max_fdset	= EMBEDDED_FD_SET_SIZE,		\
+ 	.fd		= &init_files.fd_array[0], 	\
+@@ -51,6 +52,7 @@
+ 	.page_table_lock =  SPIN_LOCK_UNLOCKED, 		\
+ 	.mmlist		= LIST_HEAD_INIT(name.mmlist),		\
+ 	.cpu_vm_mask	= CPU_MASK_ALL,				\
++	OPENMOSIX_INIT_MM()					\
+ }
+ 
+ #define INIT_SIGNALS(sig) {	\
+@@ -123,6 +125,7 @@
+ 	.journal_info	= NULL,						\
+ 	.cpu_timers	= INIT_CPU_TIMERS(tsk.cpu_timers),		\
+ 	.fs_excl	= ATOMIC_INIT(0),				\
++	OPENMOSIX_INIT_TASK(tsk)					\
+ }
+ 
+ 
+Index: linux/include/linux/net.h
+===================================================================
+--- linux.orig/include/linux/net.h	2006-09-28 15:02:04.000000000 +0200
++++ linux/include/linux/net.h	2006-09-28 15:02:20.000000000 +0200
+@@ -183,6 +183,9 @@
+ extern int	     sock_wake_async(struct socket *sk, int how, int band);
+ extern int	     sock_register(struct net_proto_family *fam);
+ extern int	     sock_unregister(int family);
++#ifdef CONFIG_KCOMD
++extern struct socket *sock_alloc(void);
++#endif
+ extern int	     sock_create(int family, int type, int proto,
+ 				 struct socket **res);
+ extern int	     sock_create_kern(int family, int type, int proto,
+Index: linux/include/linux/sched.h
+===================================================================
+--- linux.orig/include/linux/sched.h	2006-09-28 15:02:04.000000000 +0200
++++ linux/include/linux/sched.h	2006-09-28 15:02:20.000000000 +0200
+@@ -37,6 +37,10 @@
+ #include <linux/rcupdate.h>
+ #include <linux/futex.h>
+ 
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/omtask.h>
++#endif /* CONFIG_OPENMOSIX */
++
+ #include <linux/auxvec.h>	/* For AT_VECTOR_SIZE */
+ 
+ struct exec_domain;
+@@ -350,6 +354,10 @@
+ 	/* aio bits */
+ 	rwlock_t		ioctx_list_lock;
+ 	struct kioctx		*ioctx_list;
++
++#ifdef CONFIG_OPENMOSIX
++	atomic_t mm_realusers;		/* nb of processes that uses this mm */
++#endif /* CONFIG_MOSIX */
+ };
+ 
+ struct sighand_struct {
+@@ -866,6 +874,9 @@
+ 	u64 acct_vm_mem1;	/* accumulated virtual memory usage */
+ 	clock_t acct_stimexpd;	/* clock_t-converted stime since last update */
+ #endif
++#ifdef CONFIG_OPENMOSIX
++	om_task_t om;
++#endif /* CONFIG_OPENMOSIX */
+ #ifdef CONFIG_NUMA
+   	struct mempolicy *mempolicy;
+ 	short il_next;
+Index: linux/include/linux/signal.h
+===================================================================
+--- linux.orig/include/linux/signal.h	2006-09-28 15:02:04.000000000 +0200
++++ linux/include/linux/signal.h	2006-09-28 15:02:20.000000000 +0200
+@@ -260,7 +260,7 @@
+ }
+ 
+ extern int group_send_sig_info(int sig, struct siginfo *info, struct task_struct *p);
+-extern int __group_send_sig_info(int, struct siginfo *, struct task_struct *);
++extern int __group_send_sig_info(int sig, struct siginfo *info, struct task_struct *p);
+ extern long do_sigpending(void __user *, unsigned long);
+ extern int sigprocmask(int, sigset_t *, sigset_t *);
+ 
+Index: linux/kernel/exit.c
+===================================================================
+--- linux.orig/kernel/exit.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/kernel/exit.c	2006-09-28 15:02:20.000000000 +0200
+@@ -1,4 +1,5 @@
+ /*
++
+  *  linux/kernel/exit.c
+  *
+  *  Copyright (C) 1991, 1992  Linus Torvalds
+@@ -42,13 +43,15 @@
+ #include <asm/pgtable.h>
+ #include <asm/mmu_context.h>
+ 
++#include <linux/hpc.h>
++
++OM_NSTATIC void exit_mm(struct task_struct * tsk);
++
+ extern void sem_exit (void);
+ extern struct task_struct *child_reaper;
+ 
+ int getrusage(struct task_struct *, int, struct rusage __user *);
+ 
+-static void exit_mm(struct task_struct * tsk);
+-
+ static void __unhash_process(struct task_struct *p)
+ {
+ 	nr_threads--;
+@@ -283,7 +286,7 @@
+  *
+  * NOTE that reparent_to_init() gives the caller full capabilities.
+  */
+-static void reparent_to_init(void)
++OM_NSTATIC void reparent_to_init(void)
+ {
+ 	write_lock_irq(&tasklist_lock);
+ 
+@@ -553,10 +556,13 @@
+  * Turn us into a lazy TLB process if we
+  * aren't already..
+  */
+-static void exit_mm(struct task_struct * tsk)
++OM_NSTATIC void exit_mm(struct task_struct * tsk)
+ {
+ 	struct mm_struct *mm = tsk->mm;
+ 
++#ifdef CONFIG_OPENMOSIX
++	if (!task_test_dflags(tsk, DDEPUTY))
++#endif
+ 	mm_release(tsk, mm);
+ 	if (!mm)
+ 		return;
+@@ -891,6 +897,9 @@
+ 		update_hiwater_rss(tsk->mm);
+ 		update_hiwater_vm(tsk->mm);
+ 	}
++#ifdef CONFIG_OPENMOSIX
++	openmosix_task_exit();
++#endif
+ 	group_dead = atomic_dec_and_test(&tsk->signal->live);
+ 	if (group_dead) {
+  		hrtimer_cancel(&tsk->signal->real_timer);
+Index: linux/kernel/fork.c
+===================================================================
+--- linux.orig/kernel/fork.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/kernel/fork.c	2006-09-28 15:02:20.000000000 +0200
+@@ -52,6 +52,8 @@
+ #include <asm/cacheflush.h>
+ #include <asm/tlbflush.h>
+ 
++#include <linux/hpc.h>
++
+ /*
+  * Protected counters by write_lock_irq(&tasklist_lock)
+  */
+@@ -315,6 +317,9 @@
+ {
+ 	atomic_set(&mm->mm_users, 1);
+ 	atomic_set(&mm->mm_count, 1);
++#ifdef CONFIG_OPENMOSIX
++	atomic_set(&mm->mm_realusers, 1);
++#endif /* CONFIG_OPENMOSIX */
+ 	init_rwsem(&mm->mmap_sem);
+ 	INIT_LIST_HEAD(&mm->mmlist);
+ 	mm->core_waiters = 0;
+@@ -473,6 +478,9 @@
+ 	err = dup_mmap(mm, oldmm);
+ 	if (err)
+ 		goto free_pt;
++#ifdef CONFIG_OPENMOSIX
++	task_clear_stay(tsk, DSTAY_CLONE);
++#endif /* CONFIG_OPENMOSIX */
+ 
+ 	mm->hiwater_rss = get_mm_rss(mm);
+ 	mm->hiwater_vm = mm->total_vm;
+@@ -517,6 +525,9 @@
+ 
+ 	if (clone_flags & CLONE_VM) {
+ 		atomic_inc(&oldmm->mm_users);
++#ifdef CONFIG_OPENMOSIX
++		atomic_inc(&oldmm->mm_realusers);
++#endif /* CONFIG_OPENMOSIX */
+ 		mm = oldmm;
+ 		goto good_mm;
+ 	}
+@@ -1045,6 +1056,10 @@
+ 		goto bad_fork_cleanup_policy;
+ 	if ((retval = audit_alloc(p)))
+ 		goto bad_fork_cleanup_security;
++#ifdef CONFIG_OPENMOSIX
++	if ((retval = openmosix_task_init(p)))
++		goto bad_fork_cleanup_audit;
++#endif /* CONFIG_OPENMOSIX */
+ 	/* copy all the process information */
+ 	if ((retval = copy_semundo(clone_flags, p)))
+ 		goto bad_fork_cleanup_audit;
+@@ -1308,17 +1323,20 @@
+ {
+ 	struct task_struct *p;
+ 	int trace = 0;
+-	struct pid *pid = alloc_pid();
+-	long nr;
+-
+-	if (!pid)
++ 	struct pid *pid = alloc_pid();
++ 	long nr;
++ 
++ 	if (!pid)
+ 		return -EAGAIN;
+-	nr = pid->nr;
++ 	nr = pid->nr;
+ 	if (unlikely(current->ptrace)) {
+ 		trace = fork_traceflag (clone_flags);
+ 		if (trace)
+ 			clone_flags |= CLONE_PTRACE;
+ 	}
++#ifdef CONFIG_OPENMOSIX
++	openmosix_pre_clone(clone_flags);
++#endif
+ 
+ 	p = copy_process(clone_flags, stack_start, regs, stack_size, parent_tidptr, child_tidptr, nr);
+ 	/*
+@@ -1360,6 +1378,9 @@
+ 		free_pid(pid);
+ 		nr = PTR_ERR(p);
+ 	}
++#ifdef CONFIG_OPENMOSIX
++	openmosix_post_clone(clone_flags);
++#endif
+ 	return nr;
+ }
+ 
+Index: linux/kernel/sched.c
+===================================================================
+--- linux.orig/kernel/sched.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/kernel/sched.c	2006-09-28 15:02:20.000000000 +0200
+@@ -355,7 +355,7 @@
+  * interrupts.  Note the ordering: we can safely lookup the task_rq without
+  * explicitly disabling preemption.
+  */
+-static inline runqueue_t *task_rq_lock(task_t *p, unsigned long *flags)
++OM_NSTATIC runqueue_t *task_rq_lock(task_t *p, unsigned long *flags)
+ 	__acquires(rq->lock)
+ {
+ 	struct runqueue *rq;
+@@ -371,7 +371,7 @@
+ 	return rq;
+ }
+ 
+-static inline void task_rq_unlock(runqueue_t *rq, unsigned long *flags)
++OM_NSTATIC inline void task_rq_unlock(runqueue_t *rq, unsigned long *flags)
+ 	__releases(rq->lock)
+ {
+ 	spin_unlock_irqrestore(&rq->lock, *flags);
+Index: linux/MAINTAINERS
+===================================================================
+--- linux.orig/MAINTAINERS	2006-09-28 15:02:04.000000000 +0200
++++ linux/MAINTAINERS	2006-09-28 15:02:20.000000000 +0200
+@@ -2081,6 +2081,15 @@
+ L:	linux-scsi@vger.kernel.org
+ S:	Maintained
+ 
++OPENMOSIX
++P:	Vincent Hanquez
++M:	tab@snarc.org
++P:	Alexander Nyberg
++M:	alexn@telia.com
++L:	openmosix-general@lists.sourceforge.net
++W:	http://openmosix.sourceforge.net/
++S:	Maintained
++
+ OPL3-SA2, SA3, and SAx DRIVER
+ P:	Zwane Mwaikambo
+ M:	zwane@arm.linux.org.uk
+Index: linux/Makefile
+===================================================================
+--- linux.orig/Makefile	2006-09-28 15:02:04.000000000 +0200
++++ linux/Makefile	2006-09-28 15:02:20.000000000 +0200
+@@ -311,7 +311,7 @@
+ 
+ # Read KERNELRELEASE from .kernelrelease (if it exists)
+ KERNELRELEASE = $(shell cat .kernelrelease 2> /dev/null)
+-KERNELVERSION = $(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)
++KERNELVERSION = $(VERSION).$(PATCHLEVEL).$(SUBLEVEL)$(EXTRAVERSION)-om
+ 
+ export	VERSION PATCHLEVEL SUBLEVEL KERNELRELEASE KERNELVERSION \
+ 	ARCH CONFIG_SHELL HOSTCC HOSTCFLAGS CROSS_COMPILE AS LD CC \
+@@ -463,6 +463,9 @@
+ # Defaults vmlinux but it is usually overriden in the arch makefile
+ all: vmlinux
+ 
++unsparse:
++	scripts/unsparse
++
+ ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+ CFLAGS		+= -Os
+ else
+@@ -518,7 +521,7 @@
+ 
+ 
+ ifeq ($(KBUILD_EXTMOD),)
+-core-y		+= kernel/ mm/ fs/ ipc/ security/ crypto/ block/
++core-y		+= kernel/ mm/ fs/ ipc/ security/ crypto/ block/ hpc/
+ 
+ vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
+ 		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
+Index: linux/mm/mlock.c
+===================================================================
+--- linux.orig/mm/mlock.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/mm/mlock.c	2006-09-28 15:02:20.000000000 +0200
+@@ -11,6 +11,7 @@
+ #include <linux/mempolicy.h>
+ #include <linux/syscalls.h>
+ 
++#include <linux/hpc.h>
+ 
+ static int mlock_fixup(struct vm_area_struct *vma, struct vm_area_struct **prev,
+ 	unsigned long start, unsigned long end, unsigned int newflags)
+@@ -20,7 +21,7 @@
+ 	int pages;
+ 	int ret = 0;
+ 
+-	if (newflags == vma->vm_flags) {
++ 	if (newflags == vma->vm_flags) {
+ 		*prev = vma;
+ 		goto out;
+ 	}
+@@ -143,6 +144,10 @@
+ 	/* check against resource limits */
+ 	if ((locked <= lock_limit) || capable(CAP_IPC_LOCK))
+ 		error = do_mlock(start, len, 1);
++#ifdef CONFIG_OPENMOSIX
++	if (!error) /* FIXME len == 0 shouldn't DSTAY MLOCK current & clones */
++		stay_me_and_my_clones(DSTAY_MLOCK);
++#endif /* CONFIG_OPENMOSIX */
+ 	up_write(&current->mm->mmap_sem);
+ 	return error;
+ }
+@@ -156,6 +161,10 @@
+ 	start &= PAGE_MASK;
+ 	ret = do_mlock(start, len, 0);
+ 	up_write(&current->mm->mmap_sem);
++#ifdef CONFIG_OPENMOSIX
++	if (ret)
++		unstay_mm(current->mm);
++#endif /* CONFIG_OPENMOSIX */
+ 	return ret;
+ }
+ 
+@@ -205,6 +214,10 @@
+ 	if (!(flags & MCL_CURRENT) || (current->mm->total_vm <= lock_limit) ||
+ 	    capable(CAP_IPC_LOCK))
+ 		ret = do_mlockall(flags);
++#ifdef CONFIG_OPENMOSIX
++	if (!ret)
++		stay_me_and_my_clones(DSTAY_MLOCK);
++#endif /* CONFIG_OPENMOSIX */
+ 	up_write(&current->mm->mmap_sem);
+ out:
+ 	return ret;
+@@ -217,9 +230,12 @@
+ 	down_write(&current->mm->mmap_sem);
+ 	ret = do_mlockall(0);
+ 	up_write(&current->mm->mmap_sem);
++#ifdef CONFIG_OPENMOSIX
++	if (ret)
++		unstay_mm(current->mm);
++#endif /* CONFIG_OPENMOSIX */
+ 	return ret;
+ }
+-
+ /*
+  * Objects with different lifetime than processes (SHM_LOCK and SHM_HUGETLB
+  * shm segments) get accounted against the user_struct instead.
+Index: linux/mm/mmap.c
+===================================================================
+--- linux.orig/mm/mmap.c	2006-09-28 15:02:05.000000000 +0200
++++ linux/mm/mmap.c	2006-09-28 15:02:21.000000000 +0200
+@@ -30,6 +30,8 @@
+ #include <asm/cacheflush.h>
+ #include <asm/tlb.h>
+ 
++#include <linux/hpc.h>
++
+ static void unmap_region(struct mm_struct *mm,
+ 		struct vm_area_struct *vma, struct vm_area_struct *prev,
+ 		unsigned long start, unsigned long end);
+@@ -183,9 +185,22 @@
+ 
+ 	flush_dcache_mmap_lock(mapping);
+ 	if (unlikely(vma->vm_flags & VM_NONLINEAR))
++	{
+ 		list_del_init(&vma->shared.vm_set.list);
++#ifdef CONFIG_OPENMOSIX
++		if (list_empty(&vma->shared.vm_set.list))
++			openmosix_no_longer_monkey(file->f_dentry->d_inode);
++#endif /* CONFIG_OPENMOSIX */
++	}
+ 	else
++	{
+ 		vma_prio_tree_remove(vma, &mapping->i_mmap);
++#ifdef CONFIG_OPENMOSIX
++		/* FIXME tab: maybe wrong ! */
++		if (vma->shared.vm_set.parent && vma->shared.vm_set.head)
++			openmosix_no_longer_monkey(file->f_dentry->d_inode);
++#endif /* CONFIG_OPENMOSIX */
++	}
+ 	flush_dcache_mmap_unlock(mapping);
+ }
+ 
+@@ -888,6 +903,9 @@
+ 	struct rb_node ** rb_link, * rb_parent;
+ 	int accountable = 1;
+ 	unsigned long charged = 0, reqprot = prot;
++#ifdef CONFIG_OPENMOSIX
++	int stay_reason = 0;
++#endif /* CONFIG_OPENMOSIX */
+ 
+ 	if (file) {
+ 		if (is_file_hugepages(file))
+@@ -923,7 +941,7 @@
+                return -EOVERFLOW;
+ 
+ 	/* Too many mappings? */
+-	if (mm->map_count > sysctl_max_map_count)
++	if (OM_MM(current) && mm->map_count > sysctl_max_map_count)
+ 		return -ENOMEM;
+ 
+ 	/* Obtain the address to map to. we verify (or select) it and ensure
+@@ -938,7 +956,7 @@
+ 	 * of the memory object, so we don't do any here.
+ 	 */
+ 	vm_flags = calc_vm_prot_bits(prot) | calc_vm_flag_bits(flags) |
+-			mm->def_flags | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
++			(OM_MM(current) ? mm->def_flags : 0) | VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC;
+ 
+ 	if (flags & MAP_LOCKED) {
+ 		if (!can_do_mlock())
+@@ -946,7 +964,7 @@
+ 		vm_flags |= VM_LOCKED;
+ 	}
+ 	/* mlock MCL_FUTURE? */
+-	if (vm_flags & VM_LOCKED) {
++	if (OM_MM(current) && vm_flags & VM_LOCKED) {
+ 		unsigned long locked, lock_limit;
+ 		locked = len >> PAGE_SHIFT;
+ 		locked += mm->locked_vm;
+@@ -980,9 +998,19 @@
+ 			vm_flags |= VM_SHARED | VM_MAYSHARE;
+ 			if (!(file->f_mode & FMODE_WRITE))
+ 				vm_flags &= ~(VM_MAYWRITE | VM_SHARED);
++#ifdef CONFIG_OPENMOSIX
++			if (file->f_mode & FMODE_WRITE)
++				stay_reason |= DSTAY_MONKEY;
++#endif /* CONFIG_OPENMOSIX */
+ 
+ 			/* fall through */
+ 		case MAP_PRIVATE:
++#ifdef CONFIG_OPENMOSIX
++			if (inode && inode->i_mapping->i_mmap_writable != 0)
++				stay_reason |= DSTAY_MONKEY;
++			if (S_ISCHR(file->f_dentry->d_inode->i_mode))
++				stay_reason |= DSTAY_DEV;
++#endif /* CONFIG_OPENMOSIX */
+ 			if (!(file->f_mode & FMODE_READ))
+ 				return -EACCES;
+ 			break;
+@@ -1009,6 +1037,10 @@
+ 	error = security_file_mmap(file, reqprot, prot, flags);
+ 	if (error)
+ 		return error;
++#ifdef CONFIG_OPENMOSIX
++	if (file && task_test_dflags(current, DDEPUTY))
++		return deputy_do_mmap_pgoff(file, addr, len, prot, vm_flags, pgoff);
++#endif
+ 		
+ 	/* Clear old maps */
+ 	error = -ENOMEM;
+@@ -1128,6 +1160,10 @@
+ 		mm->locked_vm += len >> PAGE_SHIFT;
+ 		make_pages_present(addr, addr + len);
+ 	}
++#ifdef CONFIG_OPENMOSIX
++	if (stay_reason)
++		stay_me_and_my_clones(stay_reason);
++#endif /* CONFIG_OPENMOSIX */
+ 	if (flags & MAP_POPULATE) {
+ 		up_write(&mm->mmap_sem);
+ 		sys_remap_file_pages(addr, len, 0,
+@@ -1339,18 +1375,22 @@
+ 		unsigned long pgoff, unsigned long flags)
+ {
+ 	unsigned long ret;
+-
++  
+ 	if (!(flags & MAP_FIXED)) {
+ 		unsigned long (*get_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
+-
++  
+ 		get_area = current->mm->get_unmapped_area;
++#ifdef CONFIG_OPENMOSIX
++		if (task_test_dflags(current, DDEPUTY))
++			return PAGE_ALIGN(addr);
++#endif
+ 		if (file && file->f_op && file->f_op->get_unmapped_area)
+ 			get_area = file->f_op->get_unmapped_area;
+ 		addr = get_area(file, addr, len, pgoff, flags);
+ 		if (IS_ERR_VALUE(addr))
+ 			return addr;
+ 	}
+-
++  
+ 	if (addr > TASK_SIZE - len)
+ 		return -ENOMEM;
+ 	if (addr & ~PAGE_MASK)
+Index: linux/net/socket.c
+===================================================================
+--- linux.orig/net/socket.c	2006-09-28 15:02:05.000000000 +0200
++++ linux/net/socket.c	2006-09-28 15:02:21.000000000 +0200
+@@ -511,7 +511,7 @@
+  *	NULL is returned.
+  */
+ 
+-static struct socket *sock_alloc(void)
++KCOMD_NSTATIC struct socket *sock_alloc(void)
+ {
+ 	struct inode * inode;
+ 	struct socket * sock;
+@@ -530,6 +530,9 @@
+ 	put_cpu_var(sockets_in_use);
+ 	return sock;
+ }
++#ifdef CONFIG_KCOMD
++EXPORT_SYMBOL_GPL(sock_alloc);
++#endif
+ 
+ /*
+  *	In theory you can't get an open on this inode, but /proc provides

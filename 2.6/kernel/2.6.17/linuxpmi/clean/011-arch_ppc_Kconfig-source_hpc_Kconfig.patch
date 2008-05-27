@@ -1,0 +1,10 @@
+Index: linux/arch/ppc/Kconfig
+===================================================================
+--- linux.orig/arch/ppc/Kconfig	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/ppc/Kconfig	2006-09-28 15:02:17.000000000 +0200
+@@ -1417,3 +1417,5 @@
+ source "security/Kconfig"
+ 
+ source "crypto/Kconfig"
++
++source "hpc/Kconfig"

@@ -1,0 +1,24 @@
+Index: linux/arch/x86_64/kernel/sys_x86_64.c
+===================================================================
+--- linux.orig/arch/x86_64/kernel/sys_x86_64.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/arch/x86_64/kernel/sys_x86_64.c	2006-09-28 15:02:17.000000000 +0200
+@@ -20,6 +20,8 @@
+ #include <asm/uaccess.h>
+ #include <asm/ia32.h>
+ 
++#include <linux/hpc.h>
++
+ /*
+  * sys_pipe() is the normal C calling standard for creating
+  * a pipe. It's not the way Unix traditionally does this, though.
+@@ -51,6 +53,10 @@
+ 	file = NULL;
+ 	flags &= ~(MAP_EXECUTABLE | MAP_DENYWRITE);
+ 	if (!(flags & MAP_ANONYMOUS)) {
++#ifdef CONFIG_OPENMOSIX
++		if (task_test_dflags(current, DREMOTE))
++			return remote_do_mmap(addr, len, prot, flags, fd, off >> PAGE_SHIFT);
++#endif
+ 		file = fget(fd);
+ 		if (!file)
+ 			goto out;

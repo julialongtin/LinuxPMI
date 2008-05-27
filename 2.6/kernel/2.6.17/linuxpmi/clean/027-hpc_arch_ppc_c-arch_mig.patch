@@ -1,0 +1,117 @@
+Index: linux/hpc/arch-ppc.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/arch-ppc.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,112 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <asm/uaccess.h>
++#include <linux/kallsyms.h>
++#include <linux/sched.h>
++#include <hpc/debug.h>
++#include <asm/ptrace.h>
++#include <hpc/prototype.h>
++#include <asm/processor.h>
++#include <hpc/protocol.h>
++#include <hpc/arch.h>
++
++/*****************************************************************************/
++/* receive part */
++
++int arch_mig_receive_specific(task_t *p, struct omp_mig_arch *m)
++{
++	return 0;
++}
++
++int arch_mig_receive_proc_context(task_t *p, struct omp_mig_task *m)
++{
++	struct pt_regs *regs;
++
++	regs = ARCH_TASK_GET_USER_REGS(p);
++	memcpy(regs, &m->regs, sizeof(struct pt_regs));
++	return 0;
++}
++
++void arch_mig_receive_fp(task_t *p, struct omp_mig_fp *fp)
++{
++	struct thread_struct *th = &p->thread;
++
++	memcpy(th->fpr, fp->fpr, sizeof(th->fpr));
++
++	th->fpscr_pad = fp->fpscr_pad; /* FIXME: not sure this one is needed */
++	th->fpscr = fp->fpscr;
++
++}
++
++/*****************************************************************************/
++/* send part */
++
++void arch_mig_send_pre(task_t *p)
++{
++}
++
++void arch_mig_send_post(task_t *p)
++{
++}
++
++int arch_mig_send_specific(task_t *p)
++{
++	return 0;
++}
++
++int arch_mig_send_fp(task_t *p, struct omp_mig_fp *fp)
++{
++	struct thread_struct *th = &p->thread;
++
++	memcpy(fp->fpr, th->fpr, sizeof(fp->fpr));
++
++	fp->fpscr_pad = th->fpscr_pad; /* FIXME: not sure this one is needed */
++	fp->fpscr = th->fpscr;
++	return 0;
++}
++
++int arch_mig_send_proc_context(task_t *p, struct omp_mig_task *m)
++{
++	struct pt_regs *regs;
++
++	regs = ARCH_TASK_GET_USER_REGS(p);
++	memcpy(&m->regs, &regs, sizeof(struct pt_regs));
++	return 0;
++}
++
++
++void arch_kickstart(struct task_struct *p)
++{
++	struct pt_regs *regs;
++
++	regs = ARCH_TASK_GET_USER_REGS(p);
++	asm (	"mr 1, %0\n\t"
++		"b ret_from_kickstart\n\t"
++		: /**/ : "r"(regs));
++}
++
++long arch_exec_syscall(int n, syscall_parameter_t * args)
++{
++	syscall_func_t fct;
++	extern void * sys_call_table[];
++
++	fct = (syscall_func_t) sys_call_table[n];
++	return fct(*((syscall_parameter_t *) args));
++}

@@ -1,0 +1,340 @@
+Index: linux/arch/ppc/kernel/misc.S
+===================================================================
+--- linux.orig/arch/ppc/kernel/misc.S	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/ppc/kernel/misc.S	2006-09-28 15:02:17.000000000 +0200
+@@ -25,6 +25,11 @@
+ #include <asm/thread_info.h>
+ #include <asm/asm-offsets.h>
+ 
++#ifdef CONFIG_OPENMOSIX
++/* FIXME */
++#define SIGCHLD 17
++#endif /* CONFIG_OPENMOSIX */
++
+ #ifdef CONFIG_8xx
+ #define ISYNC_8xx isync
+ #else
+@@ -1031,6 +1036,39 @@
+ 	addi	r1,r1,16
+ 	blr
+ 
++#ifdef CONFIG_OPENMOSIX
++/*
++ * Create an user thread
++ *   user_thread(fn, arg, flags)
++ */
++_GLOBAL(user_thread)
++	stwu	r1,-16(r1)
++	stw	r30,8(r1)
++	stw	r31,12(r1)
++	mr	r30,r3		/* function */
++	mr	r31,r4		/* argument */
++	ori	r3,r5,SIGCHLD	/* flags */
++	oris	r3,r3,CLONE_UNTRACED>>16
++	li	r4,0		/* new sp (unused) */
++	li	r0,__NR_clone
++	sc
++	cmpi	0,r3,0		/* parent or child? */
++	bne	1f		/* return if parent */
++	li	r0,0		/* make top-level stack frame */
++	stwu	r0,-16(r1)
++	addi	r1,r1,-172	/* substract sizeof pt_regs to stack */
++	mtlr	r30		/* fn addr in lr */
++	mr	r3,r31		/* load arg and call fn */
++	blrl
++	li	r0,__NR_exit	/* exit if function returns */
++	li	r3,0
++	sc
++1:	lwz	r30,8(r1)
++	lwz	r31,12(r1)
++	addi	r1,r1,16
++	blr
++#endif /* CONFIG_OPENMOSIX */
++
+ /*
+  * This routine is just here to keep GCC happy - sigh...
+  */
+@@ -1048,3 +1086,283 @@
+ 	blr
+ 
+ SYSCALL(execve)
++
++#ifdef CONFIG_OPENMOSIX
++	.data
++	.align 4
++_GLOBAL(remote_sys_call_table)
++	.long om_sys_remote	/* sys_restart_syscall */
++	.long om_sys_remote	/* sys_exit */
++	.long om_sys_remote	/* ppc_fork */
++	.long om_sys_remote	/* sys_read */
++	.long om_sys_remote	/* sys_write */
++	.long om_sys_remote	/* sys_open */
++	.long om_sys_remote	/* sys_close */
++	.long om_sys_remote	/* sys_waitpid */
++	.long om_sys_remote	/* sys_creat */
++	.long om_sys_remote	/* sys_link */
++	.long om_sys_remote	/* sys_unlink */
++	.long om_sys_remote	/* sys_execve */
++	.long om_sys_remote	/* sys_chdir */
++	.long om_sys_remote	/* sys_time */
++	.long om_sys_remote	/* sys_mknod */
++	.long om_sys_remote	/* sys_chmod */
++	.long om_sys_remote	/* sys_lchown */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_stat */
++	.long om_sys_remote	/* sys_lseek */
++	.long om_sys_getpid	/* sys_getpid */
++	.long om_sys_remote	/* sys_mount */
++	.long om_sys_remote	/* sys_oldumount */
++	.long om_sys_local	/* sys_setuid */
++	.long om_sys_local	/* sys_getuid */
++	.long om_sys_remote	/* sys_stime */
++	.long om_sys_remote	/* sys_ptrace */
++	.long om_sys_remote	/* sys_alarm */
++	.long om_sys_remote	/* sys_fstat */
++	.long om_sys_local	/* sys_pause */
++	.long om_sys_remote	/* sys_utime */
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_access */
++	.long om_sys_remote	/* sys_nice */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_sync */
++	.long om_sys_remote	/* sys_kill */
++	.long om_sys_remote	/* sys_rename */
++	.long om_sys_remote	/* sys_mkdir */
++	.long om_sys_remote	/* sys_rmdir */
++	.long om_sys_remote	/* sys_dup */
++	.long om_sys_remote	/* sys_pipe */
++	.long om_sys_remote	/* sys_times */
++	.long sys_ni_syscall
++	.long om_sys_local	/* sys_brk */
++	.long om_sys_local	/* sys_setgid */
++	.long om_sys_local	/* sys_getgid */
++	.long om_sys_remote	/* sys_signal */
++	.long om_sys_local	/* sys_geteuid */
++	.long om_sys_local	/* sys_getegid */
++	.long om_sys_remote	/* sys_acct */
++	.long om_sys_remote	/* sys_umount  recycled never used phys()  */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_ioctl */
++	.long om_sys_remote	/* sys_fcntl */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_setpgid */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_olduname */
++	.long om_sys_remote	/* sys_umask */
++	.long om_sys_remote	/* sys_chroot */
++	.long om_sys_remote	/* sys_ustat */
++	.long om_sys_remote	/* sys_dup2 */
++	.long om_sys_remote	/* sys_getppid */
++	.long om_sys_remote	/* sys_getpgrp */
++	.long om_sys_remote	/* sys_setsid */
++	.long om_sys_remote	/* sys_sigaction */
++	.long om_sys_remote	/* sys_sgetmask */
++	.long om_sys_remote	/* sys_ssetmask */
++	.long om_sys_remote	/* sys_setreuid */
++	.long om_sys_remote	/* sys_setregid */
++	.long om_sys_remote	/* ppc_sigsuspend */
++	.long om_sys_remote	/* sys_sigpending */
++	.long om_sys_remote	/* sys_sethostname */
++	.long om_sys_remote	/* sys_setrlimit */
++	.long om_sys_remote	/* sys_old_getrlimit */
++	.long om_sys_remote	/* sys_getrusage */
++	.long om_sys_remote	/* sys_gettimeofday */
++	.long om_sys_remote	/* sys_settimeofday */
++	.long om_sys_remote	/* sys_getgroups */
++	.long om_sys_remote	/* sys_setgroups */
++	.long om_sys_remote	/* ppc_select */
++	.long om_sys_remote	/* sys_symlink */
++	.long om_sys_remote	/* sys_lstat */
++	.long om_sys_remote	/* sys_readlink */
++	.long om_sys_remote	/* sys_uselib */
++	.long om_sys_remote	/* sys_swapon */
++	.long om_sys_remote	/* sys_reboot */
++	.long om_sys_remote	/* old_readdir */
++	.long om_sys_local	/* sys_mmap */
++	.long om_sys_local	/* sys_munmap */
++	.long om_sys_remote	/* sys_truncate */
++	.long om_sys_remote	/* sys_ftruncate */
++	.long om_sys_remote	/* sys_fchmod */
++	.long om_sys_remote	/* sys_fchown */
++	.long om_sys_remote	/* sys_getpriority */
++	.long om_sys_remote	/* sys_setpriority */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_statfs */
++	.long om_sys_remote	/* sys_fstatfs */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_socketcall */
++	.long om_sys_remote	/* sys_syslog */
++	.long om_sys_remote	/* sys_setitimer */
++	.long om_sys_remote	/* sys_getitimer */
++	.long om_sys_remote	/* sys_newstat */
++	.long om_sys_remote	/* sys_newlstat */
++	.long om_sys_remote	/* sys_newfstat */
++	.long om_sys_remote	/* sys_uname */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_vhangup */
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_wait4 */
++	.long om_sys_remote	/* sys_swapoff */
++	.long om_sys_remote	/* sys_sysinfo */
++	.long om_sys_remote	/* sys_ipc */
++	.long om_sys_remote	/* sys_fsync */
++	.long om_sys_remote	/* sys_sigreturn */
++	.long om_sys_remote	/* ppc_clone */
++	.long om_sys_remote	/* sys_setdomainname */
++	.long om_sys_remote	/* sys_newuname */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_adjtimex */
++	.long om_sys_remote	/* sys_mprotect */
++	.long om_sys_remote	/* sys_sigprocmask */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_init_module */
++	.long om_sys_remote	/* sys_delete_module */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_quotactl */
++	.long om_sys_remote	/* sys_getpgid */
++	.long om_sys_remote	/* sys_fchdir */
++	.long om_sys_remote	/* sys_bdflush */
++	.long om_sys_remote	/* sys_sysfs */
++	.long om_sys_remote	/* sys_personality */
++	.long sys_ni_syscall
++	.long om_sys_local	/* sys_setfsuid */
++	.long om_sys_local	/* sys_setfsgid */
++	.long om_sys_remote	/* sys_llseek */
++	.long om_sys_remote	/* sys_getdents */
++	.long om_sys_remote	/* ppc_select */
++	.long om_sys_remote	/* sys_flock */
++	.long om_sys_local	/* sys_msync */
++	.long om_sys_remote	/* sys_readv */
++	.long om_sys_remote	/* sys_writev */
++	.long om_sys_remote	/* sys_getsid */
++	.long om_sys_remote	/* sys_fdatasync */
++	.long om_sys_remote	/* sys_sysctl */
++	.long om_sys_remote	/* sys_mlock */
++	.long om_sys_remote	/* sys_munlock */
++	.long om_sys_remote	/* sys_mlockall */
++	.long om_sys_remote	/* sys_munlockall */
++	.long om_sys_remote	/* sys_sched_setparam */
++	.long om_sys_remote	/* sys_sched_getparam */
++	.long om_sys_remote	/* sys_sched_setscheduler */
++	.long om_sys_remote	/* sys_sched_getscheduler */
++	.long om_sys_local	/* sys_sched_yield */
++	.long om_sys_remote	/* sys_sched_get_priority_max */
++	.long om_sys_remote	/* sys_sched_get_priority_min */
++	.long om_sys_remote	/* sys_sched_rr_get_interval */
++	.long om_sys_local	/* sys_nanosleep */
++	.long om_sys_local	/* sys_mremap */
++	.long om_sys_local	/* sys_setresuid */
++	.long om_sys_local	/* sys_getresuid */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_poll */
++	.long om_sys_remote	/* sys_nfsservctl */
++	.long om_sys_local	/* sys_setresgid */
++	.long om_sys_local	/* sys_getresgid */
++	.long om_sys_remote	/* sys_prctl */
++	.long om_sys_remote	/* sys_rt_sigreturn */
++	.long om_sys_remote	/* sys_rt_sigaction */
++	.long om_sys_remote	/* sys_rt_sigprocmask */
++	.long om_sys_remote	/* sys_rt_sigpending */
++	.long om_sys_remote	/* sys_rt_sigtimedwait */
++	.long om_sys_remote	/* sys_rt_sigqueueinfo */
++	.long om_sys_remote	/* ppc_rt_sigsuspend */
++	.long om_sys_remote	/* sys_pread64 */
++	.long om_sys_remote	/* sys_pwrite64 */
++	.long om_sys_remote	/* sys_chown */
++	.long om_sys_remote	/* sys_getcwd */
++	.long om_sys_remote	/* sys_capget */
++	.long om_sys_remote	/* sys_capset */
++	.long om_sys_remote	/* sys_sigaltstack */
++	.long om_sys_remote	/* sys_sendfile */
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long om_sys_remote	/* ppc_vfork */
++	.long om_sys_remote	/* sys_getrlimit */
++	.long om_sys_remote	/* sys_readahead */
++	.long om_sys_local	/* sys_mmap2 */
++	.long om_sys_remote	/* sys_truncate64 */
++	.long om_sys_remote	/* sys_ftruncate64 */
++	.long om_sys_remote	/* sys_stat64 */
++	.long om_sys_remote	/* sys_lstat64 */
++	.long om_sys_remote	/* sys_fstat64 */
++	.long om_sys_remote	/* sys_pciconfig_read */
++	.long om_sys_remote	/* sys_pciconfig_write */
++	.long om_sys_remote	/* sys_pciconfig_iobase */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_getdents64 */
++	.long om_sys_remote	/* sys_pivot_root */
++	.long om_sys_remote	/* sys_fcntl64 */
++	.long om_sys_local	/* sys_madvise */
++	.long om_sys_local	/* sys_mincore */
++	.long om_sys_gettid	/* sys_gettid */
++	.long om_sys_remote	/* sys_tkill */
++	.long om_sys_remote	/* sys_setxattr */
++	.long om_sys_remote	/* sys_lsetxattr */
++	.long om_sys_remote	/* sys_fsetxattr */
++	.long om_sys_remote	/* sys_getxattr */
++	.long om_sys_remote	/* sys_lgetxattr */
++	.long om_sys_remote	/* sys_fgetxattr */
++	.long om_sys_remote	/* sys_listxattr */
++	.long om_sys_remote	/* sys_llistxattr */
++	.long om_sys_remote	/* sys_flistxattr */
++	.long om_sys_remote	/* sys_removexattr */
++	.long om_sys_remote	/* sys_lremovexattr */
++	.long om_sys_remote	/* sys_fremovexattr */
++	.long om_sys_remote	/* sys_futex */
++	.long om_sys_remote	/* sys_sched_setaffinity */
++	.long om_sys_remote	/* sys_sched_getaffinity */
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_sendfile64 */
++	.long om_sys_remote	/* sys_io_setup */
++	.long om_sys_remote	/* sys_io_destroy */
++	.long om_sys_remote	/* sys_io_getevents */
++	.long om_sys_remote	/* sys_io_submit */
++	.long om_sys_remote	/* sys_io_cancel */
++	.long om_sys_remote	/* sys_set_tid_address */
++	.long om_sys_remote	/* sys_fadvise64 */
++	.long om_sys_remote	/* sys_exit_group */
++	.long om_sys_remote	/* sys_lookup_dcookie */
++	.long om_sys_remote	/* sys_epoll_create */
++	.long om_sys_remote	/* sys_epoll_ctl */
++	.long om_sys_remote	/* sys_epoll_wait */
++	.long om_sys_remote	/* sys_remap_file_pages */
++	.long om_sys_remote	/* sys_timer_create */
++	.long om_sys_remote	/* sys_timer_settime */
++	.long om_sys_remote	/* sys_timer_gettime */
++	.long om_sys_remote	/* sys_timer_getoverrun */
++	.long om_sys_remote	/* sys_timer_delete */
++	.long om_sys_remote	/* sys_clock_settime */
++	.long om_sys_remote	/* sys_clock_gettime */
++	.long om_sys_remote	/* sys_clock_getres */
++	.long om_sys_remote	/* sys_clock_nanosleep */
++	.long om_sys_remote	/* ppc_swapcontext */
++	.long om_sys_remote	/* sys_tgkill */
++	.long om_sys_remote	/* sys_utimes */
++	.long om_sys_remote	/* sys_statfs64 */
++	.long om_sys_remote	/* sys_fstatfs64 */
++	.long om_sys_remote	/* ppc_fadvise64_64 */
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_mq_open */
++	.long om_sys_remote	/* sys_mq_unlink */
++	.long om_sys_remote	/* sys_mq_timedsend */
++	.long om_sys_remote	/* sys_mq_timedreceive */
++	.long om_sys_remote	/* sys_mq_notify */
++	.long om_sys_remote	/* sys_mq_getsetattr */
++	.long sys_ni_syscall
++	.long om_sys_remote	/* sys_add_key */
++	.long om_sys_remote	/* sys_request_key */
++	.long om_sys_remote	/* sys_keyctl */
++	.long om_sys_remote	/* sys_waitid */
++
++#endif /* CONFIG_OPENMOSIX */

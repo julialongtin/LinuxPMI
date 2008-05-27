@@ -1,0 +1,74 @@
+Index: linux/hpc/debug.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/debug.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,69 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <asm/uaccess.h>
++#include <linux/kallsyms.h>
++#include <linux/sched.h>
++#include <linux/config.h>
++#include <hpc/debug.h>
++#include <hpc/protocol.h>
++#include <hpc/comm.h>
++
++void debug_mlink(struct socket *sock)
++{
++	printk("mlink: socket @ = %p\n", sock);
++}
++
++
++void debug_page(unsigned long addr)
++{
++	unsigned long digest = 0;
++	char *ptr = (char *) addr;
++	int i;
++
++	for (i = 0; i < 4096; i++)
++		digest += ptr[i] * i;
++
++	printk("sum of 0x%p is %lu\n", (void *) addr, digest);
++}
++
++void debug_vmas(struct mm_struct *mm)
++{
++	struct vm_area_struct *vma;
++
++	if (!mm) {
++		printk(KERN_ERR "debug_vma(): no mm !\n");
++		return;
++	}
++
++	printk(KERN_ERR "======== [LISTING VMA] ========\n");
++	for (vma = mm->mmap; vma; vma = vma->vm_next) {
++		printk(KERN_ERR "vma: [%.8lx:%.8lx]\n", vma->vm_start,
++							vma->vm_end);
++	}
++}
++
++void debug_signals(struct task_struct *p)
++{
++	struct signal_struct *signal;
++
++	signal = p->signal;
++
++	printk(KERN_ERR "=========== [DEBUG SIGNALS] ========\n");
++}

@@ -1,0 +1,25 @@
+Index: linux/fs/proc/root.c
+===================================================================
+--- linux.orig/fs/proc/root.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/fs/proc/root.c	2006-09-28 15:02:18.000000000 +0200
+@@ -18,6 +18,10 @@
+ #include <linux/bitops.h>
+ #include <linux/smp_lock.h>
+ 
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/hpc.h>
++#endif
++
+ #include "internal.h"
+ 
+ struct proc_dir_entry *proc_net, *proc_net_stat, *proc_bus, *proc_root_fs, *proc_root_driver;
+@@ -62,6 +66,9 @@
+ #ifdef CONFIG_SYSCTL
+ 	proc_sys_root = proc_mkdir("sys", NULL);
+ #endif
++#ifdef CONFIG_OPENMOSIX
++	openmosix_proc_init();
++#endif
+ #if defined(CONFIG_BINFMT_MISC) || defined(CONFIG_BINFMT_MISC_MODULE)
+ 	proc_mkdir("sys/fs", NULL);
+ 	proc_mkdir("sys/fs/binfmt_misc", NULL);

@@ -1,0 +1,14 @@
+001	remote		hpc/remote.c				the first hunk includes two header files. the second hunk revamps 	<hpc/kcom.h>
+								remote_do_signal, making it accept a packet in its parameters, instead
+			trash					of trying to comm_recv a packet off the queue. we also transmit an
+								acknowledgement packet, waking up kcomd with SIGHUP to do so. except
+								that we're not looking for kcomd, and don't declare the variable
+			we break things!			kcomd's pid is stored in. therefore, -EBROKENCODE. the next hunk
+								disables calling remote_do_signal inside of remote_do_comm. the last
+								two hunks change remote_do_syscall so that we transmit our packet by
+								calling kcom_send_with_ack, and setting ourself to TASK_INTERRUPTABLE.
+								we call remote_handle_user to dispatch memory requests from the home
+								node (unless this syscall is exit, in which case we just exit). when it
+								returns, it returns with the result of our syscall. we return this
+								result.
+									

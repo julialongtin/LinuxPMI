@@ -1,0 +1,53 @@
+Index: linux/arch/ppc/kernel/entry.S
+===================================================================
+--- linux.orig/arch/ppc/kernel/entry.S	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/ppc/kernel/entry.S	2006-09-28 15:02:17.000000000 +0200
+@@ -207,11 +207,25 @@
+ 	andi.	r11,r11,_TIF_SYSCALL_T_OR_A
+ 	bne-	syscall_dotrace
+ syscall_dotrace_cont:
++#ifdef CONFIG_OPENMOSIX
++	lwz	r11, TASK_om+OM_dflags(r2)
++	andi.	r11, r11, DREMOTE
++	beq	local_syscall_load
++remote_syscall_load:
++	cmplwi	0,r0,NR_syscalls
++	lis	r10,remote_sys_call_table@h
++	ori	r10,r10,remote_sys_call_table@l
++	slwi	r0,r0,2
++	bge-	66f
++	b	fetch_syscall
++local_syscall_load:
++#endif /* CONFIG_OPENMOSIX */
+ 	cmplwi	0,r0,NR_syscalls
+ 	lis	r10,sys_call_table@h
+ 	ori	r10,r10,sys_call_table@l
+ 	slwi	r0,r0,2
+ 	bge-	66f
++fetch_syscall:
+ 	lwzx	r10,r10,r0	/* Fetch system call handler [ptr] */
+ 	mtlr	r10
+ 	addi	r9,r1,STACK_FRAME_OVERHEAD
+@@ -271,6 +285,12 @@
+ 	li	r3,0
+ 	b	ret_from_syscall
+ 
++#ifdef CONFIG_OPENMOSIX
++	.globl	ret_from_kickstart
++ret_from_kickstart:
++	b	ret_from_syscall
++#endif /* CONFIG_OPENMOSIX */
++
+ /* Traced system call support */
+ syscall_dotrace:
+ 	SAVE_NVGPRS(r1)
+@@ -643,6 +663,9 @@
+ 	bne	do_work
+ 
+ restore_user:
++#ifdef CONFIG_OPENMOSIX
++	bl	openmosix_pre_usermode
++#endif /* CONFIG_OPENMOSIX */
+ #if defined(CONFIG_4xx) || defined(CONFIG_BOOKE)
+ 	/* Check whether this process has its own DBCR0 value.  The single
+ 	   step bit tells us that dbcr0 should be loaded. */

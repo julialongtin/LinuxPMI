@@ -1,0 +1,73 @@
+001			hpc/kcomd.c				this patch is the first in a series of patches rebuilding kcomd. we	<linux/inet.h> <hpc/kcom.h> <hpc/prototype.h>
+								start by adding three headers, and declaring a global variable, 	
+								indicating wether kcomd is running. the next hunk removes code that
+								shouldnt be in a .c file, namely the kcom_pkt, kcom_node, and kcom_task	
+								structures, the kcom_nodes list and its lock, socket_fds,
+								socket_fds_bitmaps, and maxfds. it also removes the helper function
+								alloc_fd_bitmap, kcom_pkt_create, all of the *kcom*node* 
+								list functions,  the comm_simple stub, and the prototypes for the
+								non-existant functions comm_ack, comm_iovec, and comm_iovec_ack.
+								the third and fourth hunks change the kcom_node_add call in 
+								accept_connection to return a node pointer, and store the address of 
+								the remote end in the node pointer. the next hunk creates the 
+								data_send, data_exception, append_in_packs, pkt_read, functions, 
+								destroying data_read, dispatch, kcom_task_create, kcom_task_delete, 
+								__kcom_task_find, kcom_task_find, and kcom_task_send functions. we
+								also flesh out data_write. data_send first marks down the time it
+			similar to comm_send?			starts, then uses sock_sendmsg to send the passed in kcom_pkt structure	
+								and its size to the remote end. we then check the size of the data 
+								member pointed to by the kcom_pkt, and if its less than 32, copy it 
+								into a 32 byte buffer, and send that buffer and a length of 32 to the 
+								remote end. otherwise, we send kcom_pkt->data and its length to the
+			bad error message formats		remote end. our while loops for sending are wrapped to use KERNEL_DS, 
+								and restore fs to its saved state upon exiting the while. after exiting	
+								the while loop that sends the data, we mark down the time. notice that
+								we don't do anything with our time measurements. we return the ammount
+								of data written on success (not including the kcom_pkt wrapping it).
+								data_exception is supposed to clean up in case of dropped connection.
+								according to the comment, its broken, and its free calls are commented
+								out. append_in_packs places a passed kcom_pkt into the queue belonging
+								to the task the packet is marked as destined for. it examines the
+								passed kcom_pkt->type to determine wether this packet was created on 
+								behalf of a deputy process or a remote process, and places the packet 
+								in the queue belonging to rpid or hpid, respectively. it then wakes
+			typoes!					up the process in question. pkt_read is called to read a packet and
+								either place it in a queue to a destined process 
+								(with append_in_packs), or dispatch it immediately due to it being a 
+			error handling.				migration related request (go home, come home, init). data_write 
+								iterates through each task that has a process on the passed in node, 
+								and uses data_send to send pending packets. after send, packets have
+			spacing.				their memory free'd. there is no error checking in this function. 
+								the next two hunks perform a major overhaul on the kcomd_thread 
+								function, add two flags to the kernel_thread invocation that creates 
+								the kcomd_thread, and fleshes out kcomd_exit. the changes to 
+								kcom_thread start by utilizing kmem_cache_create to create several
+								caches that are never used (but are properly destroyed later). we block	
+								all signals to the current process right after calling daemonize,
+								add code to alloc_fd_bitmap just once outside the while loop, and move 
+								some variables out of the while loop, into the top of the function.
+								inside of the while loop, we've disabled our locking functions around
+			way too much commented out code		kcom_nodes_lock, and we've inserted a lot of debugging code thats
+								commented out. we're measuring the time the while loop takes to
+								complete, and starting the do_select part of the function. we set up
+								to measure the time used, and we insert a new method of using
+								do_select. we enable SIGHUP, and sleep until we get it from kcom_send.
+								we insert much better error handling code, and dynamically alocate a
+								fd pointing to the socket for the node. our bit testing section has
+								been completely re-written, and we actually clean up on exit of kcomd.
+								we add CLONE_FS and CLONE_FILES to the kernel_thread call in
+								kcomd_init, and flesh out kcomd_exit by setting a global variable and
+								sending SIGHUP if we can find the kcomd task. 
+002	config		hpc/Makefile				add kcom.o to our list of object files.
+003	omcore		include/hpc/protocol.h			our first hunk just corrects a spacing issue. the secod hunk re-defines	
+								how we set our constant flags. in general, its a nice cleanup, but
+								could use more docs. the third hunk is noise. drop.
+004	omcore		include/hpc/prototype.h			we add a whole bunch of declarations to functions we don't have, and
+								some we do, and some we just added. no suprise, since this patch is 
+								part of a set.
+005	ommig		include/hpc/task.h			change the prototype to task_register_migration, so that we no longer
+								require a sockaddr, just a task.
+006	kcore		net/socket.c				EXPORT_GPL(sock_alloc) if CONFIG_KCOMD or CONFIG_KCOMD_MODULE
+007	kcore		fs/select.c				EXPORT_GPL(do_select) if CONFIG_KCOMD_MODULE
+008	kcore		include/linux/compiler.h		don't static functions defined KCOMD_NSTATIC of CONFIG_KCOMD or 
+								CONFIG_KCOMD_MODULE

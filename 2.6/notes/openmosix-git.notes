@@ -1,0 +1,1228 @@
+hunk	class		file patched				description								depends
+001	i386,config	arch/i386/Kconfig			add hpc/Kconfig to build process					hpc/Kconfig
+002	i386,kcore	arch/i386/kernel/asm-offsets.c		generate assembly offsets to openmosix members of the task structure,	hpc/task.h
+								and define DDEPUTY and DREMOTE constants, all for assembly routines.
+003	i386,kcore	arch/i386/kernel/entry.S		add two new entry points to the kernel, ret_from_deputy_fork, and	asm/asm-offsets.h "omasm.h", GET_THREAD_INFO
+								ret_from_kickstart. ret_from_deputy_fork is a copy of ret_from_fork.
+								ret_from_kickstart just calls GET_THREAD_INFO, and jmps to
+								syscall_exit, returning to userspace. we then add a call to
+								openmosix_pre_usermode in ENTRY(resume_userspace). in the next two
+								hunks, we add code to select which syscall table to use based on wether
+								the current process is marked DREMOTE or not. this is added once in
+								ENTRY(sysenter_entry), and again in ENTRY(system_call).
+004	i386,kcore	arch/i386/kernel/i387.c			fxsr support is support for fast saving of floating point/sse/etc	OM_NSTATIC
+								state to a 512 byte block. we're changing from declaring the conversion
+								functions for fxsr<->387 from static to OM_NSTATIC, and adding a
+								function for finding support during run time.
+005	i386,omguest	creates arch/i386/kernel/omasm.h	this is the syscall table called by processes that are guests.
+								it contains a mapping of wether a function is to be passed to the
+								home node, or processed locally.
+006	userthread	arch/i386/kernel/process.c		add entry for user_thread_helper in the kernel_thread_helper execution	linux/hpc.h
+								path. add a function for creating an in-kernel user thread,
+	kcore							and re-direct the entry point ret_from_fork to ret_from_deputy_fork for
+								processes that are DDEPUTY.
+007	i386,kcore	arch/i386/kernel/signal.c		change do_signal function from static to OM_NSTATIC			OM_NSTATIC
+008	i386,omguest	arch/i386/kernel/sys_i386.c		redirect sys_mmap2 so that processes marked DREMOTE mapping memory	linux/hpc.h, remote_do_mmap
+								without MAP_ANONYMOUS get forwarded to remote_do_mmap
+009	i386,omguest	arch/i386/kernel/vm86.c			update DSTAY_86 flag to prevent migration when a process is using VM86 	linux/hpc.h, task_lock, task_unlock, task_clear_stay,
+								mode.									task_go_home_for_reason, DSTAY_86
+010	i386?,omguest	arch/i386/lib/usercopy.c		redirect strnlen_user to deputy_strlen_user if openmosix_memory_away().	deputy_strlen_user, openmosix_memory_away
+011	ppc,config	arch/ppc/Kconfig			add hpc/Kconfig to build process					"hpc/Kconfig"
+012	ppc,syscall	arch/ppc/kernel/asm-offsets.c		defines offsets of task->om, and om->dflags, along with defining the 	hpc/task.h
+								constant values for DDEPUTY and DREMOTE so that assembly routines
+								can use these four values in calculations.
+013	ppc,syscall	arch/ppc/kernel/entry.S			add code to check wether we're in a DREMOTE process state, and
+								use a our remote_sys_call_table if so. define a ret_from_kickstart
+								entry point, that branches to ret_from_syscall. we also add code to
+								call openmosix_pre_usermode on the restore_user path.
+014	ppc,userthread	arch/ppc/kernel/misc.S			define SIGCHLD 17, add an assembly function to create usermode
+			hold syscall table in omasm.h!		threads, and create the remote syscall table.
+015	x86_64,config	arch/x86_64/Kconfig			add hpc/Kconfig to build process					"hpc/Kconfig"
+016	x86_64,syscall	arch/x86_64/kernel/asm-offsets.c	generate assembly offset to task->om and om->dflags, define DDEPUTY	hpc/task.h
+			insertion point cleanup			and DREMOTE so that assembly routines can use these four values in
+								calculations, and define an ENTRY(task).
+017	x86_64,syscall	arch/x86_64/kernel/entry.S		add ret_from_kickstart entry point to the kernel that just returns.	"omasm.h"
+								add code to select which syscall table to use based on wether the
+								current process is DREMOTE or not. re-define the PTREGSCALL macro to
+								create two macros when used, one normal, one om_ version, that calls
+			need to know x86_64 asm!		our om_ptregscall_common entry to wrap the call. we provide our own
+								om_stub_execve that sends things remote, call openmosix_pre_usermode
+								on the return path from syscall, and add assembly code to create
+								usermode threads, define a user_child_rip helper function.
+018	x86_64,omguest	creates arch/x86_64/kernel/omasm.h	this is the syscall table called by processes that are guests.
+								it contains a mapping of wether a function is to be passed to the
+								home node, or processed locally.
+019	x86_64,omguest	arch/x86_64/kernel/sys_x86_64.c		redirect sys_mmap2 so that remote processes mapping memory without	<linux/hpc.h>
+								MAP_ANONYMOUS get forwarded to remote_do_mmap
+020	x86_64,rmem	arch/x86_64/lib/copy_user.S		use deputy_copy_(to|from)_user when appropriate	in copy_(to|from)_user
+021	x86_64,rmem	arch/x86_64/lib/usercopy.c		forward __strncpy_from_user, and strncpy_from_user to 
+								deputy_strncpy_from_user when openmosix_memory_away(). forward 
+								__strnlen_user and strnlen_user to deputy_strnlen_user when 
+								openmosix_memory_away().
+022	rmem		fs/namei.c				modify getname to use deputy_strncpy_from_user to get the filename 
+			function of tmp or __getname?		requested from userspace for getname when openmosix_memory_away()
+023	omprocfs	fs/proc/base.c				this patch adds hpc/(where|stay|debug) files to all processes in the 	<hpc/hpc.h>
+								system, in their /proc/$PID/ directories. all of the code in this file
+								is surrounded in #ifdef CONFIG_OPENMOSIX so as not to disturb the
+								native code. in the first hunk, we include our header. in the second,
+								we add entries for PROC_TGID_OPENMOSIX, PROC_TGID_OPENMOSIX_WHERE,
+								PROC_TGID_OPENMOSIX_STAY, and PROC_TGID_OPENMOSIX_DEBUG into enum
+								pid_directory_inos. in the third, we add entries for
+								PROC_TID_OPENMOSIX, PROC_TID_OPENMOSIX_WHERE,
+								PROC_TID_OPENMOSIX_STAY, and  PROC_TID_OPENMOSIX_DEBUG into the same
+								enum, only later. our fourth patch adds an entry for 
+								PROC_TGID_OPENMOSIX/"om" in the tgid_base_stuff structure. the fifth 
+								hunk adds an entry for PROC_TID_OPENMOSIX/"om" in structure 
+								tid_base_stuff. hunk six adds a pair of structures 
+								(tgid_openmosix_stuff and tid_openmosix_stuff), containing entries for	
+								PROC_TGID_OPENMOSIX_WHERE/"where", PROC_TID_OPENMOSIX_WHERE/"where",
+								PROC_TGID_OPENMOSIX_STAY/"stay", PROC_TID_OPENMOSIX_STAY/"stay",
+								PROC_TGID_OPENMOSIX_DEBUG/"debug", and 
+								PROC_TID_OPENMOSIX_DEBUG/"debug". hunk seven then adds 
+								proc_pid_openmosix_read and proc_pid_openmosix_write functions, and a
+								file_operations structure named proc_pid_openmosix_operations
+								mapping .read and .write functions to proc_pid_openmosix_read and 
+								proc_pid_openmosix_write, respectively.
+								we then forward declare proc_tid_openmosix_operations,
+								proc_tid_openmosix_inode_operations, proc_tgid_openmosix_operations,
+								and proc_tgid_openmosix_inode_operations structures.
+								hunk eight adds a pair of cases to the large switch in 
+								proc_pident_lookup that map all eight of
+								PROC_TG?ID_OPENMOSIX(_(WHERE|STAY|DEBUG))? to their respective 
+								operation structures, and inode operations structures in the case of
+								the containing directories. finally, we provide implimentations for the	
+								functions proc_tgid_openmosix_readdir and proc_tid_openmosix_readdir
+								that return tgid_openmosix_stuff and tid_openmosix_stuff, respectively.
+								we provide implimentations of the proc_tgid_openmosix_operations and
+								proc_tid_openmosix_operations structures, mapping .read to 
+								generic_read_dir and .readdir to our own proc_tgid_openmosix_readdir or	
+								proc_tid_openmosix_readdir. we provide implimentations of the functions	
+								proc_tgid_openmosix_lookup and proc_tid_openmosix_lookup that are
+								nothing but wrappers calling proc_pident_lookup with
+								tgid_openmosix_stuff or tid_openmosix_stuff, respectively. finally, we
+								provide implimentations of proc_tgid_openmosix_inode_operations and
+								proc_tid_openmosix_inode_operations that map .lookup to
+								proc_tgid_openmosix_lookup an proc_tid_openmosix_lookup, respectively.
+024	omprocfs	fs/proc/root.c				call openmosix_proc_init inside proc_root_init.				hpc/hpc.h
+025	kcore		fs/select.c				EXPORT_SYMBOL_GPL(do_select); if CONFIG_KCOMD				
+026	i386,arch_mig	creates hpc/arch-i386.c			this file contains archetecture specific send/receive code, along with	http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
+								(in the case of x86) compatibility/conversion routines for translating	<hpc/debug.h>
+								state between two different but compatible floating point register	<hpc/protocol.h>
+								save/restore subsystems. first, we forward declare twd_fxsr_to_i387 and	<hpc/arch.h>
+								twx_i387_to_fxsr, and utilize them in creating fxsave_to_fsave and 	<hpc/task.h>
+								fsave_to_fxsave functions. after that, we add the arch specific receive	<hpc/hpc.h>
+								functions arch_mig_receive_specific, arch_mig_receive_proc_context,	<hpc/prototype.h>
+								and arch_mig_receive_fp. arch_mig_receive_specific is a stub that 
+								returns 1 by default, but 0 if the passed structure's type is set to
+								MIG_ARCH_I386_LDT. receive_proc_context copies values from the 
+								passed omp_mig_task to the user registers, debug registers, FS, GS, and 
+								the GDT's TLS entries. arch_mig_receive_fp uses the fxsave conversion	
+								functions to receive the floating point state, changing format if
+								necissary. arch_mig_send_pre is created to clear the LDT, 
+								arch_mig_send_post to load the LDT, if there is one. then a stub 
+								arch_mig_send_specific that looks like it was to "send" the LDT, but 
+								instead prints a warning. we then add arch_mig_send_fp, which calls
+								unlazy_fpu, then fills in the fp state(along with the fxsr flag).	
+								next we have arch_mig_send_proc_context, which copies the user, debug,	
+								GS, and GS registers, along with the GDT's TLS entries. if the task	
+								is marked DDEPUTY, we also copy the boot cpu's features. 		
+								arch_kickstart is the function called to jump from openmosix kernel
+								code, into the newly created process. it set all the user registers, 
+								sets the debug registers, loads the TLS, sets up the segmentation
+								registers FS and GS, sets CS to our __USER_CS, flushes signals, then 
+								jmps to ret_from_kickstart. at this point theres a break in the file, 
+			split this back off			like this section used to be another file. we include some headers,	<hpc/syscalls.h>
+								then define arch_exec_syscall, which dumps some debugging, then calls a
+								given syscall, returning what the syscall returns. we define asmlinkage
+								om_sys_fork, which calls remote_do_fork,
+								and the asmlinkage om_sys_clone, which does some setup, then calls 
+								remote_do_fork with different arguments than the previous function.
+027	ppc,arch_mig	creates hpc/arch-ppc.c			very similar to the previous file, but cleaner. 			<asm/uaccess.h>
+								arch_mig_receive_specific is a stub, returning 0.			<linux/kallsyms.h>
+			arch_mig_receive_proc_context and	arch_mig_receive_proc_context fills the passed structure with the 	<linux/sched.h>
+			arch_mig_send_proc_context are the	contents of the user registers of the current process.			<hpc/debug.h>
+			same! oops!				arch_mig_receive_fp loads the current process' thread state with the 	<asm/ptrace.h>
+								floating point registers, scratchpad, and second scratchpad register	<hpc/prototype.h>
+			could we use const elsewhere to flag	from the passed in omp_mig_fp *. arch_mig_send_pre and			<hpc/protocol.h>
+			the previous mistake?			arch_mig_send_post are void stubs. arch_mig_send_specific is a stub	<hpc/arch.h>
+								that returns 0. arch_mig_send_fp fills the passed structure with the
+								contents of the floating point registers, the scratchpad, and second
+								scratchpad from the current process. arch_mig_send_proc_context
+								fills the passed structure with the contents of the user registers of
+								the current process. arch_kickstart branches to ret_from_kickstart,
+								to jump into userspace code in a newly created remote process
+								from openmosix kernel code. arch_exec_syscall calls a given syscall,
+								returning the results the syscall returned.
+028	x86_64		creates hpc/arch-x86_64.c		similar to the previous file.						<asm/uaccess.h>
+								arch_mig_receive_specific is a stub, returning 0. 			<linux/kernel.h>
+								arch_receive_proc_context copies from our task structure to our		<linux/kallsyms.h>
+			none of these functions return failure.	omp_mig_task structure the user registers, ds, es, fs, gs, fsindex,	<linux/sched.h>
+			why do they not return void?		gsindex, then uses write_pda to set gs to point to the per-processor	<hpc/debug.h>
+								datastructure. arch_mig_receive_fp calls unlazy_fpu, then memcopies the	<asm/ptrace.h>
+								thread.i387 datastructure. arch_mig_send_pre clears the LDT,		<asm/desc.h>
+								arch_mig_send_post loads the LDT (if we have one in our context). 	<asm/i387.h>
+								arch_mig_send_specific is a stub, returning 0.				<hpc/protocol.h>
+								arch_mig_send_proc_context copies from our omp_mig_task structure to 	<hpc/arch.h>
+								our taso structure the user registers, ds, es, fs, gs, fsindex, 	<hpc/task.h>
+								gsindex, then uses read_pda to get the pointer to our per-processor	<hpc/syscalls.h>
+								datastructure out of the gs register. arch_kickstart sets debugging 	<hpc/prototype.h>
+								registers 0-3,6,7, loads up the segmentation registers, flushes
+								pending signals, and jmps to ret_from_kickstart. arch_exec_syscall just
+								calls a given syscall returning the results the syscall returned.
+								asmlinkage om_sys_fork calls remote_do_fork. om_sys_iopl, om_sys_vfork,
+								om_sys_clone, om_sys_rt_sigsuspend, and om_sys_signalstack are declared
+								as unimplimented functions, printing an error and returning -1 when
+								called.
+029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. we use tcp/ip	<linux/sched.h>
+								sockets to pass information back and forth between kernels.		<linux/socket.h>
+			sock and sk need sync'd			first, we define three timeout variables (conn_remote_timeo,		<linux/in.h>
+								comm_connect_timeo, and comm_reconn_timeo), which are initialized from  <linux/in6.h>
+			bad comments				values #defined elsewhere. comm_shutdown, is a wrapper to safely call 	<linux/net.h>
+								sock->ops->shutdown. comm_getname is a wrapper to safely call   	<hpc/mig.h>
+								sock->ops->getname. it returns -1 if somethings null that shouldnt be,	<hpc/debug.h>
+								or if getname returns null. comm_data_ready is a wrapper which calls 	<hpc/comm.h>
+								wake_up_interruptable to wake up task(s) in the sockets sleeping task	<hpc/task.h>
+			who else needs to do this?		queue. comm_setup_tcp first saves our current address space limit,	http://mail.nl.linux.org/kernelnewbies/2001-11/msg00204.html
+								turns on kernel address space, uses sock_setsockopt
+			should this be comm_wrappers.c?		to set SO_KEEPALIVE, then uses sock->ops->setsockopt to set
+								TCP_KEEPINTVL TCP_KEEPCNT, TCP_KEEPIDLE, and TCP_NODELAY. it restores	http://www-128.ibm.com/developerworks/linux/library/l-hisock.html
+								our origional address space limit, and exits. comm_socket is a wrapper
+								around sock_create, returning NULL on error. comm_bind is a wrapper
+			missing checks!				around sock->ops->bind that logs an error via printk, comm_listen is a
+			missing checks!				wrapper around sock->ops->listen. comm_connect connects to a remote
+			missing checks!				kernel via the passed socket, to the passed address. it adds the
+								current process to the socket's sleeping task queue, and asynchronously	
+								asks for the connection to be established. we enter a loop, marking 
+								the current process TASK_INTERRUPTIBLE, requesting connection
+								establishment asynchronously, then uses schedule_timeout to go away. 
+								when the connection succeeds, we leave the loop, mark the current 
+								process TASK_RUNNING, and return 0. comm_close is a wrapper around 
+								sock_release. comm_peek returns wether a socket has data pending. 
+			sighfile needs more docs.		comm_poll waits on an "event" to occur on a socket via poll(), until
+								the passed timeout period, or MAX_SCHEDULE_TIMEOUT. it uses a similar
+								method as the earlier comm_connect, only we use poll() to see if there	
+								is any data waiting for us on the socket. if there is, return 1,  
+			comm_wait should be a define?		otherwise we return 0 when we hit our timeout period. comm_wait is a 
+								wrapper around comm_poll, filling in some default parameters. com_accept
+								receives a passed socket thats been connected to, creates a new socket, 
+								and uses it to accept a connection from a remote kernel. once comm_poll
+								indicates theres data on the passed socket, we use comm_setup_tcp 
+								to set the connection options on the new socket. if that succeeds, we 
+								return 0. otherwise, we destroy our newly created socket, and return 
+								the relevant error. comm_dorecv wraps the sock_recvmsg api to
+			s/lenght/length				read a given ammount of data from a socket. comm_recv wraps
+								comm_dorecv, but also uses the address space change trick of earlier to
+								jump into KERNEL_DS, and in case of short read we OMBUG(), then call 
+								comm_shutdown(link), returning the error from comm_dorecv. comm_send
+			when should we printk,			uses the address space change, then wraps sock_sendmsg(). in case of 
+			when should we OMBUG()?			short send, it printks and just returns the error. next is a 
+								"openmosix specifics start here" marker in the comments.		<hpc/protocol.h>
+								set_our_addr sets up the passed sockaddr structure with its default
+								family, INADDR_ANY, and the passed port. comm_setup_listen uses 
+								comm_socket, comm_bind, and comm_listen to set up a listening socket. 
+								comm_setup_connect opens a connection to a target
+								kernel using comm_socket, then comm_connect. comm_send_hd sends a data
+								segment, with a omp_req header, then the data itsself.
+								finally, comm_send_req sends a omp_req structure, containing only the
+								type, no data.
+030 	rmem		creates hpc/copyuser.c			this file contains routines for moving chunks of memory over an		<linux/sched.h>
+								established connection. its broken into two parts, deputy_* functions,	<hpc/protocol.h>
+								and remote_* functions. deputy_ functions are run on the home node, and	<hpc/debug.h>
+								remote_ functions run on the node a process has been migrated to.	<hpc/prototype.h>
+								deputy_copy_from_user requests a given memory segment from the remote	<hpc/hpc.h>
+								node. it uses comm_send_hd to send the address to read and the size to 
+			OMDEBUG_CPYUSER() is being used in the	read to the remote host. it then uses comm_recv to recv the results
+			deputy code to printk with a unique	directly to the passed destination. its symbol is exported via 
+			format?					EXPORT_SYMBOL(). deputy_strncpy_from_user requests a given memory
+								segment from the remote node, and should be merged with the previous
+								function. it uses comm_send_hd to send the address to read and the size
+								to read to the remote host. it then uses comm_recv to recv the results
+								directly to the passed destination. its symbol is not exported.
+								deputy_copy_to_user functions similarly, using comm_send_hd to send the
+								address to write and the size, then comm_send to send the data to be 
+								written to the remote node. its symbol is EXPORT_SYMBOL'd. 
+								deputy_strnlen_user sends the address and length via comm_send_hd, then
+								uses comm_recv to get the result from the remote node. its symbol is 
+								EXPORT_SYMBOL'd. deputy_put_userX writes a value of 64bits or less 
+								using a single call to comm_send_hd. its symbol is not exported. 
+								deputy_put_user puts a long to remote by calling deputy_put_userX. 
+								its symbol is EXPORT_SYMBOL'd. if BITS_PER_LONG < 64, we create a 
+								deputy_put_user64 that uses deputy_put_userX to put a up to 64 bit 
+								value to remote, and EXPORT_SYMBOL it. deputy_get_userX gets a 64 bit 
+								or less value from remote using comm_send_hd, then comm_recv. its 
+								symbol is not exported. deputy_get_user wraps deputy_get_userX, 
+								warning us if its asked for something greater than sizeof(long). its 
+								symbol is EXPORT_SYMBOL'd. if BITS_PER_LONG < 64, we create a 
+								deputy_get_user64 that uses deputy_get_userX to get a 64 bit value 
+								from the remote node. its symbol is EXPORT_SYMBOL'd. at this point, we
+								start into code running on the remote node, responding to the above 
+								sections of code. remote_copy_user handles requests from d
+								eputy_copy_to_user and deputy_copy_from_user. its symbol is not
+								exported.  remote_strncpy_from_user performs strncpy_from_user on 
+								behalf of deputy_strncpy_from_user. it uses comm_recv to get its 
+								target, and comm_send to return the results. its symbol is not
+								exported. remote_strnlen_from_user performs strnlen_user or strlen_user
+								on behalf of deputy_strnlen_user. it works similarly to
+								remote_strncpy_from_user. its symbol is not exported. remote_put_user
+								will use put_user on behalf of the home node in up to a 64bit size. its
+								missing BITS_PER_LONG logic that should be like the following function.
+								its symbol is not exported. remote_get_user is structured similarly.
+								its got BITS_PER_LONG==64 logic. its symbol is not exported. finally, 	 
+								we have remote_handle_user, which is the function that dispatches up to
+								above remote_ functions. it calls com_recv looking for a req structure.
+								other than that, its a large select case. we return from it when we 
+								receive a endtype packet, returning 0. if theres an unrecognised
+								packet, we call remote_disappear to die.
+031	omctrlfs	creates hpc/ctrlfs.c			omctrlfs is the future filesystem for performing migration and		http://osdir.com/ml/linux.cluster.openmosix.devel/2006-01/msg00028.html
+								remote process state monitoring. this file is a stub of support for	<linux/config.h>
+								this filesystem type. CTRLFS_MAGIC is the magic string at the begining	<linux/module.h>
+								of the FS for the filesystem layer to recognise this FS type. 		<linux/fs.h>
+								ctrlfs_fill_super wraps simple_fill_super(), passing it our		<linux/mount.h>
+								CTRLFS_MAGIC, and our empty list of files.  ctrlfs_get_sb wraps
+								get_sb_single(), telling it to use ctrlfs_fill_super to generate our
+								filesystem's superblock. we then have a file_system_type structure, 
+								mapping .get_sb to our ctrlfs_get_sb, and .kill_sb to a generic cleanup
+								function. om_ctrlfs_init is called from the kernel to init the 
+								module. it calls register_filesystem() with the previously defined
+								file_system_type structure. om_ctrlfs_exit is called previous to
+								removing the module. it calls simple_release_fs(), then
+								unregister_filesystem(). we then define the init and exit points for
+								the module, register the license and the author.
+032	debug		creates hpc/debug.c			this file contains debugging assisting code. it starts with debug_mlink	<asm/uaccess.h>
+								which is a wrapper which printks the address of a socket. 		<linux/kallsyms.h>
+								debug_page creates a checksum of a 4096 byte page of memory, and 	<linux/sched.h>
+			check incoming pointers!		printks the results. debug_vmas dumps the starting address and ending	<linux/config.h>
+								address of each vma belonging to a given mm_struct. debug_signals is a	<hpc/debug.h> <hpc/protocol.h> <hpc/comm.h>
+								stub, not printking anything of value.
+033	debugfs		creates hpc/debugfs.c			this file contains the debugfs module. it starts with a dentry		<hpc/hpc.h>
+								structure for the om/ debugfs directory itsself, then we define four 
+								file entries, pointing the migration, syscall, rinode, and copyuser
+			move om_opts here?			files to entries the om_opts structure (defined in hpc/kernel.c), 
+			we don't seem to be using these		and an array of dentry structures for the four files. om_debugfs_init
+			debug values anywhere else, what is	is called to initialize the module. it calls debugfs_create_dir to 
+			the use of this code?			create the om debugfs directory, then debugfs_create_u8 to create
+								entries to our four files in the directory. om_debugfs_exit is called
+								previous to removing this module. it uses debugfs_remove to destroy the
+								entries for the four files, then the directory itsself. we then have
+								code defining the entry and exit points of the module, the license,
+								and the author.
+034	i386,arch-debug	creates hpc/debug-i386.c		archetecture specific debugging code, i386 version. om_debug_regs dumps	<asm/uaccess.h>
+								the user register set of the passed in, or current process otherwise	<linux/kallsyms.h>
+			remove one uaccess.h include.		known as the pt_regs structure. if no pt_regs structure is passed in,	<linux/sched.h>
+			remove one ptrace.h include.		we use ARCH_TASK_GET_USER_REGS to retreive the structure from the	<hpc/debug.h>
+								current process. debug_thread dumps thread related registers. 		<asm/ptrace.h>
+								show_user_registers is shamelessly stolen according to the comments,	<asm/desc.h>
+								and does a much better job of dumping the full state of a user process	<asm/i387.h>
+								than om_debug_regs, including code pointer, stack pointer.. lots of	<asm/uaccess.h>
+								debugging.								<asm/ptrace.h> <hpc/protocol.h> <hpc/arch.h> <hpc/task.h>
+035	ppc,arch-debug	creates hpc/debug-ppc.c			archetecture specific debugging code, ppc version. om_debug_regs dumps	<asm/uaccess.h> <linux/kallsyms.h> <linux/sched.h>
+								the pt_regs structure passed in, or if NULL is passed in, the pt_regs	<hpc/debug.h> <asm/ptrace.h> <asm/uaccess.h>
+			remove one uaccess.h, one ptrace.h	structure of the current process. debug_thread and show_user_registers	<asm/ptrace.h> <asm/processor.h> <hpc/protocol.h>
+								are stubs, doing nothing and returning nothing.				<hpc/arch.h>
+036	x86_64,		creates hpc/debug-x86_64.c		archetecture specific debugging code, x86_64 version. om_debug_regs	<asm/uaccess.h> <linux/kallsyms.h> <linux/sched.h>
+	arch-debug						dumps the pt_regs structure passed in, or if NULL, of the current 	<hpc/debug.h> <asm/ptrace.h> <asm/desc.h>
+			remove one uaccess.h, one ptrace.h	process. debug_thread and show_user_registers are stubs, debug_thread	<asm/i387.h> <asm/uaccess.h> <asm/ptrace.h>
+								only printking a line, and both and returning nothing.			<hpc/protocol.h> <hpc/arch.h> <hpc/task.h>
+037	omremote	creates hpc/deputy.c			deputy.c contains functions for servicing requests from a remote	<linux/sched.h>
+								process, AKA, communication to the home node, from a process that is a	<linux/signal.h>
+								guest on a remote node. first, theres deputy_die_on_communication, 	<linux/file.h>
+			rename deputy_die_on_communication to	which in spite of its name is called by deputy_process_communication to	<linux/mount.h>
+			deputy_die				kill the deputy when communication with the remote node containing the  <linux/acct.h>
+								remote half of the process fails. it printk's a message, then calls	<asm/mmu_context.h>
+								do_exit(SIGKILL). deputy_do_syscall receives a syscall request from the <hpc/comm.h>
+								remote process and executes it, returning the result. deputy_do_fork	<hpc/task.h>
+								processes a fork on behalf of the remote process. it opens up a new	<hpc/mig.h>
+								connection to the remote node, calls do_fork, then uses task_set_comm	<hpc/arch.h>
+								to make the child process communicate over the newly created		<hpc/syscalls.h>
+								connection. deputy_do_readpage uses task_heldfiles_find to find a	<hpc/debug.h>
+								given file owned by the current deputy process,	maps a single page into	<hpc/prototype.h>
+								memory, sends the contents to the remote node, then unmaps the page. 
+								deputy_do_mmap_pgoff is called by do_mmap_pgoff in mm/mmap.c to perform
+								the same function as do_mmap_pgoff's lower half, with differences for
+								deputy processes. to accomplish this, we allocate memory for a vma 
+								structure from SLAB_KERNEL and zero it. we set up a vma structure in
+								this memory coresponding to the memory area we've been requested to 
+								occupy, and pass it to our passed file *'s mmap f_op handler. we then
+								add this file to our held files for this process by calling
+								task_heldfiles_add. theres a comment here indicating that we're 
+			fill in missing code!			supposed to insert the vma into our current->??, but the code for that
+								isn't yet written. deputy_do_mmap is called from 
+								deputy_process_communication below. it uses do_mmap_pgoff in mm/mmap.c 
+								to mmap a file into the deputy, and returns the mmapped region's 
+								contents to the remote host. bprm_drop is used by the later declared
+								__deputy_do_execve to destroy a linux_binprm structure, which is an 
+								executable program and arguments, destroying its pages, its security	http://www.kernel-api.org/docs/online/1.0/da/d1e/structlinux__binprm.html
+								context, mm structure, and calling fput() on all its writable files.
+								__deputy_do_execve uses search_binary_handler to attempt execve on 
+								the home node. if it was successful, we have a FIXME indicating we 
+								should be freeing the pages containing our arguments. 
+								we then free bprm our security context, call acct_update_integrals
+								(to tell the accounting system about the new process), free the
+								bprm structure, and "return" to the new process. otherwise, we use the
+								above bprm_drop to clean up the failed execve attempt. 
+								deputy_setup_bprm is used by the below deputy_do_execve to setup a bprm
+								structure suitable for execution by __deputy_do_execve. we allocate
+								space for our bprm structure from GFP_KERNEL. we use open_exec to 
+								attempt to open our executable. if that succeeds, we fill in the bprm's
+								file, filename, interp, and mm members, using mm_alloc to fill in
+								mm. we use init_new_context to accomplish any archeteture specific 
+								requirements. on x86, this function copies the local descriptor table 
+								of the current process to the new process, assuming it has been 
+								customized. we copy argc and envc, making sure neither is less than
+								zero. we allocates a security context, then use prepare_binprm to fill
+								in the rest of the bprm structure. we use copy_strings_kernel to copy
+								our filename, our safely copy our filename, argv, and envp array
+								into kernel pages, instead of user space memory. if any of the above
+								fails, we use bprm_drop to clean up in case of error. deputy_do_execve
+								processes an execve request from the remote process to execve a new
+								executable. it calls comm_recv to receive the requested file, argv, and
+								envp, deputy_setup_bprm to get a brpm structure ready to execute, then
+								__deputy_do_execve to perform the work. we then use comm_send_hd to
+								send back an empty reply. if any of the above fails, we call bprm_drop
+								to destroy our bprm structure. deputy_do_sigpending is a wrapper around
+								do_signal. it has code for doing more, but its dead/unused code. 
+								deputy_process_misc checks for pending dreqs, and dispatches them to
+								task_do_request. it then checks for pending signals, and dispatches
+								them to deputy_do_sigpending. its called by deputy_main between
+								communication events. deputy_process_communication contains the switch 
+								case that calls the aforementioned functions. it calls
+								deputy_die_on_communication if comm_recv returns an error, if the type
+								member of the req received is zero, or if one of the functions we call
+								returns negative. deputy_main_loop is the userspace loop that is 
+								executed on the home node when a process has gone remote. it calls 
+								deputy_process_communication when comm_wait returns true. it then calls
+								deputy_process_misc to accomplish dispatching of events. deputy_startup
+								uses task_set_dflags to mark this task as deputy, flushes a signal that
+								pops up for unknown reason, according to a fixme, and calls exit_mm,
+								which is a forward declare from kernel/exit.c.
+038	omremotefile	creates hpc/files.c			this file contains routines for handling file access on the home node	<linux/fs.h>
+	omremotedentry						for processes that are running on a remote node. it starts by declaring	<linux/list.h>
+			move remote_aops inside of 		two structures. remote_aops is an address_space_operations structure,	<linux/sched.h>
+			rdentry_create_entry			mapping .readpage to remote_readpage, and not touching any other	<linux/file.h>
+								mappings. the second structure is remote_file_operations, mapping .mmap	<linux/pagemap.h>
+								to remote_file_mmap, and not touching any other mappings.		<linux/mm.h>
+								task_heldfiles_add is called by deputy_do_mmap_pgoff in hpc/deputy.c,	<hpc/comm.h>
+								to create and insert a om_held_file structure representing a file into	<hpc/prototype.h>
+								our linked list of held files. it allocates the om_held_file struct	<hpc/debug.h>
+								from GFP_KERNEL, uses get_file to increment the file usage counter, 	http://www.faqs.org/docs/kernel_2_4/lki-3.html
+			remove nb member?			fills in the om_held_file's file and nb entries with our passed file
+								pointer, fills in rfile->nopage with nopage from the
+								vm_operations_struct passed in, and inserts our om_held_file struct
+								into task->om.rfiles with list_add. we then return 0, since get_file
+								and list_add can't return errors. task_heldfiles_clear is called by
+								openmosix_task_exit to destroy the linked list containing all the files
+								held by the process. for each file in the list, it calls fput to
+								decrement the file usage counter, then frees the om_held_file
+								structure. task_heldfiles_find searches the list of heldfiles for a
+								om_held_file whos file member matches the passed in file pointer. it
+								uses list_for_each_entry to iterate over items. if it finds a match,
+								we return the heldfile, otherwise, we printk() an error, and return
+								NULL. next we have a structure declaration that has been commented out
+								with a #if 0 block. it was to declare a backing_dev_info structure.
+								after that, theres a break in the file, indicating the rest of the file
+			why is rfiles in the task structure,	is different from the above. this section starts by defining the
+			and dentries are stored globally?	om_remote_dentry structure, then defining a spinlock, and a list_head 
+								for containing remote dentries. rdentry_delete aquires the 
+			remove dead code.			remote_dentries spinlock, and removes the first entry in the list with
+								a dentry member that matches the passed in dentry. if it dosent find a
+								matching entry, it calls BUG(), and returns -ENOENT. rdentry_iput frees
+								a passed inode's generic_ip member (which contains our rfile_inode_data
+								structure), then calls iput to both push an inode's contents to disk, 
+								and decrement its usage counter. the struct remote_dentry_ops maps
+								its .d_delete and .d_put entries to the previous two functions. the
+						 		previous two functions, and this structure are not used anywhere in
+								the code. we declare a super_operations structure, containing no
+								operations, then we use this structure to fill the .s_op member when
+								declaring a super_block structure, also filling the .s_inodes member 
+			move remote_file_vfsmnt inside of 	with a new LIST_HEAD. struct remote_file_vfsmnt is a "empty"
+			rdentry_create_file.			vfsmount structure, contining five list heads, and a mount count. it is
+								declared to be its own parent. rdentry_add_entry creates an to
+								om_remote_dentry structure to contain a passed in dentry. it
+								allocates the om_remote_dentry from GFP_KERNEL, sets the dentry member
+								to the passed dentry, aquires the remote_dentries spinlock, adds the
+								om_remote_entry to the remote_dentries list, and releases the spinlock.
+								if the kmalloc fails, we return -ENOMEM, otherwise we return 0. 
+								rdentry_create_dentry is called by rdentry_create_file to create a new
+								dentry coresponding to the passed in rfile_inode_data. along the way,
+								it also registers the dentry with rdentry_add_entry. first, we create
+								a new inode, backed by our dummy rfiles_dummy_block. we create a
+								duplicate of the passed in rfile_inode_data allocated from GFP_KERNEL,
+								and set inode->u.generic_ip (the inodes private data space) to point to
+								the new copy. the inode's file and address space operations are pointed
+								to our earlier stubs remote_file_operations, and remote_aops. we 
+								allocate a dentry using d_alloc, set its inode to this new inode, set
+								its .name to be "/", and makes it its own parent. we use 
+								rdentry_add_entry to add this to our remote_dentries list, and return
+								the new dentry. the error handling in this function seems VERY broken.
+								if either of our alloc calls fails (kmalloc or d_alloc), we free our
+								passed in data(!), call iput on our allocated inode, and return NULL.
+								rfile_inode_get_data is a wrapper returning inode->u.generic_ip.
+								rfiles_inode_get_file is a wrapper returning 
+								rfile_inode_get_data(inode)->file. rfiles_inode_compare is a wrapper
+								that memcmps the passed inode's private data space against a supplied
+								rfile. returning the result. rdentry_find finds a rdentry whos dentry's
+								inode matches the passed in inode. it grabs the remote_dentries 
+								spinlock, and uses list_for_each_entry to cycle through all of the 
+								rdentries, comparing to rdentry->dentry->d_inode. if it finds a match,
+								it breaks out, unlocks the spinlock and returns the dentry of the
+								rdentry structure that was a match. otherwise, it unlocks the spinlock
+			verify this works.			and returns NULL, due to the last dentry being NULL.
+								rdentry_create_file creates a file pointer matching the supplied
+								rfile_inode_data. it uses get_empty_filp to create an empty file
+								pointer, then uses dget(rdentry_find(data)) to get a dentry pointing to
+								the passed rfile_inode_data. if dget fails, we call
+								rdentry_create_entry to create a dentry pointing to our passed
+								rfile_inode_data. if our rdentry_create_entry call fails, we call 
+								put_filep to close our file pointer, and return NULL. otherwise, we use 
+								the remote_file_operations and remote_file_vfsmnt structures to set the
+								file pointer's f_op and f_vfsmnt members, set f_dentry to our dentry,
+								and mark the file pointer FMODE_READ. we then return the file pointer.
+								task_rfiles_get is called by mig_do_receive_vma and remote_do_mmap to
+								search through the processes' vma pages, and check to see if any of 
+								them have a paticular file associated with them. first, we construct a 
+								rfile_inode_data containing our passed in origfile, node, and isize.
+								we then compare it against our list of rdentry files, using
+								rfiles_inode_compare. if rfiles_inode_compare returns true, 
+								task_rfiles_get returns the file pointer associated to the inode in
+								question. if not, it calls rdentry_create_file to create a
+								new rdentry containing the passed in file, an returns s the file
+								pointer returned from rdntry_create_file.
+039	kcomd		creates hpc/kcomd.c			kernel-to-kernel socket communication code. this file is set up to	<linux/sched.h>
+								create a kcomd.ko kernel module. it starts with three socket_		<linux/socket.h>
+								functions. socket_listen creates a socket, calls sock_map_fd to		<linux/in.h>
+								associate an fd to the socket, binds to it using its sock->ops->bind(),	<linux/in6.h>
+								starts listening using its sock->ops->listen(), sets the passed in 	<linux/net.h>
+								pointers res to point to the newly created socket, and returns the file	<linux/syscalls.h>
+								descriptor to the now established stream. if sock_create fails, we	<net/sock.h>
+								return -1. the sock_map_fd fails, we release our sock, assign NULL to	<net/tcp.h>
+								the address passed via res, and return -1. if either our bind or listen
+								fails, we close our fd, release our sock, assign NULL to res, and
+								return -1. socket_listen_ipv4 and socket_listen_ipv6 are called by
+								kcomd_thread to set up the correct type of listening socket. both
+								these functions are wrappers of the above socket_listen function.
+								they set up their appropriate type of sockaddr structure, and call
+			move these structures to a private	socket_listen. struct kcom_pkt is designed to contain a packet destined
+			header.					to a remote kernel. struct kcom_node is a container for a socket, and
+								the information reguarding the node it points to. kcom_task is the
+								structure that contains kcomd's knowlege about a migrated process. it
+								contains the pid of the process in question, a kcom_node structure 
+								defining what node a process is on, a list of processes communicating
+								with this node(?), a list containing outgoing packets, and a space for
+								one incoming packet. we define a spinlock and a list_head for
+								containing kcom_nodes. we then define sockets_fds as a fd_set_bits
+								structure. this structure is a more scalable version of a fd_set, used 
+								by do_select. we then declare sockets_fds_bitmap and maxfds, which are
+								set and used by the next function, alloc_fd_bitmap, to hold a 
+								dynamically grown array of fds. alloc_fd_bitmap takes the passed in fd
+								count, and if its greater than what the current sockets_fds_bitmap was
+								created to hold, frees sockets_fds_bitmap (and its contents), and
+								allocates a new one. if kmalloc fails, we return ENOMEM. otherwise, we
+								set the in, out, ex, res_in, res_out, and res_ex members of the
+								sockets_fds structue to offsets of our sockets_fds_bitmap structure,
+								and return 0. kcom_pkt_create creates a new kcom_pkt structure with the
+								len, type, and data members initialized to the passed in values. if
+								kzalloc fails, we return NULL. __kcom_node_find is called by the later
+								defined kcom_node_find to do the work of finding a node in our
+								kcom_nodes list that uses the passed sockaddr to communicate.  we use
+			doublecheck this return			list_for_each_entry and memcmp to compare the address of our sock with								
+			BUG: note the fixme reguarding memcmp	the address of our node(!). this function will return NULL if it fails.
+								kcom_node_find wraps __kcom_node_find, grabbing the kcom_nodes_lock
+								before entry, and releasing it afterward. kcom_node_add is called by 
+								accept_connection to create a new kcom_node struct, and adds it to the
+								kcom_nodes list. there is code commented out reguarding finding out if
+								the node is already in the list, but its incomplete. kcom_node_del 
+								removes a node from the kcom_nodes list that uses the passed in
+								sockaddr. we aquire the kcom_nodes spinlock, then use __kcom_node_find
+								to find the node structure to be deleted. if we don't find one, we
+								release the kcom_nodes spinlock, and return -ENOENT. otherwise, we call	
+								list_del to remove the node from our node list, release the spinlock,
+								close its fd, release its socket, free the node structure's memory, and
+			pull dead code.				return 0. comm_simple is a stub that returns 0, and is not used
+								elsewhere in the code. we then declare comm_ack, comm_iovec, and 
+								comm_iovec_ack, which also are not used anywhere else. 
+								accept_connection is called by kcomd_thread (declared later), to accept
+								an incoming connection on a passed in socket. it starts by allocating
+								a new socket, and calling the accept() operation of the passed in
+								socket to accept a connection from the passed in socket, on our new 
+								socket. theres a block of commented out code, for checking if a node 
+								is already in our node_list, but its unused/incomplete. we then use
+								sock_map_fd to get a file descriptor to this socket, add the node this
+								socket is communicating to to our node_list, and return our file
+								descriptor. if our socket allocation returns null, we return -1. if our
+								accept or sock_map_fd have problems, we release our socket, and return
+								-1. if our kcom_node_add fails, we close our fd, release our socket,
+								then return -1. data_read, data_write, and dispatch are all stubs that
+								return 0. data_read and data_write are called by kcomd_thread.
+								kcom_task_create creates a kcom_task structure allocated from
+								GFP_KERNEL for a given kcom_node and PID, initializing the pid, node,
+								and list members. if the kzalloc returns NULL, we return NULL. 
+								kcom_task_delete deletes the first entry in the nodes list that matches
+								the given PID. these task list manipulation functions are missing the
+								spinlock code that the above node_list manipulation code has. 
+								__kcom_task_find and kcom_task_find are formed like the above node find
+								code, but without its spinlock code. kcom_task_send uses 
+								kcom_pkt_create to add a packet to the task structure belonging to the
+								pid passed in. it has comments reguarding sleeping and replying, but 
+								instead it returns 0. kcomd_thread is the function executed in kernel
+								space, as a kernel thread. first, we call daemonize to create a "kcomd"
+								process. we then wait for a connection on an ipv4 and an ipv6 socket.
+								when we receive a connection, we enter a large while loop (which we 
+								never exit?). in this loop, we first call alloc_fd_bitmap to make sure
+								our fd bitmap is big enough to hold maxfds number of fds. we then zero
+								the in, out, and ex fd sets, add our two listening sockets to the in
+								set, add the listening fds of each node in our node_list to the in set,
+								add each fd in our node list that we have packets to send on to the out
+								set, zero the res_in, res_out, and res_ex set of fds, and call select.
+								if select returns -1, we return to the top of our loop. otherwise, we
+								test wether our v4 or v6 listening socket received a connection. if so,
+								we call accept_connection. we then test each fd belonging to our list
+								of nodes, and if they have data to read, call data_read (a NOP!), or 
+								if they have data to be written call data_write(also a NOP!). 
+								at this point, we return to the top of our never-ending while loop.
+								kcom_init calls kernel_thread to start the aforementioned kcomd_thread
+								function. the rest of the file is just module glue for creating a kcomd
+								module, licensing it GPL, and attributing Vincent Hanquez as the 
+								author.
+040	config		creates hpc/Kconfig			this file defines our openmosix menu options in the kernels
+								configuration system (menuconfig). we declare a top level menu titled 
+								"HPC Options". our configuration options all exist under this entry.
+								first, we create an entry defining KCOMD as a tristate, or an item that
+								can be either on (in the kernel), off, or a module (loadable and 
+								unloadable while the kernel is running). next we create an entry
+								defining OPENMOSIX as bool (in kernel, or not). this turns on or off 
+								the parts of openmosix that have to be in-kernel for openmosix to 
+								function. bool OPENMOSIX_VERBOSE is supposed to make openmosix more
+								verbose, but just serves to make OPENMOSIX_MIGRATION_VERBOSE and 
+								OPENMOSIX_DEBUG_FS visible. bool OPENMOSIX_MIGRATION_VERBOSE enables 
+								debugging messages of the form OM_VERBOSE_MIG(...) in
+								include/hpc/prototype.h. bool OPENMOSIX_DEBUG accomplishes many things.
+								first, it enables compilation and inclusion of hpc/debug.c, and an
+								archetecture specific hpc/debug-$(ARCH).c, both of which contain
+								functions for printing the state of various structures, processor
+								registers, and other associated values. then, it enables debugging
+								messages of the form OMDEBUG(...) in include/hpc/debug.h. it enables
+								the tracking of the contents of the structure openmosix_options in
+								include/hpc/hpc.h, and makes OPENMOSIX_MIGRATION_DEBUG and
+			remove dead code.			OPENMOSIX_DEBUG_FS visible. bool OPENMOSIX_MIGRATION_DEBUG 
+								dosent do anything, and can be safely removed. bool OPENMOSIX_DEBUG_FS
+								enables the compilation and inclusion of the contents of hpc/debugfs.c,
+								creating the om/ directory and its contents under the debugfs. bool
+								OPENMOSIX_CTRL_FS enables the compilation and inclusion of 
+								hpc/ctrlfs.c, which is the control filesystem used to tell the kernel
+								to migrate processes, as well as where to tell what node a process is
+								running on.
+041	openmosix	creates hpc/kernel.c			this file is the kernel's interface to the openmosix system. it	
+								contains only functions that are meant to be called by the kernel.
+								first, we export our openmosix_options datastructure, which contains
+								four constants that are used as "ceilings" for the OMDEBUG_* debugging
+								macros, settable through the debugfs. openmosix_pre_clone is called 
+								when a process requests the clone syscall, before the kernel starts 
+								processing it. in this function, we check wether the current process 
+								has requested a shared memory space between the two clones, and if it 
+								has, we mark the process as un-migratable for that reason, and increase
+								the usage count on its mm structure. note that as a result, both	
+								processes will be marked DSTAY_CLONE, and both will have a usage count 
+								+1 on the mm structure. processes are started with a usage count of 1.
+								openmosix_post_clone is called by the clone syscall, on the thread of
+								the parent, not the child, after the clone is completed. it checks the
+			magic!					mm_realusers counter. if its just 1, then somehow the process magically
+			is this supposed to happen when a	decresed its usage flag, and we clear the DSTAY_CLONE flag given to it
+			child dies, or otherwise drops the	by openmosix_pre_clone. task_maps_inode is supposed to check wether a 
+			shared mm? stub!			given task maps a given inode, but is just a stub. 
+			monkey?					openmosix_no_longer_monkey is called from __remove_shared_vm_struct
+
+								to request they be checked for why they're staying home. it uses the
+								tasklist_lock around its invocation of for_each_process(). since the
+								above function is a stub, this does nothing. stay_me_and_my_clones 
+								applies a bitmask of reasons to the current task, and all tasks that 
+								share its mm structure it uses for_each_process to iterate . obtain_mm allocates a 	
+								mm structure, initializes it, an makes it the context of the current
+								process. unstay_mm requests a re-evaluation of stayability for the
+								current process, an all processes that share mm structures. they manage
+								to impressively optimize away a hold of the lock for the common case. 
+								remote_pre_usermode calls remote_do_comm if theres pending input, when
+								a program thats hosted is about to run. deputy_pre_usermode jumps into
+								deputy_main_loop, instead of going to any real usermode code. 
+								openmosix_pre_usermode is also called before a process goes to
+								usermode. it checks for pending dreqs, and calls task_do_request, then
+								calls one of the above two functions depending on wether the process
+								is DDEPUTY or DREMOTE. openmosix_init is called on subsystem load. it
+								starts up the mig_daemon kernel thread. the last line declares the 
+								subsystem.
+42	config		creates hpc/Makefile			this Makefile contains the make fragment that tells the kernel source
+								how to build the openmosix hpc directory. they split the code into
+								five targets, obj-$(CONFIG_KCOMD) obj-$(CONFIG_OPENMOSIX) 
+								obj-$(CONFIG_OPENMOSIX_CTRL_FS) obj-$(CONFIG_OPENMOSIX_DEBUG)
+								and obj-$(CONFIG_OPENMOSIX_DEBUG_FS). this coincides with the configs
+								previously in linux/hpc/Kconfig.
+43	openmosix	creates hpc/migctrl.c			this file is functions for performing a migration related activity on
+								a given process. task_remote_expel runs on the remote node, and sends
+								a DREMOTE process back to its origional node. it calls do_exit for the	
+			who gets this result?			process, with SIGKILL as its reason for dieing. it even closes down
+								the link back to the home node. task_remote_wait_expel wraps the 
+								preceding function with a polite request to the home node, asking for
+								permission first. task_local_send sends a local (as in, this-is-home)
+								task to a remote host, opening and initializing a connection, then
+								calling mig_do_send() on the process. after sending the process remote,
+								it calls deputy_startup to enter the "current" process which is now a 
+								deputy stub into the deputy code. task_local_bring returns a remote
+								process to the current node, re-merging it with its deputy. it uses
+								obtain_mm to get a new mm struct, then mig_do_receive to do the "work".
+								it asks permission nicely. task_move_remove2remote is a stub. its 
+								eventual goal is obviously to handle moving a task between remote
+								hosts. the current code just migrates to or from the home node. 
+								__task_move_to_node moves a task to a given node, checking what method
+			return some sort of error to userspace	it should use. it will call remote2remote when appropriate, triggering
+								a bug, since that is a stub. task_move_to_node wraps 
+								__task_move_to_node, checking for a stay reason, and returning -1 if
+								there is a stay reason. task_go_home makes sure a task is DMIGRATED,
+								tries to send it home if so, and if its still DMIGRATED after calling
+								__task_move_to_node, printks an error. either way, it returns 0.
+								task_go_home_for_reason sends a node home, and makes sure a reason
+								why follows it home. the first if looks kinda bogus, but the rest of 
+								the function sets a stay reason, checks for DMIGRATED, and if it is,
+								sends it home via __task_move_to_node. if migration fails, we remove
+								the flag we added, and return the error value. 
+44	openmosix	creates hpc/migrecv.c			this file is functions for receiving pieces of processes, and filling	
+								in appropriate data structures, along with the openmosix mig_daemon.
+								mig_recv_hshake receives a handshake, and sends a stock reply, with
+								our OPENMOSIX_VERSION in it. it should check values from remote, but it
+								dosent. mig_do_receive_mm receives the members of the mm structure
+								between start_code and env_end. mig_do_receive_vma receives a vm area.
+								we use do_mmap_pgoff to create the mapping in the mm structure. we 
+								preserve the VM_(READ|WRITE|EXEC) protection flags and 
+								VM_(GROWSDOWN|DENYWRITE|EXECUTABLE) behavior flags, and use 
+								sys_memadvise to give the kernel the same memory access hints as were 
+								on the origional VM area. we have code for handling the file pointer,
+								but it is disabled, and broken in the newest version.
+								mig_do_receive_page receives a page of memory, and maps it into the
+								given task. we use find_vma to find the vma that should own this page.	
+								we then allocate memory for the page in userspace, and receive a page's 
+								worth of data. we use kmap and kunmap to have the page mapped into 
+								kernel memory space while so we can fill it. we alloc a pte entry 
+								addressing this page (and optionaly entries in the pmd, and pud), then	
+			use set_pte_atomic?			use set_pte to add that pte entry to the given process' mm structure. 
+								we apply the containing vma's vm_page_prot page protection flags. we 
+								unmap the automatic mapping created by pte_alloc_map using pte_unmap. 
+								page_dup_rmap marks the page as in-use, and inc_mm_counter marks the 
+								mm structure as owning one more page. in case of error, we return -1. 
+								mig_do_receive_fp sets the flag telling the scheduler this process uses
+								floating point math, then calls the archetecture specific function for 
+								receiving a floating point state. mig_do_receive_proc_context receives 
+								the processor context of a process. first, it calls the archetecture 
+								specific handler to set up things like processor registers and TLS 	
+								entries, then handles copying the cross-arch items, like id, user
+								credentials, signal related stuff. we have a note about copying an 
+								rlimit here, but no code to go with it.	we copy the task members comm 
+								and personality, and call arch_pick_mmap_layout to set the task->mm 
+								structure up. mig_do_receive contains the large select case that calls	
+								all the above functions. we use __get_free_page to get a page already 
+								mapped in GFP_KERNEL, then set the task in question's state flag to 
+								DINCOMING. we clear the used_math flag, and go into the receive loop.
+								in this loop, we first receive a req structure, then a req.dlen length
+								section into our page. if req.dlen is over a pagesize, we OM_BUG. 
+								after that, we decode req.type, and dispatch to the appropriate
+								function. the loop ends when we receive a ABORT, the default case, or
+								MIG_TASK is called, which is the last stage in migration. MIG_TASK's
+								case replies that migration is done, clears our state of DINCOMING,
+								flushes the tlb for this process, and returns 0. in case of failure,
+								we return -1. mig_handle_migration is the function that a newly
+								spawned, ready to be filled with state process is started in, in order	
+								for it to receive the contents of a process being migrated to this
+								node. we use task_set_comm() to setup our link back to the home node,
+								then obtain_mm to set up our new mm structure. we call mig_recv_hshake	
+								to start talking to the remote end, call mig_do_receive to receive all
+								the remote process data, reparent ourself to init, then run
+								arch_kickstart to jump from our deputy code, to the process (now
+								in a runable state). openmosix_mig_daemon is the migration daemon
+								itsself. it waits for communication, then launches a user thread in
+								function mig_handle_migration. we set our dflags to mark ourself as 
+								DREMOTEDAEMON, then initialize our socket/socketaddr. we use
+								set_our_addr to initialize the socketaddr, then comm_setup_listen to
+								open our listening socket. once we have a socket, we enter the
+								listening loop. in this loop, we run comm_accept to get a channel from
+								a remote kernel, and if we get one, we call user_thread, sending mlink
+								as the argument to the new process. if spawning returns an error, we
+								close mlink ourselves, on either case, we return to the top of loop,	
+								and wait for a new connection. 
+45	openmosix	creates hpc/migsend.c			migsend is the other half of migrecv, which is to say, its responsible
+								for tearing down a process, and sending it to a remote node.
+								mig_send_hshake sends a handshake containing a type, the OPENMOSIX
+								VERSION, and the task's personality structure, and sees if the hshake
+								the remote end replies with matches. if it dosent, we return -1.
+								otherwise, 0 for success. mig_send_fp sends the floating point state
+								of the given task to the remote end, if !used_math(). since used_math
+								takes no arguments, i'm going to assume it checks the current task,
+								instead of the task structure. mig_send_mm sends a section of the mm
+								structure of the given task starting at mm->start_code, and ending at
+								&mm->start_code+sizeof(struct omp_mig_mm), or mm->env_end.
+								mig_send_vma_file is supposed to send the file structure associated
+								with a vma vm area. in fact, this function is broken. at present, the
+								DREMOTE side of the if sets m->vm_file from inode->u.generic_ip, the
+								other side of the if sets m->vm_file from vma->vm_file. it ALSO sets
+								m->f_dentry from vma->vm_file->f_dentry. mig_send_vmas sends the vmas	
+								to the remote end. it loops through the vmas, copying start, flags,
+								and files to a omp_mig_vma struct. we then set size to vma.end -
+								vma.start. we set vm_pgoff to 0, and call mig_send_vma_file if there
+								is a file associated with this vm. we send the omp_mig_vma struct to
+								the remote end. mig_send_pages sends each page thats VM_READable to
+								the remote end. mig_send_proc_context has a slightly different order
+								than its twin. we fill in a omp_mig_task structure (arch-indep proc
+								state), then we call arch_mig_send_proc_context to send the arch
+								dependant state. we send the arch-indep state structure, then we wait	
+								for a reply, and return 0 if we get one. mig_do_send is the wrapper
+								that calls all the above in order. it returns 0 on success. 
+46	proc		creates linux/hpc/proc.c		this is the code behind proc/$PID/hpc/* . proc_pid_set_where is the
+								function called when a user echos a destination to 
+								/proc/$PID/hpc/where. we check for the string "home", and if so, call	
+								task_register_migration with the task, and NULL indicating home. if
+								we decode an ipaddress with string_to_sockaddr, we call
+								task_register_migration with the task, and the sockaddr. we return
+								size. proc_pid_get_where returns in buf the address of the machine
+								a node is running on, or "home" for the home node. the array 
+								stayreason_string contains the short strings matching the reasons
+								a process might be stuck on a given node. "monkey" means a process
+								is using shared writable memory maps. mmap_dev means a process has a
+								character device mmapped. i don't see any other stay reasons used in 
+								the code. proc_pid_get_stay writes to buf the staystrings matching
+								each reason set in the mask, and returns the length. 
+								proc_pid_get_debug writes to bug the hex value of task->om.dflags.
+								proc_admin_set_bring and proc_admin_set_expel printk a message, and
+								return the size passed in. proc_admin_get_version prints into buf the	
+								OPENMOSIX_VERSION_TUPPLE, and returns the length of said define. the
+								#define for E is just shorthand to make these declarations simpler.
+								proc_om_entry_admin contains the definitions of the contents of 
+								/proc/hpc/admin/. bring and expel can only be written to, version only
+								read. proc_om_entry_pid holds the definitions of the contents of 
+								/proc/$PID/om/. stay and debug can only be read, where can be read
+								or written. openmosix_proc_pid_getattr dispatches requests to the above
+								functions. it uses proc_om_entry_pid, which contains function pointers,
+								which is how this dispatching works. openmosix_proc_pid_setattr works
+								in much the same way, calling the set member of array proc_om_entry_pid
+								to dispatch. proc_callback_read reads an attribute, and returns it to
+								userspace. it gets a page in kernel space, then checks what filename it 
+								was requested to give results for. it browses through entry, to find 
+								what function pointer to call. it calls the function, placing the 
+								results in the free page requested earlier. we trunicate results if 
+								they overrun the requested result length, and use copy_to_user to copy 
+								our page to the passed buf. we free_page our page, and return 0. 
+								proc_callback_write is structured in a similar manner. we use
+								__get_free_page to get a GFP_USER page, and copy the data requested to
+								be written using copy_from_user. we use the same pointer tricks as
+								above to dispatch the call to the right function. we free the page
+								we requested, and return the length of data written. the preprocessor
+								defines around defining our file_ops handlers seems a bit unneeded, but
+								we define an admin subsystem's read and write calls here as the above.
+								proc_om_admin_operations maps .read and .write to proc_om_read_admin 	
+								and proc_om_write_admin. openmosix_proc_create_entry registers a file
+								with the /proc filesystem. we pass a supplied name and fileops struct
+								to create_proc_entry. openmosix_proc_init creates /proc/hpc/admin, and
+								registers the file handlers using the previous function.
+47	openmosix-rmt	creates linux/hpc/remote.c		this file is routines for the remote node to request work done by the 
+								home node. remote_disappear is the function our process jumps to when
+								its time to die. remote_inode_map is a vm_operations_struct mapping
+								.nopage to filemap_nopage. remote_file_mmap points the provided
+								vma->vm_ops to use remote_inode_map. remote_readpage follows a more
+								normal codepath. we make sure the passed page is mapped to kernel space	
+								(so we can write to it), we send the d_inode belonging to the file and
+								and the requested offset to the home node, get a reply, and write the
+								reply directly into the page passed in. we unmap the page, and return 0	
+								for success. remote_do_mmap sends the address, length, flags,
+								protection flags, fd, and pgoff to the remote node, and we receive a 
+								structure containing file and isize members. we pass our returned
+								result to task_rfiles_get(), and receive back a file pointer, which we
+								use in our own do_mmap_pgoff() call. in this way, the mmap is done on	
+								both the remote and home nodes. remote_wait waits for a req struct from	
+								the remote end, checks its type, and calls OMBUG if it wasn't the 
+								req.type expected. remote_do_signal is called when the deputy stub on
+								the home node receives a signal. we receive a omp_signal structure, 
+								grab the lock for this process' signal handler, and call
+								__group_send_sig_info() to call the signal handler. remote_do_comm
+								processes communication from the home node, on behalf of the remote
+								node. its set up to dispatch DEP_SIGNAL and DEP_COMING_HOME by calling	
+								remote_do_signal or task_remote_expell, appropriately.
+								remote_do_syscall sends a syscall request from the remote to the home
+								node. if comm_recv kicks up an error, we call remote_disappear, which
+								kills the process, and never returns. remote_do_fork performs a fork
+								call on the home node, connecting to the new process. we use 
+								sockaddr_inherit to make our new sockaddr have the same type (ipv4 vs
+								ipv6) and address as our current sockaddr. we open a listening socket
+								using this sockaddr, and use comm_getname to fill in our sockaddr. we
+								then send our clone_flags, stack_start, stack_size, pt_regs structure,	
+								and sockaddr (now pointing to our newly listening port) to the home
+								node. we use remote_wait to wait on a response, and if we get a reply,
+								we call do_fork ourselves, find_task_by_pid(), and set the child's
+								socket to our newly created socket. we then return with the child's
+								PID. count_len is just a cut-and-paste from fs/exec.c. it appears to
+								count the length of argv members, but abort if there are more argv
+								members than requested. we return a count of argv members found, and
+								set a pointer passed in to the length of the argv entries in total.
+								remote_do_execve performs an execve system call while on the remote
+								node. first we get the length of the file we're execve'ing from
+								userspace with strlen_user(). then, we generage m.argc, by calling
+								count_len. we tell count_len not to abort if the number of arguments is
+								greater than the ammount of void * that can fit in PAGE_SIZE * 
+								MAX_ARG_PAGES - sizeof(void *). we then do the same thing to generate	
+								m.envc. in the same function invocations, we also fill in m.argvlen and	
+								m.envplen. we fill m.regs with the passed in regs, and allocate some 
+								kernel space memory to hold filename, argv, and envp. we copy_from_user
+								filename, argv, and envp, then send struct m, which now contains all
+								the constant sized members of our request. we send a the copy of
+								filename, argv, and envp thats in-kernel, free our in-kernel memory
+								buffer, and wait for a reply. if we get one, we return 0, else, return
+								error. 
+48			creates linux/hpc/service.c		this file contains the om_daemonize function, and four sockaddr related
+								conversion functions. feels like it should be broken up. om_daemonize	
+								creates a kernel thread, and optionally sets a high priority mode.
+								first we call daemonize(). then, we zero the euid, suid, and gid of 
+								current. we alloc a new group_info with groups_alloc(0). we grab 
+								current->sighand->siglock while emptying the blocked signal set with 
+								sigemptyset(). we lock our task structure, then set a priority. if we
+								were requested to use a high priority, we use SCHED_FIFO, and set a 
+								rt->priority of 0. we set task_set_stay(DSTAY_RT). otherwise, we set
+								SCHED_NORMAL, task_clear_stay(DSTAY_RT), and set_user_nice(0).
+								either way, we set task_set_stay(DSTAY_SYSTEM), then unlock our task
+								structure. sockaddr_to_string and string_to_sockaddr perform as they
+								sound, ipv4 or ipv6. sockaddr_setup_port is a wrapper arround the
+								proper inet_setup_port for ipv4 or ipv6. sockaddr_inherit we saw used
+								not long ago, to set a sockaddr structure up the same as the sockaddr
+			does IPV6 not have INADDR_ANY?		used to create our current link. 
+49			creates linux/hpc/syscalls.c		this file is callback points from where the current running process
+								calls a syscall, it gets directed here. om_sys_local dispatches a
+								syscall request to the local kernel (on the remote node). 
+								om_sys_remote calls remote_do_syscall to dispatch a syscall back to the	
+								home node. om_sys_gettid and om_sys_getpid are broken, but should 
+								return the relevant values from curent->om.tgid and pid, respectively.
+								finally, om_sys_execve dispatches a request for the execve syscall to	
+								remote_do_execve.
+50			creates linux/hpc/task.c		this file contains functions that operate on tasks. that deliniation	
+								isn't clear to me, couldnt all this stuff be defined as operating on
+								tasks? task_set_comm sets the link associated with a task to the passed	
+								in value, returns the old value, and if the new link is flagged
+			ghosts?					SOCK_OOB_IN, we task_set_dreqs(DREQ_URGENT). so far as i can tell, both	
+								these flags are never used anywhere else. task_file_check_stay checks 
+								a given vma to make sure its file mappings dont prenvent being
+								migrated. it checks to see if the VM_NONLINEAR flag is set indicating
+								this vm page has a non-linear file mapping in it. if so, we check to
+								see if prio_tree_empty indicates the inode's i_mmap has no regions. if	
+								there is a single region of the file mmapped in, we add DSTAY_MONKEY
+								to the stay flags, because we're using a mmapped file access. next, we	
+								check vma->shared.vm_set.list hoping that its empty. if it has
+								contents, it indicates that we're using a shared memory mapping, and we	
+								add DSTAY_MONKEY to the stay flags. next, we check
+								vma->vm_file->f_dentry->d_inode->i_mode to see if it is S_ISCHR,
+								S_ISFIFO, or S_ISSOCK. if it is, we add DSTAY_DEV to the flags, as this	
+								is a fifo, socket, or character device file. we then return the stay
+								flags. task_request_checkstay dispatches requests for re-evaulation of
+								a process with reguards to its stay flags. we clear DREQ_CHECKSTAY,
+								printk a log message, then check to see if theres a reason we can
+			shouldnt this have DSTAY_MLOCK?		clear (DSTAY_PER_MM | DSTAY_CLONE). assuming there is, we lock the
+								task, clear its flags, and start the process of re-checking for these
+								two flags. if task->mm is null, we set DSTAY_CLONE. if mm_realusers is	
+								greater than 1, it means multiple processes are using this mm struct.	
+								in that case, we set stay reason DSTAY_CLONE. if mm->def_flags matches
+								VM_LOCKED, it means that someone has locked a memory page. we set stay
+								reason DSTAY_MLOCK. if we marked any flags, we propogate these marks
+								back to the task, unlock the task, and return. task_request_move
+								dispatches DREQ_MOVE move requests. it clears om->whereto, then calls
+								task_move_to_node with that value. it frees the previous om->whereto
+								string. openmosix_task_init initializes all openmosix related members
+								of a given task. if its pid 1(init), set DSTAY_SYSTEM. if it's parent	
+								is DREMOTEDAEMON, set DREMOTE. if it's parent is DDEPUTY, set DDEPUTY.	
+								init the head of list task->om.files, then return 0. 
+								openmosix_task_exit exits the current task. if its not DDEPUTY or
+								DREMOTE, its not our process, so return 0. if its our process, call
+								task_heldfiles_clear. if we're connected, call comm_close to
+								disconnect. assuming all went well, return 0. task_wait_contact creates	
+								a WAITQUEUE, sets the task to TASK_UNINTERUPTABLE, and calls schedule.
+								it stays in this loop until om.contact has contents, then removes the
+								WAITQUEUE entry, sets the task's current state to TASK_RUNNING, and 
+								ends. task_register_migration sets a process up for migration to a
+								given node. we convert from the sockaddr passed to a string, and stores	
+								this string as whereto send the process. we set the DREQ_MOVE flag, 
+								call wake_up_process(), mark the process as in need of rescheduling,
+								and return 0. task_do_request checks for DREQ_MOVE, or DREQ_CHECKSTAY,
+								and dispatches them to task_request_(move|checkstay).
+51	i386		creates 				this file defines ia32 specific cpu feature detection functions, a
+			linux/include/asm-i386/om.h		function returning argument N passed to a syscall, a function returning	
+								the numbe of arguments passed to a syscall, the NR_MAX_SYSCALL_ARG,
+								and a define for getting the user registers from the task struct.
+								cpu_has_feature_fxsr was declared earlier, and tells us which i387
+								register format to use. arch_get_sys_arg is simple, since our arguments
+								are stored in order in our pt_regs structure. arch_get_sys_nb just
+								returns regs->eax. NR_MAX_SYSCALL_ARG is set to 6. 
+								ARCH_TASK_GET_USER_REGS uses offsets to get the registers out of the
+								task->thread_info structure.
+52	i386		creates					this file contains definitions for the archetecture specific structures	
+			linux/include/asm-i386/om-protocol.h	used when transfering a process between ia32 machines. we define
+								MIG_ARCH_I386_LDT, which is a flag for arch-i386 telling it to transfer
+								the local descriptor table (which is not commonly changed by a process)
+								along with migrated processes. the LDT is changed by programs such as
+								wine and qemu. omp_mig_fp contains the floating point context of a
+								process. it includes a flag for which format of register save function
+								was used. omp_mig_arch is supposed to be for archetecture specific
+								process functionality, but such functionality is still a stub. 
+								omp_mig_arch_task is the structure containing archetecture specific
+								members of the process context. 
+53	i386		linux/include/asm-i386/uaccess.h	this header handles simple reads and writes to/from userspace. we	hpc/uaccess.h
+	remote-memory						modify it so that we use openmosix's deputy_put and deputy_get
+								functions. the first hunk just includes our header. the second hunk
+								modifies get_user calls so that deputy_get_user is called if
+			cleanup line endings, make code blend	openmosix_memory_away(). the third hunk modifies the first of the 
+			in better				put_user definitions so that deputy_put_user is called if 
+								openmosix_memory_away(). both the second and third hunks use the trick
+								of just putting an if{}else in front of the current switch statement.
+								the fourth hunk just modifies the second put_user definition so that
+								we just return the result of deputy_put_user if openmosix_memory_away.
+								the fifth hunk defines deputy_put_user64_helper, which is a wrapper for	
+								calling deputy_put_user64 from the following assembly. we then add
+								logic to this definition of __put_user_size to call deputy_put_user or
+								deputy_put_user64_helper in cases where we want to copy 8 bytes. we use	
+								the if{}else switch method discussed earlier. the next patch modifies
+								the second declaration of __put_user_size, with the same if{}else trick	
+								only with an if following. the seventh modifies __get_user_size. the	
+			#ifdef CONFIG_OPENMOSIX elsewhere?	eigth patch adds code surrounded in #ifdef CONFIG_OPENMOSIX. it returns
+			CONFIG_OPENMOSIX policy?		the result of deputy_copy_to_user. the nineth adds a 
+								deputy_copy_from_user call surrounded by #ifdef CONFIG_OPENMOSIX. 
+			reorg this code.			the last hunk is surrounded bt #ifdef CONFIG_OPENMOSIX, and re-defines	
+								strlen_user to check openmosix_memory_away, and call deputy_strlen_user
+								when necissary.
+54	ppc		creates include/asm-ppc/om.h		this file contains archetecture specific code for returning a single
+								passed in argument in a syscall, or finding the number of arguments
+								passed to a syscall, the maximum number of arguments passable to a
+								syscall, and a define for retrieving the pt_regs structure associated	
+								with this execution thread. arch_get_sys_arg checks to make sure you're
+								not requesting an argument greater than 31, then returns gpr[1..32]. 
+								arch_get_sys_nb returns gpr[0]>>2. we define NR_MAX_SYSCALL_ARG 7, 
+								and use an index method to get the pt_regs structure out of 
+								task->thread_info. 
+55	ppc		creates include/asm-ppc/om-protocol.h	this file contains process state structures that are archetecture
+								specific. the first strcuture here is the floating point state, which
+								is properly filled out. the omp_mig_arch and omp_mig_arch_task
+								structures are, however, empty.
+56	x86-64		creates include/asm-x86_64/om.h		this file contains archetecture specific functions for returning
+								arguments to the syscall invocation right before we were called,
+								returning the number of arguments that were passed to the syscall,
+								define the maximum number of syscall arguments allowed on this arch,
+								and a define returning the address of the pt_regs structure in the
+								thread_info structure for this process. arch_get_sys_arg uses a switch
+								statement to select the right register, instead of a index based
+								method like the other two arches. arch_get_sys_nb returns the bottom	
+								half of register rax (32 bits). we define NR_MAX_SYSCALL_ARG to 6, and	
+								use an index based method to get struct pt_regs, which is the last item	
+								in the thread_info struct. 
+57	x86-64		creates 				this file contains structures for process state that are archetecture
+			include/asm-x86_64/om-protocol.h	specific. omp_mig_fp holds the floating point context. omp_mig_arch is
+								a stub as usual, and omp_mig_arch_task holds the segmentation
+								registers, and the TLS entries associated with this task.
+58	x86-64		creates					this file contains a simplified version of the modifications in i386's	hpc/uaccess.h
+			include/asm-x86_64/uaccess.h		uaccess.h, due to this being a 64 bit archetecture, which makes
+								operations on 8 bytes at a time much easier. the first hunk includes
+								hpc/uaccess.h. the second invokes deputy_get_user inside of get_user.
+								the third invokes deputy_put_user inside of put_user. the fourth 
+								puts deputy_copy_from_user inside __copy_from_user, using a define of	
+								CONFIG_OPENMOSIX to decide wether to compile it in or not. the fifth	
+								puts deputy_copy_to_user inside __copy_to_user, using the same define
+								as the last hunk.
+59	om-core		creates include/hpc/arch.h		this file prototypes the archetecture specific functions for sending	hpc/protocol.h
+								and receiving process pieces, dispatching a local syscall (after we've	asm/om.h
+								intercepted it), and starting a recently assembled process. worth 	hpc/syscalls.h
+								is that we include protocol.h, define almost everything, include om.h
+								and syscalls.h, THEN define arch_exec_syscall, so we have the
+								syscall_parameter_t * to pass in.
+60	comm		creates include/hpc/comm.h		this file prototypes all of the communications subsystem, both the part
+								that is a wrapper of the sockets interface, and a seperated section
+			dead code				that wraps OM datastructure sending routines. we start by defining 
+								SOCK_INTER_OPENMOSIX, which is unused. then we define SOCK_OOB_IN,
+								which is tested for, never set, and causes another bit to be set,
+								which is never tested for. the next nine defines are timeout 
+								definitions used just once, in comm_setup_tcp, or not at all. 
+								MIG_DAEMON_PORT is a duplicate of REMOTE_DAEMON_PORT. the first
+								grouping of functions is a sockets wrapper set. the second is openmosix	
+								specific shortcut functions. one to setup, one to listen, one to
+								connect, one for sending large data chunks, and one for sending
+								messages. after that is a prototype that belongs in hpc/task.h for
+								task_set_comm.
+61			creates include/hpc/comm-ipv4.h		this header contains string_to_inet and inet_to_string functions,
+								and inet_setup_port, which is a wrapper that just sets sa_in->port
+								to the passed port.
+62			creates include/hpc/comm-ipv6.h		this header is similar to the last, it contains string_to_inet6 and
+								inet6_to_string, and inet6_setup_port, which wraps sa_in6->sin6_port.
+63			creates include/hpc/debug.h		this header prototypes a series of debugging functions matching the
+								regex proc_debug_get_(loadinfo|admin|lfree_mem|pkeep_free|nodes) 
+								(which don't exist in our sourcebase), defines arch specific 
+								om_debug_regs, defines debug_mlink, debug_page, and debug_vmas, defines 
+								debug_regs(which dosent exist), and defines some macros for printk. 
+								OMDEBUG_* are defined as macros of OMDEBUG.
+64			creates include/hpc/hpc.h		this file contains the kernel's API to openmosix. it prototypes all of
+								the higher level functions of openmosix. user_thread is a function for
+								creating a user thread. info_startup does not exist. openmosix_proc_*
+								are part of proc.c. the next 6 functions are part of kernel.c. i might
+								mention that unlike most headers, this header has a comment of where	
+								an item is located at. the rest of this file belongs to task.c
+65			creates include/hpc/mig.h		this file prototypes the migration daemon, defines the port we listen
+								on, and prototypes six migration related functions. the first two,
+								mig_do_receive and mig_do_send, are entry points into their respective
+								files. mig_send_hshake and mig_recv_hshake are for establishing a
+								connection. task_move_to_node and task_expel perform the actual task
+								of migration.
+66			creates include/hpc/omtask.h		this file contains the openmosix_task structure. so far as i can tell, 	
+								the features[] declared at the and, and thus the first define is 
+								unused. the rest of this file seems to be well commented.
+67			creates include/hpc/proc.h		header exclusively used by proc.c. the first four functions are not
+								directly called by name, but instead are defined, because the E()
+								definition in proc.c will direct operations we've filled in 0 for to	
+								these functions. om_proc_entry is defined to hold an entry in the
+								/proc/hpc/admin/ directory. it holds the set and get function pointers,	
+								along with the name, mode, length, and type. om_proc_pid_entry is
+								defined to hold an entry in the /proc/$PID/om/ directory. it holds set
+								and get function pointers, along with the name, mode, length, and type.
+68			creates include/hpc/protocol.h		this file defines all the flags, bitmasks, and datastructures 
+			spacing issues				associated with the archetecture independant part of the openmosix
+								inter-kernel wire protocol. its reasonably well commented. note that
+								DEP_FLG, MIG_FLG, and REM_FLG are not used outside of this header. 
+								REPLY is used all over the place. the next 21 defines use their own 8
+								bit value, ored with _FLG's 8 bit value (in the 16 bit place), to make	
+								a constant 16 bit value (flag+type). omp_mig_task contains the complete	
+								context of a task, both archetecture independant parts, and a
+								archetecture dependant structure (with a definition inherited from our
+								arch/ code.). omp_mig_mm contains values defining the process memory
+								layout out of the mm struct. omp_mig_vma contains values out of a given
+								vm_area_struct required to reconstruct that vma on the remote end. its
+								worth noting that file and dentry don't mean much when remote. 
+			use define for constant 7		omp_syscall_req and omp_syscall_ret are used to perform remote 
+								syscalls. omp_fork_req and omp_fork_ret are used to perform a fork
+								on home, from remote. omp_usercopy_req and omp_usercopy_emb are part of
+								the deputy kernel to remote process memory access API. omp_page_req is
+								a structure containing a request for a page of a file thats open on the
+								home node, from the remote node. omp_mmap_req holds a request to mmap
+			out of order?				a chunk of a file on the home node, from the remote node. 
+								omp_execve_req passes the arguments for an execve request to the home
+								node, from the remote node. omp_execve_ret holds the return value from
+								the home node. omp_mmap_ret returns the results of a mmap request. 
+								omp_signal is used for passing signals both directions. 
+69			creates include/hpc/prototype.h		this file contains debugging related defines, prototypes for the three
+								top level functions called as a deputy, the definition of the rfiles
+								API and structures, and the definition of the communications system on
+								the remote node. the first ifdef block handles turning on and off 
+								wether OM_VERBOSE_MIG does something or not, based on if 
+								CONFIG_OPENMOSIX_MIGRATION_VERBOSE is defined. we then define OMBUG as
+								a macro of printk(). deputy_die_on_communication is called when the
+								deputy process gets an error recv()ing data from the remote. 
+								deputy_main_loop is basically main() for the deputy process. 
+								deputy_startup initializes the environment for deputy_main_loop, so 
+								that the next time this process is scheduled, openmosix_pre_usermode
+								kicks us into deputy_main_loop. om_held_file is the structure
+								representing a file to the deputy process. list contains a pointer
+								to the rfiles entry, which is never used. rfile_inode_data holds a
+								file on remote, with data for sending requests home. 
+								task_heldfiles_add is called in deputy_do_mmap_pgoff to add a file
+								to our list of managed file pointers on the deputy. 
+								task_heldfiles_clear is called by openmosix_task_exit on process exit,	
+								via a later hook in kerel/exit.c. its role is to safely call fput()
+								on om_held_file->file. task_heldfiles_find is called by
+								deputy_do_readpage to find the local om_held_file coresponding to a
+								remote file *. task_rfiles_get is called on the remote by
+								mig_do_receive_vma to get a file * to a file created by
+								rdentry_create_file(). rfiles_inode_get_file is called by 
+								remote_readpage to get a file * from a file->f_dentry->d_inode passed
+								in. its just a wrapper. at this point theres a break in the file, and
+								we start prototyping remote_ functions. remote_disappear is in
+								remote.c. remote_mmap does not exist. remote_do_syscall, 
+								remote_do_comm, remote_do_fork, remote_do_mmap, remote_file_mmap, and
+								remote_readpage are in remote.c.
+70			creates include/hpc/service.h		this is the header for service.c. it prototypes all of the functions in	
+			naming of variables in prototypes	service.c. sockaddr_to_string and string_to_sockaddr are just 
+								conversion functions. sockaddr_setup_port calls the right
+								inet6?_setup_port, based on wether we are using ipv4 or ipv6. 
+								sockaddr_inherit fills sa with the same kind of sockaddr as was used in
+								the creation of passed in socket * mlink. om_daemonize creates a OM 
+								daemon. its used to create omkmigd. 
+71			creates include/hpc/syscalls.h		this is the header for syscalls.c. all of the definitions here are used
+								in syscalls.c, and only syscalls.c.
+72			creates include/hpc/task.h		this file contains some init related datastructures, dflags dreqs and
+								dstay related constants, task_ related function definitions and
+								prototypes, and two task_ related datastructures. this entire file
+								is wrapped in CONFIG_OPENMOSIX, and if we're not, defines 
+								OPENMOSIX_INIT_TASK and OPENMOSIX_INIT_MM as comments. otherwise,
+								OPENMOSIX_INIT_TASK is defined to a structure for initializing the .om
+								members of the task structure, and OPENMOSIX_INIT_MM is defined to
+								init the .mm_realusers member of the mm structure. the dflags related
+								defines seem well commented to me, execpt for DREMOTEDAEMON. the 
+								openmosix migration daemon is marked DREMOTEDAEMON. when it spawns a
+								child, that child process is automatically marked DREMOTE by the code
+								in openmosix_task_init. DREQ_URGENT is used once, in code that is 
+								inherited from the 2.4 branch, and does nothing, ATM. DSTAY_PER_MM is	
+								used along with DSTAY_CLONE in task_request_checkstay, as a list of
+								reasons to check, and flag. task_(clear|set|test)_* could have been
+								created as a macro. its worth noting that dreqs related wrappers use
+								atomic_* functions, where the others just use bitmasks on values
+								directly. task_add_balance_reason does not exist. task_check_stay does
+								not exist. 
+73			creates include/hpc/uaccess.h		this header is included from include/$ARCH/uaccess.h. it prototypes the
+								API the kernel uses to access remote memory. its wrapped in 
+			what about user64?			CONFIG_OPENMOSIX, and if we're not, defines openmosix_memory_away, 
+								deputy_put_user and deputy_get_user as non-ops. otherwise, we
+								prototype our deputy_ functions for doing memory access from the home
+								kernel to a remote process, then we define openmosix_memory_away. the
+								first if in openmosix_memory_away checks if we're not IN a process. the
+								second checks if we're in a deputy process.
+74			creates include/hpc/version.h		defines to createversion tuples, all of which are set to 0. we'll worry
+								about versions once we have A working version.
+75			include/linux/compiler.h		here we define OM_NSTATIC and KCOMD_NSTATIC. which plainly mean, "if 
+								KCOMD or OPENMOSIX are defined, don't make these static.". otherwise,
+								we just define them to nothing.
+76			creates include/linux/hpc.h		this header just includes two other headers, and defines OM_MM(task),
+								which we only use in mm/mmap.c. if we're not CONFIG_OPENMOSIX, OM_MM
+								evaluates to 1(true).
+77			include/linux/init_task.h		here we add code to call the earlier OPENMOSIX_INIT_TASK and
+								OPENMOSIX_INIT_MM defines, to initialize openmosix specific members of
+			trash in patch				the task and mm structures.
+78			include/linux/net.h			this is the last fragment of the code to make sock_alloc an exported
+								kernel symbol. all we're doing is adding a prototype for it in this
+								header.
+79			include/linux/sched.h			here we actually add our members to the task and mm structures. one of	hpc/omtask.h
+								ourfragments is commented, one isnt.
+80	DROP		include/linux/signal.h			name some function parameters, to make it easier to read.
+81	kernel-kcom	kernel/exit.c				this file includes modifications to export the exit_mm and		linux/hpc.h
+								reparent_to_init so that our openmosix code can call them, and code
+			trash in patch				to modify task destruction. the first hunk is bogus. the second hunk
+								includes our header, and prototypes exit_mm as OM_NSTATIC. the third 
+								declares reparent_to_init as OM_NSTATIC. the fourth declares exit_mm
+								as OM_NSTATIC and delays the call of mm_release until later. the
+								fifth calls openmosix_task_exit, which completes the delayed call of 
+								mm_release earlier.
+82			kernel/fork.c				this is where we modify mm_init, dup_mm, copy_mm, copy_process. the	linux/hpc.h
+								first hunk includes our header. in the second hunk, we change mm_init
+								to also initialize the mm_realusers member of the mm structure. in hunk
+								three, we modify dup_mm so that on success of creating a new mm struct
+								for the current task, we remove its DSTAY_CLONE flag. in the fourth
+								hunk, we modify copy_mm so that if we were asked for CLONE_VM, we mark
+								the old vm as having another user before using it for the new process.
+								in the fifth hunk, we modify copy_process to call openmosix_task_init
+								to init the openmosix members of the newely created task structure. the	
+			whitespace cleanups			next patch adds our call to openmosix_pre_clone at the top of do_fork,
+								the one after that adds our call to openmosix_post_clone at the end of	
+								a successful run through do_fork, before the return.
+83	kernel-kcom	kernel/sched.h				make task_rq_lock and task_rq_unlock OM_NSTATIC.
+84			MAINTAINERS				add Vincent to the MAINTAINERS file.
+85	config		Makefile				three changes. one adds -om to the end of a kernel name in a debian
+								kernel-package incompatible way. the second adds a rule for running an
+								unsparse program, that i believe is remnant of 2.4, and can be removed.
+								the third adds hpc to the list of core-y directories to build.
+86			mm/mlock.c				we modify mlock.c for updating stay flags. sys_mlock marks a process
+								DSTAY_MLOCK, and sys_munlock unmarks it, sys_mlockall marks a process	
+								DSTAY_MLOCK, and sys_munlockall unmarks it.
+87			mm/mmap.c				this file gets updated to update the stay reasons when mmap related	linux/hpc.h
+								events occur. the first hunk includes our header. the second hunk 
+								causes __remote_shared_vm_struct to notify openmosix when removing the
+								last node in a shared memory segment, or when we are both parent and
+								head of the vm list (there are no other shared users). the third adds
+								the stay_reason variable. the fourth, fofth, and sixth make sure 
+								there is a MM struct associated to this task before accessing it in 
+								do_mmap_pgoff. the seventh marks us DSTAY_MONKEY if the mmap is
+								writable, DSTAY_MONKEY if i_mmap_writable, and DSTAY_DEV if S_ISCHR.
+								the eigth calls deputy_do_mmap_pgoff if all the above tests cleared.
+								the nineth passes stay_reason to stay_me_and_my_clones. the last one
+			whitespace?				makes it where get_unmapped_area always returns PAGE_ALIGN pages. 
+88			net/socket.c				the last of the code exporting sock_alloc so kcom can use it.

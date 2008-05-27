@@ -1,0 +1,196 @@
+Index: linux/hpc/arch-x86_64.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/arch-x86_64.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,191 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <asm/uaccess.h>
++#include <linux/kernel.h>
++#include <linux/kallsyms.h>
++#include <linux/sched.h>
++#include <hpc/debug.h>
++#include <asm/ptrace.h>
++#include <asm/desc.h>
++#include <asm/i387.h>
++#include <hpc/protocol.h>
++#include <hpc/arch.h>
++#include <hpc/task.h>
++#include <hpc/syscalls.h>
++#include <hpc/prototype.h>
++
++/*****************************************************************************/
++/* receive part */
++
++int arch_mig_receive_specific(task_t *p, struct omp_mig_arch *m)
++{
++	return 0;
++}
++
++int arch_mig_receive_proc_context(task_t *p, struct omp_mig_task *m)
++{
++	struct pt_regs *regs;
++
++	regs = ARCH_TASK_GET_USER_REGS(p);
++
++	memcpy(regs, &m->regs, sizeof(struct pt_regs));
++
++	p->thread.ds = m->arch.ds;
++	p->thread.es = m->arch.es;
++	p->thread.fs = m->arch.fs;
++	p->thread.gs = m->arch.gs;
++	p->thread.fsindex = m->arch.fsindex;
++	p->thread.gsindex = m->arch.gsindex;
++	p->thread.userrsp = m->arch.userrsp;
++	write_pda(oldrsp, m->arch.userrsp);
++
++	return 0;
++}
++
++void arch_mig_receive_fp(task_t *p, struct omp_mig_fp *fp)
++{
++	unlazy_fpu(p);
++
++	/* all opterons got same fp feature */
++	memcpy(&p->thread.i387, &fp->data, sizeof(union i387_union));
++}
++
++/*****************************************************************************/
++/* send part */
++
++void arch_mig_send_pre(task_t *p)
++{
++	if (p->mm->context.ldt)
++		clear_LDT();
++}
++
++void arch_mig_send_post(task_t *p)
++{
++	if (p->mm->context.ldt)
++		load_LDT(&p->mm->context);
++}
++
++int arch_mig_send_specific(task_t *p)
++{
++	return 0;
++}
++
++int arch_mig_send_fp(task_t *p, struct omp_mig_fp *fp)
++{
++	unlazy_fpu(p);
++	memcpy(&fp->data, &p->thread.i387, sizeof(p->thread.i387));
++	return 0;
++}
++
++int arch_mig_send_proc_context(task_t *p, struct omp_mig_task *m)
++{
++	struct pt_regs *regs;
++	int i;
++
++	regs = ARCH_TASK_GET_USER_REGS(p);
++
++	memcpy(&m->regs, regs, sizeof(struct pt_regs));
++
++	for (i = 0; i < TLS_SIZE; i++)
++		m->arch.tls_array[i] = p->thread.tls_array[i];
++
++	m->arch.ds = p->thread.ds;
++	m->arch.es = p->thread.es;
++	m->arch.fs = p->thread.fs;
++	m->arch.gs = p->thread.gs;
++	m->arch.fsindex = p->thread.fsindex;
++	m->arch.gsindex = p->thread.gsindex;
++	m->arch.userrsp = read_pda(oldrsp);
++
++	return 0;
++}
++
++
++asmlinkage void ret_from_kickstart(void) __asm__("ret_from_kickstart");
++
++void arch_kickstart(struct task_struct *p)
++{
++	struct pt_regs *regs;
++	regs = ARCH_TASK_GET_USER_REGS(p);
++
++	if (p->thread.debugreg7) {
++		set_debugreg(p->thread.debugreg0, 0);
++		set_debugreg(p->thread.debugreg1, 1);
++		set_debugreg(p->thread.debugreg2, 2);
++		set_debugreg(p->thread.debugreg3, 3);
++		set_debugreg(p->thread.debugreg6, 6);
++		set_debugreg(p->thread.debugreg7, 7);
++	}
++
++	/*
++	load_TLS(&p->thread, smp_processor_id());
++	*/
++
++	if (p->thread.ds)
++		loadsegment(ds, p->thread.ds);
++	if (p->thread.es)
++		loadsegment(es, p->thread.es);
++	if (p->thread.fsindex)
++		loadsegment(fs, p->thread.fsindex);
++	if (p->thread.gsindex)
++		load_gs_index(p->thread.gsindex);
++
++	regs->cs = __USER_CS;
++	regs->ss = __USER_DS;
++	set_fs(USER_DS);
++
++	/* FIXME: not sure about this one */
++	flush_signals(p);
++
++	asm(	"movq %0,%%rsp\n\t"
++		"jmp ret_from_kickstart\n\t"
++		: /**/ : "r"(regs));
++}
++
++long arch_exec_syscall(int n, syscall_parameter_t * args)
++{
++	long ret;
++
++	asm (	"movq %5, %%r8\n\t"
++		"movq %6, %%r9\n\t"
++		"call *sys_call_table(,%%rax,8)\n\t"
++		: "=a" (ret)
++		: "D" (args->arg[0]), "S" (args->arg[1]), "d" (args->arg[2]),
++		  "c" (args->arg[3]), "g" (args->arg[4]), "g" (args->arg[5]),
++		  "a" (n)
++		: "memory", "r8", "r9");
++
++	return ret;
++}
++
++asmlinkage long om_sys_fork(struct pt_regs regs)
++{
++	return remote_do_fork(SIGCHLD, regs.rsp, &regs, 0, NULL, NULL);
++}
++
++#define NOT_IMPLEMENTED(fct)					\
++asmlinkage long fct(struct pt_regs regs)			\
++{ printk(KERN_ERR #fct "not yet implemented\n"); return -1; }
++
++NOT_IMPLEMENTED(om_sys_iopl)
++NOT_IMPLEMENTED(om_sys_vfork)
++NOT_IMPLEMENTED(om_sys_clone)
++NOT_IMPLEMENTED(om_sys_rt_sigsuspend)
++NOT_IMPLEMENTED(om_sys_sigaltstack)

@@ -1,0 +1,14 @@
+Index: linux/fs/select.c
+===================================================================
+--- linux.orig/fs/select.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/fs/select.c	2006-09-28 15:02:18.000000000 +0200
+@@ -294,6 +294,9 @@
+ 
+ 	return retval;
+ }
++#ifdef CONFIG_KCOMD
++EXPORT_SYMBOL_GPL(do_select);
++#endif
+ 
+ /*
+  * We can actually return ERESTARTSYS instead of EINTR, but I'd

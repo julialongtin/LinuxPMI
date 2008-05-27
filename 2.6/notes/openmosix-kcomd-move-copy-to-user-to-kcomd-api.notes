@@ -1,0 +1,38 @@
+001	rmem		hpc/copyuser.c				our first hunk just includes two headers. the second and third hunks	<linux/in.h>
+								change deputy_copy_from_user to use kcom_send_with_response, instead of	<hpc/kcom.h>
+			error handling?				using comm_send_hd and then comm_recv to get a response. the fourth 
+			the sizeof in the kzalloc looks funny.	hunk changes deputy_strncpy_from_user to use kcom_send_with_response to
+			no free of u? error handling?		send its request, and receive the data from the remote end. the next
+								hunk changes deputy_copy_to_user so that instead of sending two packets
+								containing our request to the remote end(one with comm_send_hd, the
+								other with comm_send), and not getting a response, we now send one
+			error handling!				large packet with kcom_send_with_ack, and get an acknowledgement from
+								the remote end. hunk six changes deputy_strnlen_user to use
+			error handling!				kcom_send_with_response, instead of using comm_send_hd, and comm_recv.
+			error handling!				hunk seven and eight change deputy_put_userX to use kcom_send_with_ack
+								instead of just comm_send_hd. hunk nine changes deputy_get_userX to use 
+			error handling!				kcom_send_with_response instead of comm_send_hd and comm_recv.
+			bad comment.				remote_copy_user gets broken into two functions, remote_copy_from_user
+								and remote_copy_to_user. remote_copy_from_user creates a buffer 
+			kfree()?				allocated via kmalloc(GFP_KERNEL), uses copy_from_user to fill it, and 
+								replies with the contents via kcom_send_resp.  we return the result of
+								the copy_from_user call. remote_copy_to_user just calls copy_to_user
+								and sends an ack with kcom_send_ack, returning the result of the
+								copy_to_user call. remote_strncpy_from_user is changed to accept a
+								passed in packet, send its reply with kcom_send_resp, and return the
+								result from strncpy_from_user. remote_strnlen_user has been modified to
+								accept a passed in packet, create a buffer, send that buffer with
+								kcom_send_resp, and return 0. remote_put_user is changed to accept a
+								passed in packet, and send an acknowledgement using kcom_send_ack.
+								remote_get_user is changed to accept a passed in packet, create a
+								buffer, fill that buffer with get_user, send a reply with
+			spacing!				kcom_send_resp,	and always return 0. remote_handle_user gets a
+								re-write, basically performing like the previous rendition, except for
+								accepting a passed packet, setting ourself TASK_INTERRUPTABLE, 
+								and completely new code for handling a SYSCALL_DONE packet which is our
+								exit path out of this loop. it wakes up kcomd after attaching a newly
+								created packet to our out packets. it then deletes our passed packet,
+								sets us to TASK_RUNNING, calls schedule, and returns the result of the
+								syscall (given in the passed in packet).
+
+								

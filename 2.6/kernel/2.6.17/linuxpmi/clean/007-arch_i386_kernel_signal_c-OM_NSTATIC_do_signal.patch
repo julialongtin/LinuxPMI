@@ -1,0 +1,13 @@
+Index: linux/arch/i386/kernel/signal.c
+===================================================================
+--- linux.orig/arch/i386/kernel/signal.c	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/i386/kernel/signal.c	2006-09-28 15:02:16.000000000 +0200
+@@ -565,7 +565,7 @@
+  * want to handle. Thus you cannot kill init even with a SIGKILL even by
+  * mistake.
+  */
+-static void fastcall do_signal(struct pt_regs *regs)
++OM_NSTATIC void fastcall do_signal(struct pt_regs *regs)
+ {
+ 	siginfo_t info;
+ 	int signr;

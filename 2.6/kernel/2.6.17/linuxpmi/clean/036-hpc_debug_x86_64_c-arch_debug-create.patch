@@ -1,0 +1,62 @@
+Index: linux/hpc/debug-x86_64.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/debug-x86_64.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,57 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <asm/uaccess.h>
++#include <linux/kallsyms.h>
++#include <linux/sched.h>
++#include <hpc/debug.h>
++#include <asm/ptrace.h>
++#include <asm/desc.h>
++#include <asm/i387.h>
++#include <asm/uaccess.h>
++#include <asm/ptrace.h>
++#include <hpc/protocol.h>
++#include <hpc/arch.h>
++#include <hpc/task.h>
++
++void om_debug_regs(struct pt_regs *myreg)
++{
++	struct pt_regs *reg;
++	reg = (myreg) ? myreg : ARCH_TASK_GET_USER_REGS(current);
++
++	printk("pt_regs:\n");
++	printk("r15: 0x%lx, r14: 0x%lx, r13: 0x%lx\n", reg->r15, reg->r14, reg->r13);
++	printk("r12: 0x%lx, rbp: 0x%lx, rbx: 0x%lx\n", reg->r12, reg->rbp, reg->rbx);
++	printk("r11: 0x%lx, r10: 0x%lx, r09: 0x%lx\n", reg->r11, reg->r10, reg->r9);
++	printk("r08: 0x%lx, rax: 0x%lx, rcx: 0x%lx\n", reg->r8, reg->rax, reg->rcx);
++	printk("rdx: 0x%lx, rsi: 0x%lx, rdi: 0x%lx\n", reg->rdx, reg->rsi, reg->rdi);
++	printk("orig_rax: 0x%lx, rip: 0x%lx,  cs: 0x%lx\n", reg->orig_rax, reg->rip, reg->cs);
++        printk("eflags: 0x%lx, rsp: 0x%lx,  ss: 0x%lx\n", reg->eflags, reg->rsp, reg->ss);
++}
++
++
++void inline debug_thread(struct thread_struct *t)
++{
++	printk("thread_struct:\n");
++}
++
++
++void show_user_registers(task_t *p)
++{
++}

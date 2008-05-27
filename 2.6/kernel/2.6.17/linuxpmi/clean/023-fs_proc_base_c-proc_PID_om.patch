@@ -1,0 +1,250 @@
+Index: linux/fs/proc/base.c
+===================================================================
+--- linux.orig/fs/proc/base.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/fs/proc/base.c	2006-09-28 15:02:17.000000000 +0200
+@@ -74,6 +74,10 @@
+ #include <linux/poll.h>
+ #include "internal.h"
+ 
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/hpc.h>
++#endif
++
+ /*
+  * For hysterical raisins we keep the same inumbers as in the old procfs.
+  * Feel free to change the macro below - just keep the range distinct from
+@@ -125,6 +129,12 @@
+ #ifdef CONFIG_AUDITSYSCALL
+ 	PROC_TGID_LOGINUID,
+ #endif
++#ifdef CONFIG_OPENMOSIX
++	PROC_TGID_OPENMOSIX,
++	PROC_TGID_OPENMOSIX_WHERE,
++	PROC_TGID_OPENMOSIX_STAY,
++	PROC_TGID_OPENMOSIX_DEBUG,
++#endif
+ 	PROC_TGID_OOM_SCORE,
+ 	PROC_TGID_OOM_ADJUST,
+ 	PROC_TID_INO,
+@@ -166,6 +176,12 @@
+ #ifdef CONFIG_AUDITSYSCALL
+ 	PROC_TID_LOGINUID,
+ #endif
++#ifdef CONFIG_OPENMOSIX
++	PROC_TID_OPENMOSIX,
++	PROC_TID_OPENMOSIX_WHERE,
++	PROC_TID_OPENMOSIX_STAY,
++	PROC_TID_OPENMOSIX_DEBUG,
++#endif
+ 	PROC_TID_OOM_SCORE,
+ 	PROC_TID_OOM_ADJUST,
+ 
+@@ -210,6 +226,9 @@
+ #ifdef CONFIG_SECURITY
+ 	E(PROC_TGID_ATTR,      "attr",    S_IFDIR|S_IRUGO|S_IXUGO),
+ #endif
++#ifdef CONFIG_OPENMOSIX
++	E(PROC_TGID_OPENMOSIX, "om",      S_IFDIR|S_IRUGO|S_IXUGO),
++#endif
+ #ifdef CONFIG_KALLSYMS
+ 	E(PROC_TGID_WCHAN,     "wchan",   S_IFREG|S_IRUGO),
+ #endif
+@@ -252,6 +271,9 @@
+ #ifdef CONFIG_SECURITY
+ 	E(PROC_TID_ATTR,       "attr",    S_IFDIR|S_IRUGO|S_IXUGO),
+ #endif
++#ifdef CONFIG_OPENMOSIX
++	E(PROC_TID_OPENMOSIX,  "om",      S_IFDIR|S_IRUGO|S_IXUGO),
++#endif
+ #ifdef CONFIG_KALLSYMS
+ 	E(PROC_TID_WCHAN,      "wchan",   S_IFREG|S_IRUGO),
+ #endif
+@@ -286,6 +308,21 @@
+ };
+ #endif
+ 
++#ifdef CONFIG_OPENMOSIX
++static struct pid_entry tgid_openmosix_stuff[] = {
++	E(PROC_TGID_OPENMOSIX_WHERE, "where",  S_IFREG|S_IRUGO|S_IWUGO),
++	E(PROC_TGID_OPENMOSIX_STAY,  "stay",   S_IFREG|S_IRUGO|S_IWUGO),
++	E(PROC_TGID_OPENMOSIX_DEBUG, "debug",   S_IFREG|S_IRUGO|S_IWUGO),
++	{0,0,NULL,0}
++};
++static struct pid_entry tid_openmosix_stuff[] = {
++	E(PROC_TID_OPENMOSIX_WHERE,  "where",  S_IFREG|S_IRUGO|S_IWUGO),
++	E(PROC_TID_OPENMOSIX_STAY,   "stay",   S_IFREG|S_IRUGO|S_IWUGO),
++	E(PROC_TID_OPENMOSIX_DEBUG,  "debug",   S_IFREG|S_IRUGO|S_IWUGO),
++	{0,0,NULL,0}
++};
++#endif
++
+ #undef E
+ 
+ static int proc_fd_link(struct inode *inode, struct dentry **dentry, struct vfsmount **mnt)
+@@ -1647,6 +1684,84 @@
+ static struct inode_operations proc_tgid_attr_inode_operations;
+ #endif
+ 
++#ifdef CONFIG_OPENMOSIX
++static ssize_t proc_pid_openmosix_read(struct file * file, char * buf,
++				  size_t count, loff_t *ppos)
++{
++	struct inode * inode = file->f_dentry->d_inode;
++	unsigned long page;
++	ssize_t length;
++	ssize_t end;
++	struct task_struct *task = proc_task(inode);
++
++	if (count > PAGE_SIZE)
++		count = PAGE_SIZE;
++	if (!(page = __get_free_page(GFP_KERNEL)))
++		return -ENOMEM;
++
++	length = openmosix_proc_pid_getattr(task,
++				      (char*)file->f_dentry->d_name.name,
++				      (void*)page, count);
++	if (length < 0) {
++		free_page(page);
++		return length;
++	}
++	/* Static 4kB (or whatever) block capacity */
++	if (*ppos >= length) {
++		free_page(page);
++		return 0;
++	}
++	if (count + *ppos > length)
++		count = length - *ppos;
++	end = count + *ppos;
++	if (copy_to_user(buf, (char *) page + *ppos, count))
++		count = -EFAULT;
++	else
++		*ppos = end;
++	free_page(page);
++	return count;
++}
++
++static ssize_t proc_pid_openmosix_write(struct file * file, const char * buf,
++				   size_t count, loff_t *ppos)
++{
++	struct inode * inode = file->f_dentry->d_inode;
++	char *page;
++	ssize_t length;
++	struct task_struct *task = proc_task(inode);
++
++	if (count > PAGE_SIZE)
++		count = PAGE_SIZE;
++	if (*ppos != 0) {
++		/* No partial writes. */
++		return -EINVAL;
++	}
++	page = (char*)__get_free_page(GFP_USER);
++	if (!page)
++		return -ENOMEM;
++	length = -EFAULT; 
++	if (copy_from_user(page, buf, count)) 
++		goto out;
++
++	length = openmosix_proc_pid_setattr(task,
++				      (char*)file->f_dentry->d_name.name,
++				      (void*)page, count);
++out:
++	free_page((unsigned long) page);
++	return length;
++} 
++
++static struct file_operations proc_pid_openmosix_operations = {
++	.read		= proc_pid_openmosix_read,
++	.write		= proc_pid_openmosix_write,
++};
++
++static struct file_operations proc_tid_openmosix_operations;
++static struct inode_operations proc_tid_openmosix_inode_operations;
++static struct file_operations proc_tgid_openmosix_operations;
++static struct inode_operations proc_tgid_openmosix_inode_operations;
++#endif /* CONFIG_OPENMOSIX */
++
+ static int get_tid_list(int index, unsigned int *tids, struct inode *dir);
+ 
+ /* SMP-safe */
+@@ -1803,6 +1918,26 @@
+ 			inode->i_fop = &proc_pid_attr_operations;
+ 			break;
+ #endif
++#ifdef CONFIG_OPENMOSIX
++		case PROC_TID_OPENMOSIX:
++			inode->i_nlink = 2;
++			inode->i_op = &proc_tid_openmosix_inode_operations;
++			inode->i_fop = &proc_tid_openmosix_operations;
++			break;
++		case PROC_TGID_OPENMOSIX:
++			inode->i_nlink = 2;
++			inode->i_op = &proc_tgid_openmosix_inode_operations;
++			inode->i_fop = &proc_tgid_openmosix_operations;
++			break;
++		case PROC_TID_OPENMOSIX_WHERE:
++		case PROC_TGID_OPENMOSIX_WHERE:
++		case PROC_TID_OPENMOSIX_STAY:
++		case PROC_TGID_OPENMOSIX_STAY:
++		case PROC_TID_OPENMOSIX_DEBUG:
++		case PROC_TGID_OPENMOSIX_DEBUG:
++			inode->i_fop = &proc_pid_openmosix_operations;
++			break;
++#endif
+ #ifdef CONFIG_KALLSYMS
+ 		case PROC_TID_WCHAN:
+ 		case PROC_TGID_WCHAN:
+@@ -1923,6 +2058,54 @@
+ };
+ #endif
+ 
++#ifdef CONFIG_OPENMOSIX
++static int proc_tgid_openmosix_readdir(struct file * filp,
++			     void * dirent, filldir_t filldir)
++{
++	return proc_pident_readdir(filp,dirent,filldir,
++				   tgid_openmosix_stuff,
++				   ARRAY_SIZE(tgid_openmosix_stuff));
++}
++
++static int proc_tid_openmosix_readdir(struct file * filp,
++			     void * dirent, filldir_t filldir)
++{
++	return proc_pident_readdir(filp,dirent,filldir,
++				   tid_openmosix_stuff,
++				   ARRAY_SIZE(tid_openmosix_stuff));
++}
++
++static struct file_operations proc_tgid_openmosix_operations = {
++	.read		= generic_read_dir,
++	.readdir	= proc_tgid_openmosix_readdir,
++};
++
++static struct file_operations proc_tid_openmosix_operations = {
++	.read		= generic_read_dir,
++	.readdir	= proc_tid_openmosix_readdir,
++};
++
++static struct dentry *proc_tgid_openmosix_lookup(struct inode *dir,
++				struct dentry *dentry, struct nameidata *nd)
++{
++	return proc_pident_lookup(dir, dentry, tgid_openmosix_stuff);
++}
++
++static struct dentry *proc_tid_openmosix_lookup(struct inode *dir,
++				struct dentry *dentry, struct nameidata *nd)
++{
++	return proc_pident_lookup(dir, dentry, tid_openmosix_stuff);
++}
++
++static struct inode_operations proc_tgid_openmosix_inode_operations = {
++	.lookup		= proc_tgid_openmosix_lookup,
++};
++
++static struct inode_operations proc_tid_openmosix_inode_operations = {
++	.lookup		= proc_tid_openmosix_lookup,
++};
++#endif /* CONFIG_OPENMOSIX */
++
+ /*
+  * /proc/self:
+  */

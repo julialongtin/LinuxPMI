@@ -1,0 +1,12 @@
+001	omproc		hpc/proc.c				the first hunk adds three headers. two for inet related functions, one	<linux/inet.h>
+								for kcom. the rest of the file changes both proc_pid_set_where, and	<linux/in.h>
+								proc_pid_get_where functions. in proc_pid_set_where, the first real
+								difference is that instead of just printing home detected, and 
+								reacting, we print "HOME detected - on deputy node" and react based on
+								wether we are the deputy or the remote as to how we get migration
+								accomplished. home on deputy sends MIG_COME_HOME to tsk on remote. home
+								on remote node calls task_register_migration. IP on deputy is broken,
+								IP on remote calls task_register_migration. proc_pid_get_where is 
+								modified so that instead of using comm_getname and sockaddr_to_string,
+			examine portability.			we use variable assignments, and bitmask tricks with sprintf. 
+									

@@ -1,0 +1,16 @@
+Index: linux/arch/i386/lib/usercopy.c
+===================================================================
+--- linux.orig/arch/i386/lib/usercopy.c	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/i386/lib/usercopy.c	2006-09-28 15:02:17.000000000 +0200
+@@ -196,7 +196,10 @@
+ 	unsigned long res, tmp;
+ 
+ 	might_sleep();
+-
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_strnlen_user(s, n);
++#endif
+ 	__asm__ __volatile__(
+ 		"	testl %0, %0\n"
+ 		"	jz 3f\n"

@@ -1,0 +1,280 @@
+Index: linux/hpc/arch-i386.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/arch-i386.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,275 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/kernel.h>
++#include <linux/kallsyms.h>
++#include <linux/sched.h>
++#include <hpc/debug.h>
++#include <hpc/protocol.h>
++#include <hpc/arch.h>
++#include <hpc/task.h>
++#include <hpc/hpc.h>
++#include <hpc/prototype.h>
++#include <asm/uaccess.h>
++#include <asm/ptrace.h>
++#include <asm/desc.h>
++#include <asm/i387.h>
++
++unsigned long twd_fxsr_to_i387(struct i387_fxsave_struct *fxsave);
++unsigned short twd_i387_to_fxsr(unsigned short twd);
++
++static void fxsave_to_fsave(union i387_union *from, union i387_union *to)
++{
++	u8 *fcp, *tcp;
++	int i;
++
++	to->fsave.cwd = from->fxsave.cwd;
++	to->fsave.swd = from->fxsave.swd;
++	to->fsave.twd = twd_fxsr_to_i387(&from->fxsave);
++	to->fsave.fip = from->fxsave.fip;
++	to->fsave.fcs = from->fxsave.fcs;
++	to->fsave.foo = from->fxsave.foo;
++	to->fsave.fos = from->fxsave.fos;
++	to->fxsave.padding[0] = from->fxsave.fop;
++	to->fxsave.padding[1] = from->fxsave.mxcsr;
++
++	fcp = (u8 *) from->fxsave.st_space;
++	tcp = (u8 *) to->fsave.st_space;
++
++	/* 8 registers of 16 bytes to copy to 10 bytes */
++	for (i = 0; i < 8; i++, tcp += 10, fcp += 16)
++		memcpy(tcp, fcp, 10);
++
++	memcpy(to->fxsave.xmm_space, from->fxsave.xmm_space,
++					sizeof(to->fxsave.xmm_space));
++}
++
++static void fsave_to_fxsave(union i387_union *from, union i387_union *to)
++{
++	u8 *fcp, *tcp;
++	int i;
++
++	to->fxsave.cwd = from->fsave.cwd;
++	to->fxsave.swd = from->fsave.swd;
++	to->fxsave.twd = twd_i387_to_fxsr(from->fsave.twd);
++	to->fxsave.fop = from->fxsave.padding[0];
++	to->fxsave.fip = from->fsave.fip;
++	to->fxsave.fcs = from->fsave.fcs;
++	to->fxsave.foo = from->fsave.foo;
++	to->fxsave.mxcsr = from->fxsave.padding[1];
++	to->fxsave.fos = from->fsave.fos;
++
++	fcp = (u8 *) from->fsave.st_space;
++	tcp = (u8 *) to->fxsave.st_space;
++
++	/* 8 registers of 10 bytes to copy to 16 bytes */
++	for (i = 0; i < 8; i++, tcp += 16, fcp += 10)
++		memcpy(tcp, fcp, 10);
++
++	memcpy(to->fxsave.xmm_space, from->fxsave.xmm_space,
++					sizeof(from->fxsave.xmm_space));
++}
++
++
++/*****************************************************************************/
++/* receive part */
++
++int arch_mig_receive_specific(task_t *p, struct omp_mig_arch *m)
++{
++	switch (m->type)
++	{
++		case MIG_ARCH_I386_LDT:
++			printk(KERN_WARNING "oM: mig arch ldt not handle yet.\n");
++			break;
++		default:
++			printk(KERN_ERR "oM: mig arch type not handle.\n");
++			return 1;
++	}
++	return 0;
++}
++
++int arch_mig_receive_proc_context(task_t *p, struct omp_mig_task *m)
++{
++	struct pt_regs *regs;
++	int i;
++
++	/* copy pt_regs */
++	regs = ARCH_TASK_GET_USER_REGS(p);
++	memcpy(regs, &m->regs, sizeof(struct pt_regs));
++
++	/* debugs regs */
++	memcpy((caddr_t) p->thread.debugreg, (caddr_t) m->arch.debugreg,
++						sizeof(m->arch.debugreg));
++
++	/* copy some segmentation registers */
++	p->thread.fs = m->arch.fs;
++	p->thread.gs = m->arch.gs;
++	for (i = 0; i < GDT_ENTRY_TLS_ENTRIES; i++)
++		p->thread.tls_array[i] = m->arch.tls_array[i];
++
++	return 0;
++}
++
++void arch_mig_receive_fp(task_t *p, struct omp_mig_fp *fp)
++{
++	unlazy_fpu(p);
++
++	/* if same kind of cpu we just memcpy the structure */
++	if ((cpu_feature_has_fxsr() && fp->has_fxsr)
++	|| (!cpu_feature_has_fxsr() && !fp->has_fxsr))
++	{
++		memcpy(&p->thread.i387, &fp->data, sizeof(union i387_union));
++		return;
++	}
++
++	if (fp->has_fxsr)
++		fxsave_to_fsave(&fp->data, &p->thread.i387);
++	else
++		fsave_to_fxsave(&fp->data, &p->thread.i387);
++
++}
++
++/*****************************************************************************/
++/* send part */
++
++void arch_mig_send_pre(task_t *p)
++{
++	if (p->mm->context.ldt)
++		clear_LDT();
++}
++
++void arch_mig_send_post(task_t *p)
++{
++	if (p->mm->context.ldt)
++		load_LDT(&p->mm->context);
++}
++
++int arch_mig_send_specific(task_t *p)
++{
++	mm_context_t *pc = &p->mm->context;
++
++	if (pc->size)
++		printk(KERN_WARNING "process has specific ldt\n");
++	return 0;
++}
++
++int arch_mig_send_fp(task_t *p, struct omp_mig_fp *fp)
++{
++	unlazy_fpu(p);
++	fp->has_fxsr = cpu_feature_has_fxsr();
++	memcpy(&fp->data, &p->thread.i387, sizeof(p->thread.i387));
++	return 0;
++}
++
++int arch_mig_send_proc_context(task_t *p, struct omp_mig_task *m)
++{
++	struct pt_regs *regs;
++	int i;
++
++	/* copy pt_regs */
++	regs = ARCH_TASK_GET_USER_REGS(p);
++	memcpy(&m->regs, regs, sizeof(struct pt_regs));
++
++	/* copy some segmentation registers */
++	m->arch.fs = p->thread.fs;
++	m->arch.gs = p->thread.gs;
++
++	for (i = 0; i < GDT_ENTRY_TLS_ENTRIES; i++)
++		m->arch.tls_array[i] = p->thread.tls_array[i];
++
++	/* copy debugregs */
++	memcpy((caddr_t)m->arch.debugreg, (caddr_t)p->thread.debugreg,
++					sizeof(m->arch.debugreg));
++
++	if (task_test_dflags(p, DDEPUTY))
++		memcpy(m->arch.features, boot_cpu_data.x86_capability,
++					sizeof(m->arch.features));
++
++	return 0;
++}
++
++
++asmlinkage void ret_from_kickstart(void) __asm__("ret_from_kickstart");
++
++NORET_TYPE void arch_kickstart(struct task_struct *p)
++{
++	struct pt_regs *regs;
++	regs = ARCH_TASK_GET_USER_REGS(p);
++
++	if (p->thread.debugreg[7]) {
++		set_debugreg(p->thread.debugreg[0], 0);
++		set_debugreg(p->thread.debugreg[1], 1);
++		set_debugreg(p->thread.debugreg[2], 2);
++		set_debugreg(p->thread.debugreg[3], 3);
++		set_debugreg(p->thread.debugreg[6], 6);
++		set_debugreg(p->thread.debugreg[7], 7);
++	}
++
++	load_TLS(&p->thread, smp_processor_id());
++
++	loadsegment(fs, p->thread.fs);
++	loadsegment(gs, p->thread.gs);
++
++	regs->xcs = __USER_CS;
++
++	/* FIXME: not sure about this one */
++	flush_signals(p);
++
++	asm(	"movl %0,%%esp\n\t"
++		"jmp ret_from_kickstart\n\t"
++		: /**/ : "r"(regs));
++}
++
++/*****************************************************************************/
++#include <hpc/syscalls.h>
++#include <asm/unistd.h>
++
++long arch_exec_syscall(int n, syscall_parameter_t * args)
++{
++	syscall_func_t fct;
++	extern void * sys_call_table[];
++
++	OMDEBUG_SYS(4, "exec_sys[%d](%lx, %lx, %lx, %lx, %lx, %lx)\n", n,
++			args->arg[0], args->arg[1], args->arg[2],
++			args->arg[3], args->arg[4], args->arg[5]);
++	fct = (syscall_func_t) sys_call_table[n];
++	return fct(*((syscall_parameter_t *) args));
++}
++
++asmlinkage long om_sys_fork(struct pt_regs regs)
++{
++	return remote_do_fork(SIGCHLD, regs.esp, &regs, 0, NULL, NULL);
++}
++
++asmlinkage long om_sys_clone(struct pt_regs regs)
++{
++	unsigned long clone_flags;
++	unsigned long newsp;
++	int __user *parent_tidptr, *child_tidptr;
++	int retval;
++
++	clone_flags = regs.ebx;
++	newsp = regs.ecx;
++	parent_tidptr = (int __user *)regs.edx;
++	child_tidptr = (int __user *)regs.edi;
++	if (!newsp)
++		newsp = regs.esp;
++	retval = remote_do_fork(clone_flags, newsp, &regs, 0, parent_tidptr, child_tidptr);
++	return retval;
++}

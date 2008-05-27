@@ -1,0 +1,451 @@
+Index: linux/hpc/kcomd.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/kcomd.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,446 @@
++/*
++ *	Copyright (C) 2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/socket.h>
++#include <linux/in.h>
++#include <linux/in6.h>
++#include <linux/net.h>
++#include <linux/syscalls.h>
++#include <net/sock.h>
++#include <net/tcp.h>
++
++static int socket_listen(struct sockaddr *saddr, struct socket **res)
++{
++	struct socket *sock;
++	int ret, fd;
++	
++	ret = sock_create(saddr->sa_family, SOCK_STREAM, IPPROTO_TCP, &sock);
++	if (ret < 0)
++		return -1;
++
++	fd = sock_map_fd(sock);
++	if (fd < 0)
++		goto err;
++
++	ret = sock->ops->bind(sock, saddr, sizeof(*saddr));
++	if (ret < 0)
++		goto err_fd;
++
++	ret = sock->ops->listen(sock, SOMAXCONN);
++	if (ret < 0)
++		goto err_fd;
++	*res = sock;
++	return fd;
++err_fd:
++	sys_close(fd);
++err:
++	sock_release(sock);
++	*res = NULL;
++	return -1;
++}
++
++static int socket_listen_ip4(int port, struct socket **res)
++{
++	struct sockaddr_in saddr4 = {
++		.sin_family = AF_INET,
++		.sin_addr.s_addr = INADDR_ANY,
++		.sin_port = htons(port),
++	};
++
++	return socket_listen((struct sockaddr *) &saddr4, res);
++}
++
++static int socket_listen_ip6(int port, struct socket **res)
++{
++	struct sockaddr_in6 saddr6 = {
++		.sin6_family = AF_INET6,
++		.sin6_port = htons(port),
++	};
++
++	return socket_listen((struct sockaddr *) &saddr6, res);
++}
++
++struct kcom_pkt
++{
++	pid_t pid;    /* pid of the process */
++	int len;      /* len of data */
++	int type;     /* type of data */
++	char *data;   /* ptr of data */
++	struct list_head list;
++};
++
++struct kcom_node
++{
++	int fd;                 /* fd to send packet */
++	struct socket *sock;    /* socket */
++	struct sockaddr addr;   /* addr of this node */
++	spinlock_t tasks_lock;  /* lock for the list */
++	struct list_head tasks; /* list of task */
++	struct list_head list; /* list of nodes */
++};
++
++struct kcom_task
++{
++	pid_t pid;              /* pid of the process owning this struct */
++	struct kcom_node *node; /* node of the process to send/recv */
++	struct list_head list;  /* list of process using some node */
++	
++	struct list_head out_packs;
++	struct kcom_pkt in_packs;
++};
++
++static DEFINE_SPINLOCK(kcom_nodes_lock);
++struct list_head kcom_nodes = LIST_HEAD_INIT(kcom_nodes);
++
++fd_set_bits sockets_fds;
++char *sockets_fds_bitmap = NULL;
++int maxfds = -1;
++
++static int alloc_fd_bitmap(int fd4, int fd6)
++{
++	struct kcom_node *node;
++	int n, size;
++
++	n = max(fd4, fd6);
++
++	spin_lock(&kcom_nodes_lock);
++	list_for_each_entry(node, &kcom_nodes, list)
++		n = max(node->fd, n);
++	spin_unlock(&kcom_nodes_lock);
++
++	/* we don't need to reallocate the bitmap */
++	if (n <= maxfds)
++		return 0;
++	maxfds = n;
++
++	kfree(sockets_fds_bitmap);
++
++	size = FDS_BYTES(n);
++	sockets_fds_bitmap = kmalloc(6 * size, GFP_KERNEL);
++	if (!sockets_fds_bitmap)
++		return ENOMEM;
++
++	sockets_fds.in      = (unsigned long *)  sockets_fds_bitmap;
++	sockets_fds.out     = (unsigned long *) (sockets_fds_bitmap +   size);
++	sockets_fds.ex      = (unsigned long *) (sockets_fds_bitmap + 2*size);
++	sockets_fds.res_in  = (unsigned long *) (sockets_fds_bitmap + 3*size);
++	sockets_fds.res_out = (unsigned long *) (sockets_fds_bitmap + 4*size);
++	sockets_fds.res_ex  = (unsigned long *) (sockets_fds_bitmap + 5*size);
++
++	return 0;
++}
++
++struct kcom_pkt *kcom_pkt_create(int len, int type, char *data)
++{
++	struct kcom_pkt *pkt;
++	pkt = kzalloc(sizeof(struct kcom_pkt), GFP_KERNEL);
++	if (pkt) {
++		pkt->len = len;
++		pkt->type = type;
++		pkt->data = data;
++	}
++	return pkt;
++}
++
++struct kcom_node *__kcom_node_find(struct sockaddr *saddr)
++{
++	struct kcom_node *tmp;
++
++	list_for_each_entry(tmp, &kcom_nodes, list) {
++		/* FIXME compare fields, no memcmp */
++		if (memcmp(saddr, tmp, sizeof(struct sockaddr)) == 0)
++			return tmp;
++	}
++	return NULL;
++}
++
++struct kcom_node *kcom_node_find(struct sockaddr *saddr)
++{
++	struct kcom_node *node;
++
++	spin_lock(&kcom_nodes_lock);
++	node = __kcom_node_find(saddr);
++	spin_unlock(&kcom_nodes_lock);
++	return node;
++}
++
++int kcom_node_add(int fd, struct socket *sock)
++{
++	struct kcom_node *node;
++
++	node = kzalloc(sizeof(struct kcom_node), GFP_KERNEL);
++	if (!node)
++		return -ENOMEM;
++	INIT_LIST_HEAD(&node->list);
++	node->sock = sock;
++	node->fd = fd;
++	/*
++	if (!sock->ops || !sock->ops->getname)
++		goto err;
++
++	ret = sock->ops->getname
++	check if it's already in node list.
++	*/
++	
++	spin_lock(&kcom_nodes_lock);
++	list_add(&node->list, &kcom_nodes);
++	spin_unlock(&kcom_nodes_lock);
++	return 0;
++}
++
++int kcom_node_del(struct sockaddr *addr)
++{
++	struct kcom_node *node;
++
++	/* remove the node from the list */
++	spin_lock(&kcom_nodes_lock);
++	node = __kcom_node_find(addr);
++	if (!node) {
++		spin_unlock(&kcom_nodes_lock);
++		return -ENOENT;
++	}
++	list_del(&node->list);
++	spin_unlock(&kcom_nodes_lock);
++
++	/* release and free structure */
++	sys_close(node->fd);
++	sock_release(node->sock);
++	kfree(node);
++	return 0;
++}
++
++int comm_simple(int type, char * data)
++{
++	return 0;
++}
++int comm_ack(void);
++int comm_iovec(void);
++int comm_iovec_ack(void);
++
++static int accept_connection(struct socket *lsock)
++{
++	struct socket *sock;
++	int ret, fd;
++
++	sock = sock_alloc();
++	if (!sock)
++		return -1;
++
++	ret = lsock->ops->accept(lsock, sock, 0);
++	if (ret)
++		goto err;
++	/*
++	if (!sock->ops || !sock->ops->getname)
++		goto err;
++
++	ret = sock->ops->getname
++	check if it's already in node list.
++	*/
++
++	fd = sock_map_fd(sock);
++	if (fd < 0)
++		goto err;
++
++	ret = kcom_node_add(fd, sock);
++	if (ret < 0)
++		goto errfd;
++	return fd;
++errfd:
++	sys_close(fd);
++err:
++	sock_release(sock);
++	return -1;
++}
++
++int data_read(struct kcom_node *node)
++{
++	return 0;
++}
++
++int data_write(struct kcom_node *node)
++{
++	return 0;
++}
++
++int dispatch(struct kcom_node *node)
++{
++	return 0;
++}
++
++struct kcom_task *kcom_task_create(struct kcom_node *node, int pid)
++{
++	struct kcom_task *kctask;
++
++	kctask = kzalloc(sizeof(struct kcom_task), GFP_KERNEL);
++	if (kctask) {
++		kctask->pid = pid;
++		kctask->node = node;
++		INIT_LIST_HEAD(&kctask->list);
++		
++		list_add(&kctask->list, &node->tasks);
++	}
++	return kctask;
++}
++
++int kcom_task_delete(int pid)
++{
++	struct kcom_node *tmp;
++	struct kcom_task *tmp2;
++
++	list_for_each_entry(tmp, &kcom_nodes, list)
++		list_for_each_entry(tmp2, &tmp->tasks, list)
++			if (tmp2->pid == pid) {
++				list_del(&tmp2->list);
++				kfree(tmp2);
++				break;
++			}
++	return 0;
++}
++
++struct kcom_task *__kcom_task_find(int pid)
++{
++	struct kcom_node *tmp;
++	struct kcom_task *tmp2;
++
++	list_for_each_entry(tmp, &kcom_nodes, list)
++		list_for_each_entry(tmp2, &tmp->tasks, list)
++			if (tmp2->pid == pid)
++				return tmp2;
++	return NULL;
++}
++
++struct kcom_task *kcom_task_find(int pid)
++{
++	struct kcom_task *tmp;
++
++	tmp = __kcom_task_find(pid);
++	return tmp;
++}
++
++int kcom_task_send(int pid, int type, char *data)
++{
++	struct kcom_task *tsk;
++	struct kcom_pkt *pkt;
++
++	tsk = kcom_task_find(pid);
++	if (!tsk)
++		return -ENODEV;
++	
++	/* put pkt in kcom_task */
++	pkt = kcom_pkt_create(0, 0, NULL);
++	if (!pkt)
++		return -1;
++	list_add(&pkt->list, &tsk->out_packs);
++
++	/* go to sleep */
++	/* wait reply */
++	
++	return 0;
++}
++
++
++static int kcomd_thread(void *nothing)
++{
++	int ret;
++	struct socket *lsock4, *lsock6;
++	int fd4, fd6;
++
++	printk(KERN_INFO "kcomd: init\n");
++	daemonize("kcomd", 0);
++
++retry_listen:
++	fd4 = socket_listen_ip4(0xb55, &lsock4);
++	fd6 = socket_listen_ip6(0xb56, &lsock6);
++
++	if (fd4 == -1 && fd6 == -1) {
++		schedule_timeout_interruptible(HZ);
++		goto retry_listen;
++	}
++
++	while (1)
++	{
++		s64 timeout = -1;
++		int n = -1;
++		struct kcom_node *node;
++
++		alloc_fd_bitmap(fd4, fd6);
++		n = maxfds;
++
++		zero_fd_set(n, sockets_fds.in);
++		zero_fd_set(n, sockets_fds.out);
++		zero_fd_set(n, sockets_fds.ex);
++	
++		/* add listening sockets to the set */
++		set_bit(fd4, sockets_fds.in);
++		set_bit(fd6, sockets_fds.in);
++
++		/* for each nodes (set fds.in && fds.out) */
++		spin_lock(&kcom_nodes_lock);
++		list_for_each_entry(node, &kcom_nodes, list) {
++			struct kcom_task *task;
++
++			if (node->fd == -1 || node->fd > maxfds)
++				continue;
++			set_bit(node->fd, sockets_fds.in);
++			list_for_each_entry(task, &node->tasks, list)
++				if (!list_empty(&task->out_packs))
++					set_bit(node->fd, sockets_fds.out);
++		}
++		spin_unlock(&kcom_nodes_lock);
++
++		zero_fd_set(n, sockets_fds.res_in);
++		zero_fd_set(n, sockets_fds.res_out);
++		zero_fd_set(n, sockets_fds.res_ex);
++
++		ret = do_select(n + 1, &sockets_fds, &timeout);
++		if (ret < 0)
++			continue;
++
++		/* test listening sockets */
++		if (fd4 != -1 && test_bit(fd4, sockets_fds.res_in))
++			accept_connection(lsock4);
++		if (fd6 != -1 && test_bit(fd6, sockets_fds.res_in))
++			accept_connection(lsock6);
++
++		/* for each nodes { test bit, in, out and do stuff } */
++		spin_lock(&kcom_nodes_lock);
++		list_for_each_entry(node, &kcom_nodes, list) {
++			if (test_bit(node->fd, sockets_fds.res_in))
++				data_read(node);
++			if (test_bit(node->fd, sockets_fds.res_out))
++				data_write(node);
++		}
++		spin_unlock(&kcom_nodes_lock);
++	}
++
++	return -1;
++}
++
++static int __init kcomd_init(void)
++{
++	long ret;
++
++	ret = kernel_thread(kcomd_thread, NULL, 0);
++	return ret;
++}
++
++static void __exit kcomd_exit(void)
++{
++}
++
++module_init(kcomd_init);
++module_exit(kcomd_exit);
++MODULE_LICENSE("GPL");
++MODULE_AUTHOR("Vincent Hanquez");

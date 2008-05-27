@@ -1,0 +1,10 @@
+001	om		hpc/migctrl.c				hunk one includes three additional headers, one linux, two of ours. 	<linux/in.h>
+								the second hunk strips out the handshake and comm_ code in 		<hpc/omtask.h>
+								task_remote_expel, shortening it conciderably. the third hunk pulls 	<hpc/kcom.h>
+								out all of the comm_ related contents of task_remote_wait_expel, 
+								turning it into a wrapper for task_remote_expel. the fourth and fifth
+								hunks remove comm_ code, and handshake code from task_local_send. the
+								sixth and seventh patch remove comm_ and handshake code from 
+								task_local_bring, but also set the current task as runable, and call
+			do we return?				schedule before returning. the final hunk makes __task_move_to_node
+								easier to read, but drops the error return path.

@@ -1,0 +1,535 @@
+Index: linux/hpc/comm.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/comm.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,530 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++#include <linux/sched.h>
++#include <linux/socket.h>
++#include <linux/in.h>
++#include <linux/in6.h>
++#include <linux/net.h>
++#include <net/sock.h>
++#include <net/tcp.h>
++#include <asm/uaccess.h>
++#include <hpc/mig.h>
++#include <hpc/debug.h>
++#include <hpc/comm.h>
++#include <hpc/task.h>
++#include <hpc/prototype.h>
++
++#define POLLIN_SET (POLLRDNORM | POLLRDBAND | POLLIN | POLLHUP | POLLERR)
++
++unsigned long comm_remote_timo = COMM_REMOTE_TIMO;	/* for remote accept */
++unsigned long comm_connect_timo = COMM_CONNECT_TIMO;	/* for connection */
++unsigned long comm_reconn_timo = COMM_RECONN_TIMO;	/* for reconnection */
++
++/**
++ * comm_shutdown - shutdown socket
++ * @mlink:	openMosix link to shutdown
++ **/
++static void comm_shutdown(struct socket *sock)
++{
++	if (sock && sock->ops)
++		sock->ops->shutdown(sock, SEND_SHUTDOWN);
++}
++
++/**
++ * comm_getname - get the name of socket
++ * @mlink:	openMosix link to query
++ * @address:	the sockaddr to fill
++ * @peer:	get peer name instead?
++ **/
++int comm_getname(struct socket *sock, struct sockaddr *address, int peer)
++{
++	int val, ret;
++
++	val = sizeof(struct sockaddr);
++	if (!sock->ops || !sock->ops->getname)
++		return -1;
++	ret = sock->ops->getname(sock, address, &val, peer);
++	if (ret)
++		return -1;
++	return val;
++}
++
++/**
++ * comm_data_ready - Wake the socket when data are ready
++ * @sk:	socket to wake up
++ * @len:	unneeded
++ **/
++void comm_data_ready(struct sock *sk, int len)
++{
++	wake_up_interruptible(sk->sk_sleep);
++}
++
++static int comm_setup_tcp(struct socket *sock)
++{
++	int val;
++	char __user *pval;
++	int error;
++	mm_segment_t oldfs;
++
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++
++	pval = (char __user *) &val;
++
++	/* old TOADDR/ACCEPT */
++	val = 1;
++	error = sock_setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE,
++	                        pval, sizeof(val));
++	if (error)
++		goto fail;
++	/* FIXME: check on these, old COMM_MIGD */
++	val = OPENMOSIX_CONNECTION_KEEPALIVE_INTERVAL;
++	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL,
++	                              pval, sizeof(val));
++	if (error)
++		goto fail;
++
++	val = OPENMOSIX_CONNECTION_KEEPALIVE_MAXTRIES;
++	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT,
++	                              pval, sizeof(val));
++	if (error)
++		goto fail;
++
++	val = OPENMOSIX_CONNECTION_KEEPALIVE_TOTAL;
++	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE,
++	                              pval, sizeof(val));
++	if (error)
++		goto fail;
++
++	val = 1;
++	error = sock->ops->setsockopt(sock, IPPROTO_TCP, TCP_NODELAY,
++	                              pval, sizeof(val));
++	if (error)
++		goto fail;
++
++fail:
++	set_fs(oldfs);
++	return error;
++}
++
++
++struct socket * comm_socket(int family, int type, int proto)
++{
++	int error;
++	struct socket *sock;
++
++	error = sock_create(family, type, proto, &sock);
++	if (error < 0)
++		return NULL;
++	return sock;
++}
++
++
++int comm_bind(struct socket *sock, struct sockaddr *saddr)
++{
++	int error;
++
++	error = sock->ops->bind(sock, saddr, sizeof(*saddr));
++	if (error == -EADDRINUSE)
++		printk("comm_bind() Already in use\n");
++
++	return error;
++}
++
++static int comm_listen(struct socket *sock)
++{
++	int error;
++
++	error = sock->ops->listen(sock, SOMAXCONN);
++
++	return error;
++}
++
++
++int comm_connect(struct socket *sock, struct sockaddr *saddr, unsigned long timo)
++{
++	int error;
++	DECLARE_WAITQUEUE(wait, current);
++
++	if (!timo)
++		timo = MAX_SCHEDULE_TIMEOUT;
++
++	error = sock->ops->connect(sock, saddr, sizeof(*saddr), O_NONBLOCK);
++
++	add_wait_queue(sock->sk->sk_sleep, &wait);
++	while (sock->state != SS_CONNECTED) {
++		set_current_state(TASK_INTERRUPTIBLE);
++		error = sock->ops->connect(sock, saddr, sizeof(*saddr),
++						O_NONBLOCK);
++		if (error != -EALREADY || (error = sock_error(sock->sk)))
++			break;
++
++		timo = schedule_timeout(timo);
++		if (timo <= 0) {
++			error = -EAGAIN;
++			break;
++		}
++	}
++	remove_wait_queue(sock->sk->sk_sleep, &wait);
++	set_current_state(TASK_RUNNING);
++
++	if (error) {
++		OMBUG("failed to connect\n");
++		return error;
++	}
++
++	if (sock->sk->sk_err) {
++		error = sock_error(sock->sk);	/* cleans error.. */
++		OMBUG("sk_err\n");
++		return error;
++	}
++
++	return 0;
++}
++
++
++/**
++ * comm_close - close an openMosix communication socket
++ * @mlink:	openMosix link
++ **/
++void comm_close(struct socket *sock)
++{
++	BUG_ON(!sock);
++
++	sock_release(sock);
++}
++
++/**
++ * comm_peek - peek the socket looking for data pending
++ **/
++int comm_peek(struct socket *sock)
++{
++	int mask;
++
++	mask = sock->ops->poll(NULL, sock, NULL);
++	return (mask & POLLIN_SET) ? 1 : 0;
++}
++
++
++/**
++ * comm_poll - wait for a communication event, interrupt or openMosix event
++ * @sock:		socket to poll
++ * @mask:		polling mask
++ * @interruptible:	is the task interruptible
++ * @timo:		timeout (0 = MAX_SCHEDULE_TIMEOUT)
++ *
++ * Description:
++ *	returns 1 on communication events, and 0 otherwise
++ */
++static int comm_poll(struct socket *sock, int mask, int interruptible, unsigned long timo)
++{
++	int pollmask;
++	static struct file sighfile = {.f_count = ATOMIC_INIT(1)};
++	DECLARE_WAITQUEUE(wait, current);
++
++	/*
++	 * sighfile: we are required to supply a file to "hold" while we poll.
++	 * a bit ridiculous in this context, but nobody will notice because
++	 * f_count will never drop to 0
++	 */
++	if (!timo)
++		timo = MAX_SCHEDULE_TIMEOUT;
++	add_wait_queue(sock->sk->sk_sleep, &wait);
++	for (;;)
++	{
++		set_current_state(TASK_INTERRUPTIBLE);
++		pollmask = sock->ops->poll(&sighfile, sock, NULL);
++		if ((pollmask & mask) || (interruptible &&
++					 (signal_pending(current)
++					 || task_test_dreqs(current, ~0))))
++			break;
++
++		timo = schedule_timeout(timo);
++		if (timo <= 0)
++			break;
++	}
++	remove_wait_queue(sock->sk->sk_sleep, &wait);
++	set_current_state(TASK_RUNNING);
++
++	return (pollmask & mask) ? 1 : 0;
++}
++
++
++/**
++ * comm_wait - wait for a message, or some other openMosix event
++ *
++ * Description:
++ *	return 1 if there is a message, 0 if another event occured first.
++ **/
++int comm_wait(struct socket *sock)
++{
++	return comm_poll(sock, POLLIN_SET, 1, 0UL);
++}
++
++
++/**
++ * comm_accept - accept a connection on openMosix socket
++ * @ml:		the socket that receive a connection
++ * @mlp:	the new link opened will be assigned here
++ * @saddr:	source address of the connection
++ * @timeout:	timeout (0 = MAX_SCHEDULE_TIMEOUT)
++ **/
++int comm_accept(struct socket *ml, struct socket **mlp, struct sockaddr *saddr,
++		unsigned long timeout)
++{
++	struct socket *sock;
++	int error = -EMFILE;
++
++	*mlp = NULL;
++
++	sock = sock_alloc();
++	if (!sock)
++		return error;
++
++	sock->type = ml->type;
++	sock->ops = ml->ops;
++
++	if (timeout && !comm_poll(ml, POLLIN | POLLRDNORM, 0, timeout)) {
++		error = -EAGAIN;
++		goto failed;
++	}
++
++	error = ml->ops->accept(ml, sock, 0);
++	if (error)
++		goto failed;
++
++	/* set up connection options */
++	error = comm_setup_tcp(sock);
++	if (error)
++		goto failed;
++
++	*mlp = sock;
++	return error;
++
++failed:
++	sock_release(sock);
++	return error;
++}
++
++/**
++ * comm_dorecv - Reliable read data from socket
++ * @sock:	socket to read from
++ * @msg:	fill with data
++ * @len:	lenght of the data
++ *
++ * Description:
++ *	reliably read data on success, or if
++ *	error == -EFAULT: returns number of bytes received otherwise
++ *	(any other error): returns negative error.
++ **/
++static int comm_dorecv(struct socket *sock, struct msghdr *msg, int len)
++{
++	int n = 0;
++	int left = len;
++
++	do {
++		n = sock_recvmsg(sock, msg, left, msg->msg_flags);
++		if (n <= 0) {
++			/* if we already got -EFAULT, we must report */
++			if (n == -EFAULT)
++			{
++				for ( ; msg->msg_iovlen; msg->msg_iov++) {
++					msg->msg_iovlen--;
++					len -= msg->msg_iov->iov_len;
++				}
++				return len;
++			}
++
++			/* .. otherwise - it is fatal - return error */
++			if (n < 0)
++				return n;
++			return -EPIPE;
++		}
++
++		left -= n;
++		if (left) {
++			/* ...->recvmsg() updated iovec, we update msg */
++			while (!msg->msg_iov->iov_len)
++			{
++				msg->msg_iov++;
++				msg->msg_iovlen--;
++			}
++		}
++	} while (left);
++	return len;
++}
++
++
++/**
++ * comm_recv - receive a message of size @len
++ * @mlink:	socket we're using
++ * @data:	pointer to buffer to write message into
++ * @len:	length of data we want
++ **/
++int comm_recv(struct socket *mlink, void *data, int len)
++{
++	struct iovec iov;
++	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_WAITALL | MSG_NOSIGNAL };
++	mm_segment_t oldfs;
++	int error = -1;
++
++	BUG_ON(len > PAGE_SIZE);
++	BUG_ON(!mlink);
++
++	iov.iov_base = data;
++	iov.iov_len = len;
++
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++
++	error = comm_dorecv(mlink, &msg, len);
++	if (error != len) {
++		OMBUG("got %d of %d\n", error, len);
++		if (error >= 0)
++			error = -EFAULT;
++		comm_shutdown(mlink);
++	}
++
++	set_fs(oldfs);
++
++	return error;
++}
++
++
++
++/**
++ * comm_send - send data and returns the bytes number of data sent
++ * @mlink:	socket we're using
++ * @data:	data to send
++ * @len:	length of data
++ **/
++int comm_send(struct socket *mlink, void *data, int len)
++{
++	struct iovec iov;
++	struct msghdr msg = { NULL, 0, &iov, 1, NULL, 0, MSG_NOSIGNAL };
++	mm_segment_t oldfs;
++	int error;
++
++	BUG_ON(!mlink);
++
++	iov.iov_base = data;
++	iov.iov_len  = len;
++
++	oldfs = get_fs();
++	set_fs(KERNEL_DS);
++
++	error = sock_sendmsg(mlink, &msg, len);
++	if (error != len)
++		printk("sock_sendmsg: sent %d of %d\n", error, len);
++
++	set_fs(oldfs);
++
++	return error;
++}
++
++/* ---------- openmosix specifics start here ------------ */
++#include <hpc/protocol.h>
++
++void set_our_addr(int type, struct sockaddr *sa, int port)
++{
++	struct sockaddr_in *sa_in;
++	struct sockaddr_in6 *sa_in6;
++
++	switch (type) {
++	case AF_INET:
++		sa_in = (struct sockaddr_in *) sa;
++		sa_in->sin_family = type;
++		sa_in->sin_addr.s_addr = INADDR_ANY;
++		sa_in->sin_port = port;
++		return;
++	case AF_INET6:
++		sa_in6 = (struct sockaddr_in6 *) sa;
++		return;
++	}
++}
++
++/* lazy helper functions */
++struct socket * comm_setup_listen(struct sockaddr *sa)
++{
++	struct socket *link;
++	int error;
++
++	link = comm_socket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP);
++	if (!link)
++		return NULL;
++
++	error = comm_bind(link, sa);
++	if (error < 0)
++		goto fail;
++
++	error = comm_listen(link);
++	if (error < 0)
++		goto fail;
++
++	return link;
++
++fail:
++	comm_close(link);
++	return NULL;
++}
++
++struct socket * comm_setup_connect(struct sockaddr *sa, int timo)
++{
++	struct socket *link;
++
++	link = comm_socket(sa->sa_family, SOCK_STREAM, IPPROTO_TCP);
++	if (!link)
++		return NULL;
++
++	if (comm_connect(link, sa, timo))
++		goto fail;
++
++	return link;
++
++fail:
++	comm_close(link);
++	return NULL;
++}
++
++int comm_send_hd(struct socket *link, int type, void *data, int dlen)
++{
++	struct omp_req req;
++	int error;
++
++	req.type = type;
++	req.dlen = dlen;
++
++	error = comm_send(link, &req, sizeof(req));
++	if (error < 0)
++		return -1;
++
++	error = comm_send(link, data, dlen);
++	if (error < 0)
++		return -1;
++
++	return 0;
++}
++
++
++int comm_send_req(struct socket *link, int type)
++{
++	struct omp_req req;
++	req.type = type;
++	return comm_send(link, &req, sizeof(req));
++}

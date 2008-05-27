@@ -1,0 +1,40 @@
+Index: linux/arch/x86_64/kernel/asm-offsets.c
+===================================================================
+--- linux.orig/arch/x86_64/kernel/asm-offsets.c	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/x86_64/kernel/asm-offsets.c	2006-09-28 15:02:17.000000000 +0200
+@@ -14,6 +14,9 @@
+ #include <asm/segment.h>
+ #include <asm/thread_info.h>
+ #include <asm/ia32.h>
++#ifdef CONFIG_OPENMOSIX
++#include <hpc/task.h>
++#endif
+ 
+ #define DEFINE(sym, val) \
+         asm volatile("\n->" #sym " %0 " #val : : "i" (val))
+@@ -27,9 +30,13 @@
+ 	ENTRY(flags); 
+ 	ENTRY(thread); 
+ 	ENTRY(pid);
++#ifdef CONFIG_OPENMOSIX
++	DEFINE(TASK_om, offsetof(struct task_struct, om));
++#endif /* CONFIG_OPENMOSIX */
+ 	BLANK();
+ #undef ENTRY
+ #define ENTRY(entry) DEFINE(threadinfo_ ## entry, offsetof(struct thread_info, entry))
++	ENTRY(task);
+ 	ENTRY(flags);
+ 	ENTRY(addr_limit);
+ 	ENTRY(preempt_count);
+@@ -68,5 +75,11 @@
+ 	DEFINE(pbe_next, offsetof(struct pbe, next));
+ 	BLANK();
+ 	DEFINE(TSS_ist, offsetof(struct tss_struct, ist));
++#ifdef CONFIG_OPENMOSIX
++	DEFINE(OM_dflags, offsetof(struct openmosix_task, dflags));
++	BLANK();
++	DEFINE(DDEPUTY, DDEPUTY);
++	DEFINE(DREMOTE, DREMOTE);
++#endif /* CONFIG_OPENMOSIX */
+ 	return 0;
+ }

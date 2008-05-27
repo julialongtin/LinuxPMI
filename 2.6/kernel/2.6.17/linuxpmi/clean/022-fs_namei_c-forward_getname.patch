@@ -1,0 +1,17 @@
+Index: linux/fs/namei.c
+===================================================================
+--- linux.orig/fs/namei.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/fs/namei.c	2006-09-28 15:02:17.000000000 +0200
+@@ -143,6 +143,12 @@
+ 
+ 	result = ERR_PTR(-ENOMEM);
+ 	tmp = __getname();
++#ifdef CONFIG_OPENMOSIX
++	if (tmp && openmosix_memory_away()) {
++		deputy_strncpy_from_user(tmp, filename, PATH_MAX);
++		return tmp;
++	}
++#endif
+ 	if (tmp)  {
+ 		int retval = do_getname(filename, tmp);
+ 

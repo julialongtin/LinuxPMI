@@ -1,0 +1,44 @@
+001	kcom		creates hpc/kcom.c			kcom daemon code, similar to hpc/comm.c and kcomd.c.we define		<linux/sched.h>
+								_HPC_KCOMC_H before including either of our hpc headers, as a flag to	<linux/socket.h>
+								the headers that wer are compiling kcom.c. pkt_data_read reads a given	<linux/in.h>
+								length of data from a node (via a socket), where the length was 	<linux/in6.h>
+								specified in the (previously received) kcom_pkt structure. 		<linux/syscalls.h>
+								if the data is less than 32 bytes long, we expect to receive padding to <net/sock.h>
+								32 bytes, and therefore use a different buffer to receive the data,	<net/tcp.h>
+								and we actually copy the data to its destination later, without the	<hpc/kcom.h>
+								padding. while we are in socket code, we set_fs(KERNEL_DS). we use	<hpc/prototype.h>
+								sock_recvmsg to actually receive the data in question. this function is
+								EXPORT_SYMBOL_GPL'd. pkt_hdr_read reads a kcom_pkt structure from a
+								node, and returns it in a kcom_pkt structure (allocated from
+								SLAB_KERNEL). the structure is very similar to the previous function, 
+								without the 32 byte padding code. this function is EXPORT_SYMBOL_GPL'd.
+								alloc_fd_bitmap is a too-similar copy of alloc_fd_bitmap from
+			remove the line with fd4 and fd6 in it.	hpc/kcomd.c. in fact, it is broken, due to references to fd4 and fd6.
+								its also missing the locking code from the origional. nevertheless, its
+								purpose is to make sure the array sockets_fds_bitmap contain enough 
+								entries that we can call do_select against all open sockets, and use 
+								sockets_fds_bitmap to store the result. this version checks if we need 
+								to re-allocate right at the top, and returns if we don't. otherwise, we
+								free the array, check the max_fd against each node's fd, then use the
+								highest numbered fd as our ammount of fds to allocate. we then set 
+								socket_fds to use pointers into our newly allocated array. this 
+								function is EXPORT_SYMBOL_GPL'd. kcom_pkt_create creates and
+								returns a kcom_pkt structure allocated from SLAB_KERNEL, or NULL if
+								error. the arguments are used to init fields in the kcom_pkt
+			remove ack?				structure, with the exception of ack, which is not referenced. if 
+								this packet is marked PKT_NEW_MSG, we set the packet's msgid field to
+								our global message id counter, then inc the counter. this function is 
+								EXPORT_SYMBOL_GPL'd. __kcom_node_find is the worker function (called 
+								from kcom_node_find) that does the job of finding a node structure 
+								describing a connection to the given IP. it uses list_for_each_entry,
+								and compares both the addresses, and their coresponding families (ipv4	
+								or ipv6). kcom_node_find wraps the previous function, adding only dead
+								code. this function is EXPORT_SYMBOL_GPL'd. kcom_node_add creates a new
+								kcom_node structure, initializes our list and tasks members as
+								members of linked lists. we store the passed sock in the structure,
+								and initialize fd to zero (a flag for kcomd to detect). we add our
+			locking code is present, instead of	new node structure's list member to the linked list of nodes, send
+			disabled, like everywhere else. why?	kcomd SIGHUP to notify it to listen to this socket, and return the
+								kcom_node structure. this function is EXPORT_SYMBOL_GPL'd.
+			uses same locks as above.		kcom_node_del removes a node's list member from the list of nodes, 
+								

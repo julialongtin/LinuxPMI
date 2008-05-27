@@ -1,0 +1,63 @@
+Index: linux/arch/i386/kernel/vm86.c
+===================================================================
+--- linux.orig/arch/i386/kernel/vm86.c	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/i386/kernel/vm86.c	2006-09-28 15:02:17.000000000 +0200
+@@ -50,6 +50,8 @@
+ #include <asm/tlbflush.h>
+ #include <asm/irq.h>
+ 
++#include <linux/hpc.h>
++
+ /*
+  * Known problems:
+  *
+@@ -133,6 +135,11 @@
+ 	loadsegment(fs, current->thread.saved_fs);
+ 	loadsegment(gs, current->thread.saved_gs);
+ 	ret = KVM86->regs32;
++#ifdef CONFIG_OPENMOSIX
++	task_lock(current);
++	task_clear_stay(current, DSTAY_86);
++	task_unlock(current);
++#endif /* CONFIG_OPENMOSIX */
+ 	return ret;
+ }
+ 
+@@ -181,6 +188,13 @@
+ 	struct task_struct *tsk;
+ 	int tmp, ret = -EPERM;
+ 
++#ifdef CONFIG_OPENMOSIX
++	ret = -ENOMEM;
++	if (!task_go_home_for_reason(current, DSTAY_86))
++		goto out;
++	ret = -EPERM;
++#endif /* CONFIG_OPENMOSIX */
++
+ 	tsk = current;
+ 	if (tsk->thread.saved_esp0)
+ 		goto out;
+@@ -240,6 +254,11 @@
+ 	ret = -EFAULT;
+ 	if (tmp)
+ 		goto out;
++#ifdef CONFIG_OPENMOSIX
++	ret = -ENOMEM;
++	if (!task_go_home_for_reason(current, DSTAY_86))
++		goto out;
++#endif /* CONFIG_OPENMOSIX */
+ 	info.regs32 = &regs;
+ 	info.vm86plus.is_vm86pus = 1;
+ 	tsk->thread.vm86_info = (struct vm86_struct __user *)v86;
+@@ -329,6 +348,11 @@
+ 
+ 	regs32 = save_v86_state(regs16);
+ 	regs32->eax = retval;
++#ifdef CONFIG_OPENMOSIX
++	task_lock(current); 
++	task_clear_stay(current, DSTAY_86);
++	task_unlock(current);
++#endif /* CONFIG_OPENMOSIX */
+ 	__asm__ __volatile__("movl %0,%%esp\n\t"
+ 		"movl %1,%%ebp\n\t"
+ 		"jmp resume_userspace"

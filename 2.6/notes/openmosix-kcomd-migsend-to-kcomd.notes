@@ -1,0 +1,15 @@
+001			linux/hpc/migsend.c			our first hunk just adds some headers, the second is spacing related
+								noise, drop. the third changes mig_send_fp to use kcom_send_with_ack
+								instead of comm_send_hd. the fourth hunk re-writes mig_send_mm to use
+								kcom_send_with_ack, only it also stops using a omp_mig_mm structure,
+								and instead just relies on sizeof(omp_mig_mm). the fifth hunk changes
+								mig_send_vmas to preserve vm_pgoff during transmission, and use 
+								kcom_send_with_ack instead of comm_send_hd. the sixth changes 
+								mig_send_pages to allocate a page of memory, copy our data there, and
+			no error checking.			send from that buffer using kcom_send_with_ack. the next two hunks swap	
+								out comm_recv with kcom_send_with_ack inside of mig_send_proc_context.
+								chunk nine uses kcom_send_with_ack at the top of mig_do_send to request	
+								permission to migrate a process, before jumping in to sending. the
+								final patch printk's when a process migrates successfully, and changes
+								the fail_mig routine to print an error, and not to send anything to the
+								remote end if we fail to migrate.

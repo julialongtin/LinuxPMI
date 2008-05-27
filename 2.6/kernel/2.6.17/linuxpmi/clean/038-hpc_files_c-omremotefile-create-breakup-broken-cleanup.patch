@@ -1,0 +1,289 @@
+Index: linux/hpc/files.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/files.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,284 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/fs.h>
++#include <linux/list.h>
++#include <linux/sched.h>
++#include <linux/file.h>
++#include <linux/mount.h>
++#include <linux/pagemap.h>
++#include <linux/mm.h>
++#include <hpc/comm.h>
++#include <hpc/prototype.h>
++#include <hpc/debug.h>
++
++struct address_space_operations remote_aops = { .readpage = remote_readpage, };
++struct file_operations remote_file_operations = { .mmap = remote_file_mmap, };
++
++int task_heldfiles_add(task_t *p, struct file *file,
++				struct vm_operations_struct *vm_ops)
++{
++	struct om_held_file *rfile;
++
++	rfile = kmalloc(sizeof(struct om_held_file), GFP_KERNEL);
++	if (!rfile)
++		return -ENOMEM;
++
++	OMDEBUG_RINO(2, "process [%d] adding file [0x%p], nopage [0x%p]\n",
++			p->pid, file, (void *) vm_ops->nopage);
++
++	get_file(file);
++	rfile->file = file;
++	rfile->nb = (unsigned long) file; /* FIXME */
++	rfile->nopage = vm_ops->nopage;
++	list_add(&rfile->list, &p->om.rfiles);
++	return 0;
++}
++
++void task_heldfiles_clear(task_t *p)
++{
++	struct om_held_file *rfile, *next;
++
++	list_for_each_entry_safe(rfile, next, &p->om.rfiles, list) {
++		fput(rfile->file);
++		kfree(rfile);
++	}
++}
++
++struct om_held_file *task_heldfiles_find(task_t *p, struct file *file)
++{
++	struct om_held_file *heldfile;
++
++	OMDEBUG_RINO(3, "process [%d] searching file [0x%p]\n", p->pid, file);
++
++	list_for_each_entry(heldfile, &p->om.rfiles, list) {
++		if (heldfile->file == file)
++			return heldfile;
++	}
++	printk(KERN_ERR "heldfile: file not found\n");
++	return NULL;
++}
++
++#if 0
++static struct backing_dev_info remote_backing_dev_info = {
++        .ra_pages       = 0,    /* No readahead */
++        .memory_backed  = 1,    /* Does not contribute to dirty memory */
++};
++#endif
++
++/*****************************************************************************/
++struct om_remote_dentry
++{
++	struct list_head list;
++	struct dentry *dentry;
++};
++
++spinlock_t remote_dentries_lock = SPIN_LOCK_UNLOCKED;
++struct list_head remote_dentries = LIST_HEAD_INIT(remote_dentries);
++
++int rdentry_delete(struct dentry *dentry)
++{
++	struct list_head *ptr;
++	int ret = -ENOENT;
++
++	spin_lock(&remote_dentries_lock);
++	list_for_each(ptr, &remote_dentries) {
++		struct om_remote_dentry *rd = list_entry(ptr, struct om_remote_dentry, list);
++
++		if (rd->dentry == dentry) {
++			list_del(ptr);
++			kfree(rd);
++			ret = 0;
++		}
++	}
++	spin_unlock(&remote_dentries_lock);
++	if (ret)
++		BUG();
++	return ret;
++}
++
++void rdentry_iput(struct dentry *dentry, struct inode *inode)
++{
++	kfree(inode->u.generic_ip);
++	iput(inode);
++}
++
++struct dentry_operations remote_dentry_ops = {
++	.d_delete = rdentry_delete,
++	.d_iput = rdentry_iput,
++};
++
++struct super_operations rfile_dummy_block_ops = { };
++
++struct super_block rfiles_dummy_block =
++{
++	.s_op = &rfile_dummy_block_ops,
++	.s_inodes = LIST_HEAD_INIT(rfiles_dummy_block.s_inodes),
++};
++
++struct vfsmount remote_file_vfsmnt =
++{
++	.mnt_count = ATOMIC_INIT(1),
++	.mnt_hash = LIST_HEAD_INIT(remote_file_vfsmnt.mnt_hash),
++	.mnt_child = LIST_HEAD_INIT(remote_file_vfsmnt.mnt_child),
++	.mnt_mounts = LIST_HEAD_INIT(remote_file_vfsmnt.mnt_mounts),
++	.mnt_list = LIST_HEAD_INIT(remote_file_vfsmnt.mnt_list),
++	.mnt_expire = LIST_HEAD_INIT(remote_file_vfsmnt.mnt_expire),
++	.mnt_parent = &remote_file_vfsmnt,
++};
++
++static int rdentry_add_entry(struct dentry *dentry)
++{
++	struct om_remote_dentry *rdentry;
++
++	rdentry = kmalloc(sizeof(struct om_remote_dentry), GFP_KERNEL);
++	if (!rdentry)
++		return -ENOMEM;
++
++	rdentry->dentry = dentry;
++	spin_lock(&remote_dentries_lock);
++	list_add(&rdentry->list, &remote_dentries);
++	spin_unlock(&remote_dentries_lock);
++	return 0;
++}
++
++static struct dentry * rdentry_create_dentry(struct rfile_inode_data *data)
++{
++	struct dentry *dentry;
++	struct inode *inode;
++	struct rfile_inode_data *tmp;
++
++	inode = new_inode(&rfiles_dummy_block);
++	if (!inode)
++		return NULL;
++
++	tmp = kmalloc(sizeof(struct rfile_inode_data), GFP_KERNEL);
++	if (!tmp)
++		goto error;
++
++	memcpy(tmp, data, sizeof(struct rfile_inode_data));
++
++	inode->u.generic_ip = tmp;
++
++	inode->i_mode = S_IFREG;
++	inode->i_size = data->isize;
++	inode->i_fop = &remote_file_operations;
++	inode->i_mapping->a_ops = &remote_aops;
++
++	dentry = d_alloc(NULL, &(const struct qstr){ .name = "/", .len = 1 });
++	if (!dentry)
++		goto error;
++
++	dentry->d_inode = inode;
++	dentry->d_parent = dentry;
++
++	rdentry_add_entry(dentry);
++
++	return dentry;
++error:
++	kfree(data);
++	iput(inode);
++	return NULL;
++}
++
++static inline struct rfile_inode_data * rfile_inode_get_data(struct inode *inode)
++{
++	return (struct rfile_inode_data *) inode->u.generic_ip;
++}
++
++struct file * rfiles_inode_get_file(struct inode *inode)
++{
++	return rfile_inode_get_data(inode)->file;
++}
++
++static inline int rfiles_inode_compare(struct inode *inode,
++					struct rfile_inode_data *data)
++{
++	return memcmp(inode->u.generic_ip, data, sizeof(*data)) == 0;
++}
++
++static struct dentry * rdentry_find(struct rfile_inode_data *data)
++{
++	struct om_remote_dentry *ptr;
++	struct dentry *dentry = NULL;
++
++	spin_lock(&remote_dentries_lock);
++	list_for_each_entry(ptr, &remote_dentries, list) {
++		dentry = ptr->dentry;
++
++		if (rfiles_inode_compare(dentry->d_inode, data))
++			break;
++	}
++	spin_unlock(&remote_dentries_lock);
++	return dentry;
++}
++
++static struct file * rdentry_create_file(struct rfile_inode_data *data)
++{
++	struct file *file;
++	struct dentry *dentry;
++
++	file = get_empty_filp();
++	if (!file)
++		return NULL;
++
++	dentry = dget(rdentry_find(data));
++	if (!dentry) {
++		dentry = rdentry_create_dentry(data);
++		if (!dentry)
++			goto error;
++	}
++
++	file->f_mapping = dentry->d_inode->i_mapping;
++	file->f_dentry = dentry;
++	file->f_op = &remote_file_operations;
++	file->f_mode = FMODE_READ;
++	file->f_vfsmnt = &remote_file_vfsmnt;
++
++	return file;
++error:
++	put_filp(file);
++	return NULL;
++}
++
++struct file * task_rfiles_get(task_t *p, struct file *origfile,
++				unsigned long node, loff_t isize)
++{
++	struct vm_area_struct *vma;
++	struct file *file;
++	struct rfile_inode_data rdata;
++
++	rdata.file = origfile;
++	rdata.node = node;
++	rdata.isize = isize;
++
++	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
++	{
++		if (!vma->vm_file)
++			continue;
++		file = vma->vm_file;
++		if (rfiles_inode_compare(file->f_dentry->d_inode, &rdata)) {
++			get_file(file);
++			return file;
++		}
++	}
++
++	file = rdentry_create_file(&rdata);
++	return file;
++}

@@ -1,0 +1,16 @@
+001	omhome		hpc/deputy.c				the first hunk just adds our kcom header. the second changes
+								deputy_do_syscall to accept a passed in packet, and immediately reply	
+			why not kcom_send_ack?			with an acknowledgement packet. we use kcom_send_with_ack to send our
+			compare and contrast this manual ack	response (the result of the syscall) to the remote node, instead of
+			creation with kcom_send_ack.		comm_send_hd, and remove a debugging message, making our debugging
+								slightly less verbose. the third hunk expands deputy_do_sigpending,
+								or attempted to, but failed, and still is a stub that calls do_signal,	
+								only this stub then prints a message, and de-queues all pending
+								signals. the next hunk comments out completely the 
+								deputy_process_communication function. the last hunk changes
+								deputy_main_loop so that instead of just checking comm_wait, and
+								dispatching to deputy_process_communication, we spin on our incoming
+								packet queue, and when a packet arrives, we check if its a syscall,
+								and dispatch it if so. while we're spinning on packets, we call 
+								deputy_process_misc before rescheduling ourself.
+	

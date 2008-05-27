@@ -1,0 +1,492 @@
+Index: linux/hpc/deputy.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/deputy.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,487 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/signal.h>
++#include <linux/file.h>
++#include <linux/mount.h>
++#include <linux/acct.h>
++#include <asm/mmu_context.h>
++#include <hpc/comm.h>
++#include <hpc/task.h>
++#include <hpc/mig.h>
++#include <hpc/arch.h>
++#include <hpc/syscalls.h>
++#include <hpc/debug.h>
++#include <hpc/prototype.h>
++#include <hpc/hpc.h>
++
++NORET_TYPE void deputy_die_on_communication(void)
++{
++	printk(KERN_ERR "deputy communication died.\n");
++	do_exit(SIGKILL);
++}
++
++/**
++ * deputy_do_syscall - process a syscall coming from remote
++ **/
++static int deputy_do_syscall(task_t *p)
++{
++	struct omp_syscall_req s;
++	struct omp_syscall_ret r;
++	int error;
++	
++	error = comm_recv(p->om.contact, &s, sizeof(s));
++	if (error < 0)
++		return -1;
++
++	OMDEBUG_SYS(1, "[deputy] receive syscall %d\n", s.n);
++
++	/* do the syscall and put reply in r */
++	r.ret = arch_exec_syscall(s.n, (syscall_parameter_t *) &s.arg);
++	
++	error = comm_send_hd(p->om.contact, REM_SYSCALL | REPLY, &r, sizeof(r));
++	if (error < 0)
++		return -1;
++
++	OMDEBUG_SYS(2, "[deputy] replied to syscall %d\n", s.n);
++
++	return 0;
++}
++
++/**
++ * deputy_do_fork - process a fork coming from remote
++ **/
++static int deputy_do_fork(task_t *p)
++{
++	int error;
++	struct omp_fork_req m;
++	struct omp_fork_ret r;
++	task_t *child;
++	struct socket *childsock;
++
++	error = comm_recv(p->om.contact, &m, sizeof(m));
++	if (error < 0)
++		return -1;
++
++	childsock = comm_setup_connect(&m.sockaddr, 0);
++	if (!childsock)
++		return -1;
++
++	r.pid = do_fork(m.clone_flags, m.stack_start, &m.regs, m.stack_size,
++						0, 0);
++
++	child = find_task_by_pid(r.pid);
++	if (!child) {
++		printk(KERN_ERR "error: child %d not found\n", r.pid);
++		return -1;
++	}
++	r.tgid = child->tgid;
++	task_set_comm(child, childsock);
++
++	error = comm_send_hd(p->om.contact, REM_FORK | REPLY, &r, sizeof(r));
++	if (error < 0)
++		return -1;
++
++	return 0;
++}
++
++/**
++ * deputy_do_readpage - process request a specific page
++ **/
++static int deputy_do_readpage(task_t *p)
++{
++	struct omp_page_req m;
++	struct page *page = NULL;
++	struct vm_area_struct vma = { };
++	struct om_held_file *heldfile;
++	void *kmpage;
++	int error;
++
++	error = comm_recv(p->om.contact, &m, sizeof(m));
++	if (error < 0)
++		goto out;
++
++	heldfile = task_heldfiles_find(p, m.file);
++	if (!heldfile) {
++		OMBUG("file not found\n");
++		goto out;
++	}
++		
++	memset(&vma, 0, sizeof(struct vm_area_struct));
++	vma.vm_end = m.offset + PAGE_SIZE;
++	vma.vm_file = (struct file *) m.file;
++
++	page = heldfile->nopage(&vma, m.offset, NULL);
++	kmpage = kmap(page);
++
++	error = comm_send(p->om.contact, kmpage, PAGE_SIZE);
++	if (error < 0)
++		goto out;
++out:
++	if (page) {
++		kunmap(page);
++		__free_page(page);
++	}
++	return error;
++}
++
++/**
++ * deputy_do_mmap_pgoff - really do a mmap on deputy
++ **/
++unsigned long deputy_do_mmap_pgoff(struct file * file, unsigned long addr,
++				unsigned long len, unsigned long prot,
++				unsigned long flags, unsigned long pgoff)
++{
++	int error;
++	struct vm_area_struct *vma;
++
++	vma = kmem_cache_alloc(vm_area_cachep, SLAB_KERNEL);
++	if (!vma) {
++		error = -ENOMEM;
++		goto out;
++	}
++	memset(vma, 0, sizeof(*vma));
++
++	vma->vm_mm = current->mm;
++	vma->vm_start = addr;
++	vma->vm_end = addr + len;
++	vma->vm_flags = flags;
++	vma->vm_page_prot = protection_map[flags & 0x0f];
++	vma->vm_pgoff = pgoff;
++	vma->vm_file = file;
++
++	error = file->f_op->mmap(file, vma);
++	if (error < 0)
++		goto out_freevma;
++
++	error = task_heldfiles_add(current, file, vma->vm_ops);
++
++	/* FIXME insert the vma ! */
++	return 0;
++out_freevma:
++	kmem_cache_free(vm_area_cachep, vma);
++out:
++	return error;
++}
++
++/**
++ * deputy_do_mmap - process request to mmap a file
++ **/
++static int deputy_do_mmap(task_t *p)
++{
++	struct omp_mmap_req m;
++	struct omp_mmap_ret r;
++	struct file *file;
++	int error;
++
++	error = comm_recv(p->om.contact, &m, sizeof(m));
++	if (error < 0)
++		goto error;
++
++	error = -EBADF;
++	file = fget(m.fd);
++	if (!file)
++		goto out;
++	
++	error = do_mmap_pgoff(file, m.addr, m.len, m.prot, m.flags, m.pgoff);
++	
++	r.file = file;
++	r.isize = file->f_dentry->d_inode->i_size;
++	fput(file);
++out:
++	r.ret = error;
++	
++	error = comm_send(p->om.contact, &r, sizeof(r));
++	if (error < 0)
++		goto error;
++	return 0;
++error:
++	return -1;
++}
++
++static void bprm_drop(struct linux_binprm *bprm)
++{
++	int i;
++
++	if (!bprm)
++		return;
++	for (i = 0; i < MAX_ARG_PAGES; i++) {
++		struct page * page = bprm->page[i];
++		if (page)
++			__free_page(page);
++	}
++	if (bprm->security)
++		security_bprm_free(bprm);
++	if (bprm->mm)
++		mmdrop(bprm->mm);
++	if (bprm->file) {
++		allow_write_access(bprm->file);
++		fput(bprm->file);
++	}
++	kfree(bprm);
++}
++
++static int __deputy_do_execve(struct linux_binprm *bprm,
++                              struct pt_regs * regs)
++{
++	int retval;
++
++	retval = search_binary_handler(bprm,regs);
++	if (retval >= 0) {
++		// FIXME free_arg_pages(bprm);
++
++		/* execve success */
++		security_bprm_free(bprm);
++		acct_update_integrals(current);
++		kfree(bprm);
++		return retval;
++	}
++
++	bprm_drop(bprm);
++	return retval;
++}
++
++struct linux_binprm *deputy_setup_bprm(char * filename,
++                              int argc, char **argv,
++                              int envc, char **envp)
++{
++	struct linux_binprm *bprm;
++	struct file *file;
++	int retval;
++
++	bprm = kzalloc(sizeof(*bprm), GFP_KERNEL);
++	if (!bprm)
++		return ERR_PTR(-ENOMEM);
++
++	file = open_exec(filename);
++	retval = PTR_ERR(file);
++	if (IS_ERR(file))
++		goto out;
++
++	bprm->p = PAGE_SIZE * MAX_ARG_PAGES - sizeof(void *);
++
++	bprm->file = file;
++	bprm->filename = filename;
++	bprm->interp = filename;
++	bprm->mm = mm_alloc();
++	retval = -ENOMEM;
++	if (!bprm->mm)
++		goto out;
++
++	retval = init_new_context(current, bprm->mm);
++	if (retval < 0)
++		goto out;
++
++	retval = bprm->argc = argc;
++	if (retval < 0)
++		goto out;
++
++	retval = bprm->envc = envc;
++	if (retval < 0)
++		goto out;
++
++	retval = security_bprm_alloc(bprm);
++	if (retval)
++		goto out;
++
++	retval = prepare_binprm(bprm);
++	if (retval < 0)
++		goto out;
++
++	retval = copy_strings_kernel(1, &bprm->filename, bprm);
++	if (retval < 0)
++		goto out;
++
++	bprm->exec = bprm->p;
++	retval = copy_strings_kernel(bprm->envc, envp, bprm);
++	if (retval < 0)
++		goto out;
++
++	retval = copy_strings_kernel(bprm->argc, argv, bprm);
++	if (retval < 0)
++		goto out;
++
++	return bprm;
++out:
++	bprm_drop(bprm);
++	return ERR_PTR(retval);
++}
++
++/**
++ * deputy_do_execve - process request to execve a new executable
++ **/
++static int deputy_do_execve(task_t *p)
++{
++	struct omp_execve_req m;
++	struct omp_execve_ret r;
++	int error;
++	char *filename;
++	char **argv, **envp;
++	struct linux_binprm *bprm;
++	int sz;
++	char *data = NULL;
++
++	error = comm_recv(p->om.contact, &m, sizeof(m));
++	if (error < 0)
++		goto error;
++
++	sz = m.filelen + m.argvlen + m.envplen + 3;
++	data = kmalloc(sz, GFP_KERNEL);
++	if (!data)
++		/* FIXME must reply to remote */
++		return -ENOMEM;
++	
++	error = comm_recv(p->om.contact, data, sz);
++	if (error < 0)
++		goto error;
++
++	filename = data;
++	argv = (char **) (data + m.filelen + 1);
++	envp = (char **) (data + m.filelen + m.argvlen + 2);
++
++	bprm = deputy_setup_bprm(filename, m.argc, argv,
++	                         m.envc, envp);
++	if (!bprm)
++		goto error;
++	
++	error = __deputy_do_execve(bprm, &m.regs);
++	if (error < 0)
++		goto error;
++
++	comm_send_hd(p->om.contact, REM_EXECVE | REPLY, &r, sizeof(r));
++
++	
++error:
++	kfree(data);
++	return error;
++}
++
++/**
++ * deputy_do_sigpending - process signal pending
++ **/
++static inline void deputy_do_sigpending(task_t *p)
++{
++	siginfo_t info;
++	struct omp_signal s;
++	int signr, error;
++
++	do_signal(ARCH_TASK_GET_USER_REGS(p), NULL);
++	
++	return;
++	
++	for (;;) {
++		signr = dequeue_signal(p, &p->blocked, &info);
++		if (!signr)
++			break;
++
++		s.signr = signr;
++		memcpy(&s.siginfo, &info, sizeof(siginfo_t));
++
++		error = comm_send_hd(p->om.contact, DEP_SIGNAL, &s, sizeof(s));
++		if (error < 0)
++			OMBUG("error %d\n", error);
++	}
++}
++
++/**
++ * deputy_process_misc - process has receive an interrupt in communication
++ **/
++static void deputy_process_misc(task_t *p)
++{
++	if (task_dreqs_pending(p))
++		task_do_request();
++
++	if (test_tsk_thread_flag(p, TIF_SIGPENDING)) {
++		deputy_do_sigpending(p);
++	}
++}
++
++/**
++ * deputy_process_communication - process has receive communication in deputy
++ **/
++static void deputy_process_communication(task_t *p)
++{
++	struct omp_req req;
++	int error;
++	
++	error = comm_recv(p->om.contact, &req, sizeof(req));
++	if (error < 0)
++		deputy_die_on_communication();
++
++	switch (req.type)
++	{
++	case 0:
++		deputy_die_on_communication();
++		break;
++	case REM_BRING_HOME:
++		error = task_go_home(p);
++		break;
++	case REM_SYSCALL:
++		error = deputy_do_syscall(p);
++		break;
++	case REM_FORK:
++		error = deputy_do_fork(p);
++		break;
++	case REM_PAGE:
++		error = deputy_do_readpage(p);
++		break;
++	case REM_MMAP:
++		error = deputy_do_mmap(p);
++		break;
++	case REM_EXECVE:
++		error = deputy_do_execve(p);
++		break;
++	default:
++		OMBUG("received unexpected [%x]\n", req.type);
++		error = -1;
++	}
++	if (error < 0)
++		deputy_die_on_communication();
++}
++
++/**
++ * deputy_main_loop - process loop when process is deputy
++ **/
++void deputy_main_loop(void)
++{
++	int has_communication;
++	
++	while (task_test_dflags(current, DDEPUTY))
++	{
++		has_communication = comm_wait(current->om.contact);
++		if (has_communication)
++			deputy_process_communication(current);
++		deputy_process_misc(current);
++	}
++}
++
++void exit_mm(task_t *);
++
++/**
++ * deputy_startup - startup deputy process
++ **/
++void deputy_startup(task_t *p)
++{
++	task_set_dflags(p, DDEPUTY);
++	/* FIXME it should not be necessary, but actually process got a
++	 * SIGKILL on his sigqueue for unknown reasons */
++	flush_signals(p);
++	exit_mm(p);
++}

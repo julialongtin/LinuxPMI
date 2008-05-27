@@ -1,0 +1,48 @@
+Index: linux/arch/x86_64/lib/usercopy.c
+===================================================================
+--- linux.orig/arch/x86_64/lib/usercopy.c	2006-09-28 15:02:04.000000000 +0200
++++ linux/arch/x86_64/lib/usercopy.c	2006-09-28 15:02:17.000000000 +0200
+@@ -44,6 +44,10 @@
+ __strncpy_from_user(char *dst, const char __user *src, long count)
+ {
+ 	long res;
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_strncpy_from_user(dst, src, count);
++#endif
+ 	__do_strncpy_from_user(dst, src, count, res);
+ 	return res;
+ }
+@@ -52,6 +56,10 @@
+ strncpy_from_user(char *dst, const char __user *src, long count)
+ {
+ 	long res = -EFAULT;
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_strncpy_from_user(dst, src, count);
++#endif
+ 	if (access_ok(VERIFY_READ, src, 1))
+ 		__do_strncpy_from_user(dst, src, count, res);
+ 	return res;
+@@ -114,6 +122,10 @@
+ 	long res = 0;
+ 	char c;
+ 
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_strnlen_user(s, n);
++#endif
+ 	while (1) {
+ 		if (res>n)
+ 			return n+1;
+@@ -138,6 +150,10 @@
+ 	long res = 0;
+ 	char c;
+ 
++#ifdef CONFIG_OPENMOSIX
++	if (openmosix_memory_away())
++		return deputy_strnlen_user(s, 0);
++#endif
+ 	for (;;) {
+ 		if (get_user(c, s))
+ 			return 0;

@@ -1,0 +1,21 @@
+1		hpc/copyuser.c			documentation updates. the first hunk adds docs for three arguments to	
+						deputy_copy_from_user. the second adds docs for three args to 
+						deputy_strncpy_from_user. the third adds three docs for three args to 
+						deputy_copy_to_user, but the third argument is named wrong. 
+2		hpc/kcomd.c			documentation updates. the first hunk adds a comment labeling and 
+						describing socket_listen. the second and third fix spacing issues, 
+						someone was using tabs. the fourth labels and fully describes 
+						accept_connection. the fifth documents data_write, which is a stub. 
+						the sixth and seventh are more tab updates. the eigth starts with a
+						spacing update, then adds a label and description for kcomd_thread.
+						the nineth is another spacing update.
+3		hpc/migsend.c			the changes in this patch document the mig_send_* and mig_do_send
+						functions. the first hunk adds a label and description to mig_send_mm.	
+						it mentions that mig_send_mm waits for acknowledgement. the second
+						hunk adds a label and description to mig_send_vmas. no acknowledgement
+						label is present. the third hunk adds a label and description to 
+						mig_send_pages, again with no acknowledgement label. the fourth hunk
+						adds a label and oneline description to mig_send_proc_context. the 
+						fifth adds a well formatted one line description and label to
+						mig_do_send.
+ 

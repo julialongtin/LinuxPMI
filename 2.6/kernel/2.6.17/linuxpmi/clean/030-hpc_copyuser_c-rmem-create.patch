@@ -1,0 +1,432 @@
+Index: linux/hpc/copyuser.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/copyuser.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,427 @@
++/*
++ *	Copyright (C) 2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ */
++
++#include <linux/sched.h>
++#include <hpc/protocol.h>
++#include <hpc/debug.h>
++#include <hpc/prototype.h>
++#include <hpc/hpc.h>
++
++/********** DEPUTY PART **********/
++
++/**
++ * deputy_copy_from_user - Copy from remote when running on deputy
++ **/
++unsigned long deputy_copy_from_user(void *to, const void __user *from, unsigned long n)
++{
++	struct omp_usercopy_req u;
++	int error;
++
++	if (in_atomic())
++		return n;
++
++	u.addr = (unsigned long) from;
++	u.len = n;
++
++	OMDEBUG_CPYUSER(1, "copy user[0x%p]->[0x%p][%ld]\n", from, to, n);
++
++	error = comm_send_hd(current->om.contact, DEP_COPY_FROM_USER, &u, sizeof(u));
++	if (error < 0)
++		goto error;
++
++	error = comm_recv(current->om.contact, to, n);
++	if (error < 0)
++		goto error;
++
++	return 0;
++error:
++	OMBUG("error %d\n", error);
++	return -1;
++}
++EXPORT_SYMBOL(deputy_copy_from_user);
++
++/**
++ * deputy_strncpy_from_user - strncpy on remote when running on deputy
++ **/
++unsigned long deputy_strncpy_from_user(char *dst, const char __user *src,
++							long count)
++{
++	struct omp_usercopy_req u;
++	int error;
++
++	OMDEBUG_CPYUSER(1, "strcpy user[0x%p]->[0x%p][%ld]\n", src, dst, count);
++	u.addr = (unsigned long) src;
++	u.len = count;
++	error = comm_send_hd(current->om.contact, DEP_STRNCPY_FROM_USER, &u,
++								sizeof(u));
++	if (error < 0)
++		goto error;
++
++	error = comm_recv(current->om.contact, dst, count);
++	if (error < 0)
++		goto error;
++
++	return 0;
++error:
++	OMBUG("error %d\n", error);
++	return -1;
++}
++
++/**
++ * deputy_copy_to_user - copy to remote when running on deputy
++ **/
++unsigned long deputy_copy_to_user(void __user *to, const void *from, unsigned long n)
++{
++	struct omp_usercopy_req u;
++	int error;
++
++	if (in_atomic())
++		return n;
++
++	OMDEBUG_CPYUSER(1, "copy [0x%p]->user[0x%p][%ld]\n", from, to, n);
++	u.addr = (unsigned long) to;
++	u.len = n;
++
++	error = comm_send_hd(current->om.contact, DEP_COPY_TO_USER, &u,
++							sizeof(u));
++	if (error < 0)
++		goto error;
++
++	error = comm_send(current->om.contact, (void *) from, n);
++	if (error < 0)
++		goto error;
++
++	return 0;
++error:
++	OMBUG("error %d\n", error);
++	return -1;
++}
++EXPORT_SYMBOL(deputy_copy_to_user);
++
++/**
++ * deputy_strnlen_user - strnlen on remote when running on deputy
++ **/
++unsigned long deputy_strnlen_user(const char *s, long n)
++{
++	struct omp_usercopy_req u;
++	int error;
++	long ret;
++
++	OMDEBUG_CPYUSER(1, "strlen user[0x%p][%ld]\n", s, n);
++	u.addr = (unsigned long) s;
++	u.len = n;
++
++	error = comm_send_hd(current->om.contact, DEP_STRNLEN_USER, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++
++	error = comm_recv(current->om.contact, &ret, sizeof(ret));
++	if (error < 0)
++		goto out;
++
++	return ret;
++out:
++	OMBUG("error %d\n", error);
++	return 0;
++}
++EXPORT_SYMBOL(deputy_strnlen_user);
++
++/**
++ * deputy_put_userX - put a value of 64 bit or less to remote
++ **/
++static inline long deputy_put_userX(s64 value, const void *addr, size_t size)
++{
++	struct omp_usercopy_emb u;
++	int error;
++
++	OMDEBUG_CPYUSER(1, "put (%lld)->user[0x%p][%zd]\n", value, addr, size);
++
++	u.addr = (unsigned long) addr;
++	u.len = size;
++	u.val = value;
++
++	error = comm_send_hd(current->om.contact, DEP_PUT_USER, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++	return 0;
++out:
++	OMBUG("error %d\n", error);
++	return -EFAULT;
++}
++
++/**
++ * deputy_put_user - put a long value to remote
++ **/
++long deputy_put_user(long value, const void *addr, size_t size)
++{
++	BUG_ON(size > sizeof(long));
++	return deputy_put_userX((s64) value, addr, size);
++}
++EXPORT_SYMBOL(deputy_put_user);
++
++#if BITS_PER_LONG < 64
++/**
++ * deputy_put_user - put a 64 bit value to remote
++ **/
++long deputy_put_user64(s64 value, const void *addr)
++{
++	return deputy_put_userX(value, addr, 8);
++}
++EXPORT_SYMBOL(deputy_put_user64);
++#endif
++
++/**
++ * deputy_get_userX - get a value of 64 bit or less from remote
++ **/
++static inline long deputy_get_userX(s64 *value, const void *addr, size_t size)
++{
++	struct omp_usercopy_req u;
++	int error;
++	s64 ret;
++
++	OMDEBUG_CPYUSER(1, "get user[0x%p][%zd]\n", addr, size);
++	u.addr = (unsigned long) addr;
++	u.len = size;
++
++	error = comm_send_hd(current->om.contact, DEP_GET_USER, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++
++	error = comm_recv(current->om.contact, &ret, sizeof(ret));
++	if (error < 0)
++		goto out;
++
++	switch (size) {
++	case 1: { s8 *v = (s8 *) value; *v = (s8) ret; break; }
++	case 2: { s16 *v = (s16 *) value; *v = (s16) ret; break; }
++	case 4: { s32 *v = (s32 *) value; *v = (s32) ret; break; }
++	case 8: *value = ret; break;
++	}
++	return 0;
++out:
++	OMBUG("error %d\n", error);
++	return -EFAULT;
++}
++
++/**
++ * deputy_get_user - get a long value from remote
++ **/
++long deputy_get_user(long *value, const void *addr, size_t size)
++{
++	BUG_ON(size > sizeof(long));
++	return deputy_get_userX((u64 *) value, addr, size);
++}
++EXPORT_SYMBOL(deputy_get_user);
++
++#if BITS_PER_LONG < 64
++/**
++ * deputy_get_user - get a 64 bit value from remote
++ **/
++long deputy_get_user64(s64 *value, const void *addr)
++{
++	return deputy_get_userX(value, addr, 8);
++}
++EXPORT_SYMBOL(deputy_get_user64);
++#endif
++
++/********** REMOTE PART **********/
++
++/**
++ * remote_copy_user - Copy to or from user for deputy
++ **/
++static int remote_copy_user(task_t *p, int request)
++{
++	struct omp_usercopy_req u;
++	void *buf = NULL;
++	int error;
++
++	error = comm_recv(p->om.contact, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++
++	buf = kmalloc(u.len, GFP_KERNEL);
++	if (!buf)
++		goto out;
++
++	switch (request) {
++	case DEP_COPY_FROM_USER:
++		copy_from_user(buf, (const void __user *) u.addr, u.len);
++
++		error = comm_send(p->om.contact, buf, u.len);
++		if (error < 0)
++			goto out;
++		break;
++	case DEP_COPY_TO_USER:
++		error = comm_recv(p->om.contact, buf, u.len);
++		if (error < 0)
++			goto out;
++
++		copy_to_user((void __user *) u.addr, buf, u.len);
++		break;
++	}
++out:
++	kfree(buf);
++	return error;
++}
++
++/**
++ * remote_strncpy_from_user - strncpy from user for deputy
++ **/
++static int remote_strncpy_from_user(task_t *p)
++{
++	struct omp_usercopy_req u;
++	void *buf = NULL;
++	int error;
++
++	error = comm_recv(p->om.contact, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++
++	buf = kmalloc(u.len, GFP_KERNEL);
++	if (!buf)
++		goto out;
++
++	strncpy_from_user(buf, (const char __user *) u.addr, u.len);
++
++	error = comm_send(p->om.contact, buf, u.len);
++	if (error < 0)
++		goto out;
++
++out:
++	kfree(buf);
++	return error;
++}
++
++/**
++ * remote_strnlen_from_user - strnlen from user for deputy
++ **/
++static int remote_strnlen_user(task_t *p)
++{
++	struct omp_usercopy_req u;
++	long ret;
++	int error;
++
++	error = comm_recv(p->om.contact, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++
++	ret = (u.len)
++		? strnlen_user((const char __user *) u.addr, u.len)
++		: strlen_user((const char __user *) u.addr);
++
++	error = comm_send(p->om.contact, &ret, sizeof(ret));
++	if (error < 0)
++		goto out;
++out:
++	return error;
++}
++
++/**
++ * remote_put_user - put user for deputy
++ **/
++static int remote_put_user(task_t *p)
++{
++	struct omp_usercopy_emb u;
++	long ret;
++	int error;
++
++	error = comm_recv(p->om.contact, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++
++	switch (u.len) {
++	case 1: ret = put_user(u.val, (u8 *) u.addr); break;
++	case 2: ret = put_user(u.val, (u16 *) u.addr); break;
++	case 4: ret = put_user(u.val, (u32 *) u.addr); break;
++	case 8: ret = put_user(u.val, (u64 *) u.addr); break;
++	default: ret = -EFAULT;
++	}
++	return ret;
++out:
++	return error;
++}
++
++/**
++ * remote_get_user - get user for deputy
++ **/
++static int remote_get_user(task_t *p)
++{
++	struct omp_usercopy_req u;
++	s64 ret;
++	int error;
++
++	error = comm_recv(p->om.contact, &u, sizeof(u));
++	if (error < 0)
++		goto out;
++
++	switch (u.len) {
++	case 1: get_user(ret, (u8 *) u.addr); break;
++	case 2: get_user(ret, (u16 *) u.addr); break;
++	case 4: get_user(ret, (u32 *) u.addr); break;
++#if BITS_PER_LONG == 64
++	case 8: get_user(ret, (u64 *) u.addr); break;
++#endif
++	}
++
++	error = comm_send(p->om.contact, &ret, sizeof(ret));
++	if (error < 0)
++		goto out;
++out:
++	return error;
++}
++
++
++/**
++ * remote_handle_user - Handle user copy until receiving @endtype
++ **/
++int remote_handle_user(task_t *p, int endtype)
++{
++	struct omp_req req;
++	int ret = 1;
++	int error;
++
++	while (ret != 0) {
++		error = comm_recv(p->om.contact, &req, sizeof(req));
++		if (error < 0)
++			return error;
++		if (req.type == endtype) {
++			ret = 0;
++			break;
++		}
++
++		switch (req.type) {
++		case DEP_COPY_FROM_USER:
++		case DEP_COPY_TO_USER:
++			remote_copy_user(p, req.type);
++			break;
++		case DEP_STRNCPY_FROM_USER:
++			remote_strncpy_from_user(p);
++			break;
++		case DEP_STRNLEN_USER:
++			remote_strnlen_user(p);
++			break;
++		case DEP_PUT_USER:
++			remote_put_user(p);
++			break;
++		case DEP_GET_USER:
++			remote_get_user(p);
++			break;
++		default:
++			OMBUG("unexpected type [%x]\n", req.type);
++			remote_disappear();
++			break;
++		}
++	}
++	return ret;
++}

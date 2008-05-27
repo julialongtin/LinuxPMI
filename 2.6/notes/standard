@@ -1,0 +1,50 @@
+
+origional -> OM/clean/ -> OM/silver/ -> OM/gold -> OM/plat
+
+CLEAN: marked create if this creates a new file.
+CLEAN: marked breakup if it is not a new file, and does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
+CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, etc).
+CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues). 
+CLEAN: re-read the notes, and correct if (likely) necissary.
+CLEAN: if a function is only called by one or two other function(s), start the description by explaining this.
+CLEAN: does it destroy its datastructures on error? check passed in pointers (from userspace, or other routines) for NULL, ... comment in notes.
+CLEAN: does its printk messages look like  "openMosix: An error occured. " (little o, punctuation!). comment in notes.
+SILVER: break up breakup patches into multiple patches.
+SILVER: clean up cleanup patches. leave dead code.
+SILVER: remove code later removed by CLEANed patch. modify later cleaned patch so it is additave only.
+SILVER: classify each patch into: kcore kcomd config i386 x86_64 ppc... many others.
+SILVER: all functions will have a kdoc description.
+SILVER: dependancies are noted.
+SILVER: change EXPORT_SYMBOL to EXPORT_SYMBOL_GPL after verifying GPL license in header.
+GOLD: all files we create will have a header saying what they are for, why functions are there, and not someplace else.
+GOLD: include kcom.h before including prototype.h
+GOLD: all includes will indicate what they are there to include in comments.
+GOLD: all functions will have a description of what context they are called from, or who their callers are.
+GOLD: make sure theres a printk message for each error condition, and minimal error handling for each function that can return errors.
+GOLD: printk should not be invoked directly, always as OMDEBUG or KCOMDEBUG or OMBUG or somesuch macro.
+GOLD: all datastructures/memory freed/destroyed/etc.
+GOLD: variable names will match kernel precident.
+GOLD: functions that manipulate lists will aquire, release spinlocks appropriately.
+GOLD: in asm-offsets.h, "DEFINE(PAGE_SIZE_asm, PAGE_SIZE);" sets precident, our defines should end in _asm here.
+GOLD: all defines we add to headers will have comments.
+GOLD: kernel threads should not lock spinlocks directly. their helper functions should perform the locking.
+PLAT: patches are in the order they depend on one another.
+PLAT: headers say what they're for including before they're included.
+PLAT: is it in the right file? move hunks that are in the wrong place.
+PLAT: where is its twin?
+PLAT: is their a third edge to this sword, and where is it?
+PLAT: functions that check their arguments or aquire locks around most of the function will be two functions, one to do that, the other to "do work".
+PLAT: remove dead code.
+
+Rules:
+
+1: take care of yourself first. if what your working on dosent benifit you, you'll burn yourself out.
+2: don't lose data. its OK to retire a patch after you know everything it was responsible for, and can explain it to others. it is NOT ok to blindly replace code.
+3: to prove understanding, explain yourself. if you cannot explain what you read/learned in your own words, you do not truely understand it.
+
+add following to wiki:
+13:16 < juri_> i've successfully used unix pipes.
+13:19 < juri_> you create pipes with dup(2), fork, then use those pipes to maintain communication between your workers.
+13:22 < juri_> http://www.ecst.csuchico.edu/~beej/guide/ipc/pipes.html
+13:22 < juri_> try that. thats what i'm talking about.
+13:23 < juri_> i successfully used that on openmosix 2.4 to communicate between remote processes.

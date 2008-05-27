@@ -1,0 +1,120 @@
+Index: linux/hpc/debug-i386.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/debug-i386.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,115 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <asm/uaccess.h>
++#include <linux/kallsyms.h>
++#include <linux/sched.h>
++#include <hpc/debug.h>
++#include <asm/ptrace.h>
++#include <asm/desc.h>
++#include <asm/i387.h>
++#include <asm/uaccess.h>
++#include <asm/ptrace.h>
++#include <hpc/protocol.h>
++#include <hpc/arch.h>
++#include <hpc/task.h>
++
++void om_debug_regs(struct pt_regs *myreg)
++{
++	struct pt_regs *reg;
++
++	reg = (myreg) ? myreg : ARCH_TASK_GET_USER_REGS(current);
++
++	printk("pt_regs:\n");
++	printk("ebx: 0x%lx, ecx: 0x%lx, edx: 0x%lx\n", reg->ebx, reg->ecx, reg->edx);
++	printk("esi: 0x%lx, edi: 0x%lx, ebp: 0x%lx\n", reg->esi, reg->edi, reg->ebp);
++	printk("eax: 0x%lx, xds: 0x%x, xes: 0x%x\n", reg->eax, reg->xds, reg->xes);
++	printk("orig_eax: 0x%lx, eip: 0x%lx, xcs: 0x%x\n", reg->orig_eax, reg->eip, reg->xcs);
++        printk("eflags: 0x%lx, esp: 0x%lx, xss: 0x%x\n", reg->eflags, reg->esp, reg->xss);
++}
++
++
++void inline debug_thread(struct thread_struct *t)
++{
++	printk("thread_struct:\n");
++	printk("esp0: 0x%lx, sysenter_cs: 0x%lx\n",t->esp0, t->sysenter_cs);
++	printk("eip: 0x%lx, esp: 0x%lx", t->eip, t->esp);
++
++}
++
++/* shamelessly stolen, this is useful to debug a user space
++ * process when it dies on remote */
++void show_user_registers(task_t *p)
++{
++	int i;
++	unsigned long esp;
++	unsigned short ss;
++	unsigned long prev_code;
++	struct pt_regs *regs;
++
++	if (!p->mm) {
++		printk(KERN_ERR "show_user_registers(): no mm !\n");
++		return;
++	}
++	regs = ((struct pt_regs *) (THREAD_SIZE + (unsigned long) p->thread_info)) - 1;
++
++	esp = regs->esp;
++	ss = regs->xss & 0xffff;
++
++	printk("CPU:    %d\nEIP:    %04x:[<%08lx>]    %s\nEFLAGS: %08lx\n",
++		smp_processor_id(), 0xffff & regs->xcs, regs->eip, print_tainted(), regs->eflags);
++	print_symbol("EIP is at %s\n", regs->eip);
++	printk("eax: %08lx   ebx: %08lx   ecx: %08lx   edx: %08lx\n",
++		regs->eax, regs->ebx, regs->ecx, regs->edx);
++	printk("esi: %08lx   edi: %08lx   ebp: %08lx   esp: %08lx\n",
++		regs->esi, regs->edi, regs->ebp, esp);
++	printk("ds: %04x   es: %04x   ss: %04x\n",
++		regs->xds & 0xffff, regs->xes & 0xffff, ss);
++	printk("Process %s (pid: %d, BOGUSthreadinfo=%p task=%p)",
++		p->comm, p->pid, current_thread_info(), p);
++
++	printk("\nStack: ");
++	show_stack(NULL, (unsigned long*)esp);
++
++	prev_code = regs->eip - 20;
++
++	printk("code before eip: ");
++	for(i = 0; i < 20 ; i++)
++	{
++		unsigned char c;
++		if(__get_user(c, &((unsigned char*)prev_code)[i]))
++			break;
++		printk("%02x ", c);
++	}
++	printk("\n");
++
++
++	printk("Code: ");
++	for(i = 0; i < 20 ; i++)
++	{
++		unsigned char c;
++		if(__get_user(c, &((unsigned char*)regs->eip)[i])) {
++			printk(" Bad EIP value.");
++			break;
++		}
++		printk("%02x ", c);
++	}
++	printk("\n");
++}
++

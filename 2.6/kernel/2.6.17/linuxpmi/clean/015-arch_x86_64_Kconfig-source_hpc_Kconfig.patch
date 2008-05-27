@@ -1,0 +1,11 @@
+Index: linux/arch/x86_64/Kconfig
+===================================================================
+--- linux.orig/arch/x86_64/Kconfig	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/x86_64/Kconfig	2006-09-28 15:02:17.000000000 +0200
+@@ -619,4 +619,6 @@
+ 
+ source "crypto/Kconfig"
+ 
++source "hpc/Kconfig"
++
+ source "lib/Kconfig"

@@ -1,0 +1,63 @@
+Index: linux/hpc/Kconfig
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/Kconfig	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,58 @@
++#
++# HPC configuration 
++#
++
++menu "HPC options"
++
++config KCOMD
++	tristate "HPC Communication daemon"
++	help
++          Say Y will add support for the communication daemon
++
++config OPENMOSIX
++	bool "Enable OpenMosix clustering"
++	depends KCOMD
++	help
++	  Say Y to support process migration within a cluster
++
++config OPENMOSIX_VERBOSE
++	bool "Enable OpenMosix to be more verbose"
++	depends OPENMOSIX
++	default n
++
++config OPENMOSIX_MIGRATION_VERBOSE
++	bool "Add some message when migrating"
++	depends OPENMOSIX_VERBOSE
++	default n
++	help
++	  Say Y will throw message about migration into syslog
++
++config OPENMOSIX_DEBUG
++	bool "Enable OpenMosix debug"
++	depends OPENMOSIX
++	default n
++
++config OPENMOSIX_MIGRATION_DEBUG
++	bool "Add lots of message and print step when migrating"
++	depends OPENMOSIX_DEBUG
++	default n
++	help
++	  Say Y will throw lot of debug message about migration into syslog
++
++config OPENMOSIX_DEBUG_FS
++	tristate "Add debug files on debugfs"
++	depends OPENMOSIX_DEBUG
++	select DEBUG_FS
++	default n
++	help
++	  Export some variables through an om directory in debugfs for debugging
++
++config OPENMOSIX_CTRL_FS
++	tristate "control filesystem for openMosix"
++	depends OPENMOSIX
++	default y
++	help
++	  Add a omctrlfs to control openMosix features and have statistics
++	  about tasks.
++
++endmenu

@@ -1,0 +1,37 @@
+Index: linux/arch/x86_64/lib/copy_user.S
+===================================================================
+--- linux.orig/arch/x86_64/lib/copy_user.S	2006-09-28 15:02:04.000000000 +0200
++++ linux/arch/x86_64/lib/copy_user.S	2006-09-28 15:02:17.000000000 +0200
+@@ -21,6 +21,15 @@
+ 	jc  bad_to_user
+ 	cmpq threadinfo_addr_limit(%rax),%rcx
+ 	jae bad_to_user
++#ifdef CONFIG_OPENMOSIX
++	/* openmosix_memory_away inlined */
++	cmpq $0xffffffffffffffff,threadinfo_addr_limit(%rax) /* compare to kernel DS */
++	je 2f
++	movq threadinfo_task(%rax), %rax
++	testq $DDEPUTY, TASK_om+OM_dflags(%rax) # is this a DDEPUTY task ?
++	jz 2f
++	jmp deputy_copy_to_user
++#endif
+ 2:
+ 	.byte 0xe9	/* 32bit jump */
+ 	.long .Lcug-1f
+@@ -49,6 +58,16 @@
+ 	jc  bad_from_user
+ 	cmpq threadinfo_addr_limit(%rax),%rcx
+ 	jae  bad_from_user
++#ifdef CONFIG_OPENMOSIX
++	/* openmosix_memory_away inlined */
++	cmpq $0xffffffffffffffff,threadinfo_addr_limit(%rax) /* compare to kernel DS */
++	je 2901f
++	movq threadinfo_task(%rax), %rax
++	testq $DDEPUTY, TASK_om+OM_dflags(%rax) # is this a DDEPUTY task ?
++	jz 2901f
++	jmp deputy_copy_from_user
++2901:
++#endif
+ 	/* FALL THROUGH to copy_user_generic */
+ 	
+ 	.section .fixup,"ax"

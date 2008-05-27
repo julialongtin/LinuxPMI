@@ -1,0 +1,74 @@
+001	omrecv		hpc/migrecv.c				our first and second hunk just include three headers for us. the third
+								patch adds the mig_do_receive_home, and mig_do_receive_init functions,
+			;;					using EXPORT_SYMBOL_GPL to export them. we create mig_do_receive_home,
+								which is a function for acheiving a move from a remote home back to
+								the home node. we are given a packet via a passed in argument, and
+								check if it is marked PKT_NEW_MSG. if it is, we assume this is the
+			spacing					home node being migrated to, send a PKT_ACK packet, call
+								task_register_migration and return 0. if the packet passed in was not
+								marked PKT_NEW_MSG, we assume this is the remote node being migrated
+								from, and call wake_up_process on the task in question. we return
+			spacing					0 for success, -1 for failure. the mig_do_receive_init function is
+								called by kcomd with a MIG_INIT packet, to do the "work" of setting
+								up a process on the current (remote) node on behalf of a remote node.
+								first, we check to see if the packet passed via passed in argument was
+			error handling!				marked PKT_NEW_MSG. if it isn't, we just return 0. if it is, we begin
+								constructing our response packet, and check wether this is migration
+			why treat loopback differently?		via loopback, defined as 127.0.0.1. if it is, we use 
+			why loopback migrate at all?		kcom_home_task_find to find the kcom_task structure associated with
+			what if loopback isnt 127.0.0.1? ipv6?	the origional process. otherwise, we use kcom_task_create to make a
+								new task, and return its kcom_task structure, and we copy the PID of 
+								the task on the home node from our MIG_INIT packet to kcom_task->hpid.
+			many comments indicating this code	we delete the packet we were called with, and call user_thread to
+			needs help!				handle migration (via mig_handle_migration), and wait for it to set
+								a variable we're spinning on. once that variable is set to non-zero,
+								if its greater than zero, its the PID of our new process, after
+								migration has completed. if its negative, something went wrong, and we	
+								send a NACK flag, indicating failure, and return -1. assuming PID was
+								positive, we set the rpid member of our kcom_task, and send a ACK
+								packet back to the home node, indicating success, and telling it what
+								the PID of the new process to talk to is. we then return 0. 
+								mig_do_receive_mm gets a bit of a facelift, using a passed in packet,
+			when should we down_write?		wrapping the actual mm modification in down_write and up_write, and
+								sending a response with kcom_send_ack. it also gets 
+								EXPORT_SYMBOL_GPL'd. mig_do_receive_mm_area gets renamed to
+			spacing issues in patch!		mig_do_receive_vma, and a facelift. the first obvious changes are that
+								we now use a passed in packet, and instead of using the given vm_flags,
+								we mark pages RWX. we've added code to check the response from
+								sys_madvise, and if it returns nonzero, we kcom_send_nack, and return
+								the result. otherwise, we kcom_send_ack, and return 0. this function is
+								also EXPORT_SYMBOL_GPL'd. mig_do_receive_page is adjusted so that it
+								accepts a passed in packet, sends a kcom_send_nack in case of failure,
+								uses alloc_zeroed_user_highpage instead of alloc_page, and so that we
+								use kcom_send_ack in case of success. this function is not 
+								EXPORT_SYMBOL_GPL'd. mig_do_receive_fp gets a similar treatment, 
+								receiving a passed packet, sending acknowledgement with
+								kcom_send_ack, and returning 0. its also not EXPORT_SYMBOL_GPL'd.
+								mig_do_receive_proc_context is modified to receive a passed in packet,
+								use the sys_set family of functions to set members of the task_t
+			set_personality gets p from where?	structure related to id/credentials, use set_personality instead of
+								touching p->personality, send an ack using kcom_send_ack, and return 0
+								in case of success. mig_do_receive is completely re-written, starting
+								off by sitting and spinning, waiting on kcomd to fill in the mytsk
+								pointer for this structure (which is never done!). the rest of the
+								function now initializes om.whereto if DREMOTE, sets us to
+								TASK_INTERRUPTABLE, and enters a while(1) loop. in this loop, we
+								look for incoming packets and dispatch, just like the old version of
+								this function. at the end of the loop, we print a message, and
+								reschedule, so that kcomd can run (and thus feed us packets). the last
+								function in this patch is mig_handle_migration. this function is
+								started by the user_thread call in mig_do_receive_init, and is the
+								"top" of the newly created process. we start by re-parenting to init,
+								calling obtain_mm, setting ourselves to DREMOTE, then telling
+								mig_do_receive_init our pid. after that, we jump into the
+								mig_do_receive function to receive all our process state. we set
+								ourselves to TASK_RUNNING, call schedule, print a message saying we're
+								starting the new process, clear_thread_flag (TIF_SIGPENDING), and call
+								arch_kickstart to jump into the new process. we add some test code just
+								in case arch_kickstart returns, and call do_exit(SIGKILL) if we run
+								into errors.
+
+
+								
+
+

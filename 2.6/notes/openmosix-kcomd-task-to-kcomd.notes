@@ -1,0 +1,11 @@
+001	om		hpc/task.c				our first hunk includes the kcom.h header. the second hunk changes our 	<hpc/kcom.h>
+								task_move_to_node invocation in task_request_move to not clear
+			use omdebug() instead of printk		om.whereto or free its memory. the third hunk adds a debugging printk
+			spacing					at the top of openmosix_task_init. the fourth hunk is just a spacing
+								fix, drop. the fifth hunk starts with a spacing fix in 
+								openmosix_task_exit, but continues on to change from just clearing
+								heldfiles and closing connection, to dumping stack, calling
+								kcom_task_delete(), clearing heldfiles, and freeing task->om.whereto.
+								the final hunk changes task_register_migration so that it no longer
+								accepts a destination as a parameter, dosent mess with 
+								task->om.whereto, and is exported via EXPORT_SYMBOL_GPL.
