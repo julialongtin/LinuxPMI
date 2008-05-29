@@ -630,25 +630,66 @@ hunk	class		file patched				description								depends
 			child dies, or otherwise drops the	by openmosix_pre_clone. task_maps_inode is supposed to check wether a 
 			shared mm? stub!			given task maps a given inode, but is just a stub. 
 			monkey?					openmosix_no_longer_monkey is called from __remove_shared_vm_struct
-
-								to request they be checked for why they're staying home. it uses the
-								tasklist_lock around its invocation of for_each_process(). since the
-								above function is a stub, this does nothing. stay_me_and_my_clones 
-								applies a bitmask of reasons to the current task, and all tasks that 
-								share its mm structure it uses for_each_process to iterate . obtain_mm allocates a 	
-								mm structure, initializes it, an makes it the context of the current
-								process. unstay_mm requests a re-evaluation of stayability for the
-								current process, an all processes that share mm structures. they manage
-								to impressively optimize away a hold of the lock for the common case. 
-								remote_pre_usermode calls remote_do_comm if theres pending input, when
-								a program thats hosted is about to run. deputy_pre_usermode jumps into
-								deputy_main_loop, instead of going to any real usermode code. 
-								openmosix_pre_usermode is also called before a process goes to
-								usermode. it checks for pending dreqs, and calls task_do_request, then
-								calls one of the above two functions depending on wether the process
-								is DDEPUTY or DREMOTE. openmosix_init is called on subsystem load. it
-								starts up the mig_daemon kernel thread. the last line declares the 
-								subsystem.
+								to check every process on the machine and see wether its using the
+								passed in inode. if it is, we set the DREQ_CHECKSTAY flag, as this
+								inode is about to be removed from service, and doing such may make this
+								process migratable. we aquire the tasklist_lock around our invocation
+								of for_each_process(). since the previous function is a stub, this 
+								function does nothing. stay_me_and_my_clones is called by sys_mlock and
+								sys_mlockall in mm/mlock.c, as well as do_mmap_pgoff in mm/mmap.c. it 
+								applies a given bitmask of reasons to the current task, and all tasks
+								that share its mm structure. first, it uses task_lock to lock the
+								current process, sets its stay reason, and task_unlocks. if the number
+								of mm_realusers is greater than one (some other process uses this
+								processes mm structure), we grab the tasklist_lock, use 
+								for_each_process to search for processes with the same mm pointer, that
+								aren't the current process, and use task_lock/task_set_stay/task_unlock
+								to add our stay reasons to the found processes. obtain_mm is called by
+								mig_handle_migration() in hpc/migrecv.c and task_local_bring() in 
+								hpc/migctrl.c to allocate a new mm structure, initialize it, an make
+								it the context of the current process. we start by checking to see if 
+								there is currently a mm structure associated with the passed in task.
+								if there is, we call panic() to print a debugging message. we then
+								mm_alloc() a new mm, initialize it to hold our given task with
+								init_new_context(), aquire the mmlist_lock, initialize our new mm's 
+								mmlist member with the mmlist of process zero, and release the 
+								mlist_lock. we then assign this mm to our process by first aquiring the	
+								task_lock(), saving our curent active mm, setting the task's active mm
+								and mm to our newly created mm, and task_unlock()ing. we call
+								activate_mm with our origional and new mm, then mmdrop the old
+								active_mm. if our mm_alloc() fails, we return -ENOMEM. if 
+								init_new_context() fails, we destory our allocated mm, and return the
+								error init_new_context() failed with. otherwise, we return 0 for
+								success. unstay_mm is called by sys_munlock and sys_munlockall in
+								mm/mlock.c to request a re-evaluation of the stayability of the
+								current process, and all processes that share its mm structure. for the
+			premature optimization?	looks good tho.	common case of just one task using a given mm structure, we just call
+								task_set_dreqs(current, DREQ_CHECKSTAY). otherwise, we use 
+								for_each_process() with a read_lock held on the tasklist_lock to
+								iterate through each process on the machine, checking if its using our
+								passed mm, and if so, we call task_set_dreqs(p, DREQ_CHECKSTAY) on it.
+								remote_pre_usermode is called by the later defined 
+								openmosix_pre_usermode to check for communication events before 
+								entering userspace. it calls comm_peek() to see if theres pending 
+								input, and if there is, it calls remote_do_comm() to process the
+								communication in question.  remote_pre_usermode always returns 0 for
+								success. deputy_pre_usermode is also called by openmosix_pre_usermode,
+								before jumping to userspace while handling a process in deputy state.
+								in this function, we just jump into deputy_main_loop, instead of going
+								to any real usermode code. when deputy_main_loop() returns, we return 
+								0. openmosix_pre_usermode is called by assembly code in 
+								arch/$ARCH/kernel/entry, when switching from kernel space to user 
+								space. we first check for pending dreqs, and if we finds one, we save
+								our current irq mask, call task_do_request, and restore our irq mask
+								once task_do_request returns. after dispatching dreqs, we call one of
+								the previous two functions depending on wether the process is in 
+								DDEPUTY or DREMOTE state. like before, we save our irq mask before
+								calling remote_pre_usermode or deputy_pre_usermode, then restore them
+								once we return from userspace. this function always returns 0 for
+								success. openmosix_init is called on subsystem load. it starts the 
+								mig_daemon kernel thread, and returns 0. the last line in this file
+								tells the subsystem system to call openmosix_init on initializing this
+								kernel component.
 42	config		creates hpc/Makefile			this Makefile contains the make fragment that tells the kernel source
 								how to build the openmosix hpc directory. they split the code into
 								five targets, obj-$(CONFIG_KCOMD) obj-$(CONFIG_OPENMOSIX) 

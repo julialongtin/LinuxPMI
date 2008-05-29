@@ -1,5 +1,5 @@
 
-origional -> OM/clean/ -> OM/silver/ -> OM/gold -> OM/plat
+origional -> linuxpmi/clean/ -> linuxpmi/silver/ -> linuxpmi/gold -> linuxpmi/plat
 
 CLEAN: marked create if this creates a new file.
 CLEAN: marked breakup if it is not a new file, and does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
@@ -41,7 +41,9 @@ Rules:
 1: take care of yourself first. if what your working on dosent benifit you, you'll burn yourself out.
 2: don't lose data. its OK to retire a patch after you know everything it was responsible for, and can explain it to others. it is NOT ok to blindly replace code.
 3: to prove understanding, explain yourself. if you cannot explain what you read/learned in your own words, you do not truely understand it.
+4: premature optimization is the root of all evil. lets get it working, then we can worry about speed issues, memory consumption, bandwidth consumption (demand paging), etc.
 
+create a "programming against openmosix howto".
 add following to wiki:
 13:16 < juri_> i've successfully used unix pipes.
 13:19 < juri_> you create pipes with dup(2), fork, then use those pipes to maintain communication between your workers.
