@@ -1,0 +1,219 @@
+Index: linux/hpc/kernel.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/kernel.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,214 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/smp_lock.h>
++#include <linux/mm.h>
++#include <asm/mmu_context.h>
++#include <hpc/prototype.h>
++#include <hpc/hpc.h>
++#include <hpc/task.h>
++#include <hpc/comm.h>
++#include <hpc/mig.h>
++
++struct openmosix_options om_opts;
++EXPORT_SYMBOL_GPL(om_opts);
++
++/* kernel calls hooks */
++int openmosix_pre_clone(int flags)
++{
++	task_t *p = current;
++	struct mm_struct *mm = p->mm;
++
++	if (!(flags & CLONE_VM))
++		return 0;
++	if (mm)
++		atomic_inc(&mm->mm_realusers);
++
++	task_set_stay(p, DSTAY_CLONE);
++	return 0;
++}
++
++void openmosix_post_clone(int flags)
++{
++	task_t *p = current;
++	struct mm_struct *mm = p->mm;
++
++	if (!(flags & CLONE_VM))
++		return;
++	if (mm && atomic_read(&mm->mm_realusers) == 1)
++		task_clear_stay(p, DSTAY_CLONE);
++}
++
++/**
++ * task_maps_inode - Check if a task @p maps the inode @ip
++ **/
++int task_maps_inode(struct task_struct *p, struct inode *ip)
++{
++	return 0;
++}
++
++void openmosix_no_longer_monkey(struct inode *ip)
++{
++	task_t *p;
++
++	read_lock(&tasklist_lock);
++	for_each_process(p)
++		if (task_maps_inode(p, ip))
++			task_set_dreqs(p, DREQ_CHECKSTAY);
++	read_unlock(&tasklist_lock);
++}
++
++int stay_me_and_my_clones(int reasons)
++{
++	task_t *p, *me = current;
++	struct mm_struct *mm = me->mm;
++
++	task_lock(me);
++	task_set_stay(me, reasons);
++	task_unlock(me);
++	if (atomic_read(&mm->mm_realusers) > 1) {
++		read_lock(&tasklist_lock);
++		for_each_process(p) {
++			if (p->mm == mm && p != me) {
++				task_lock(p);
++				task_set_stay(p, reasons);
++				task_unlock(p);
++			}
++		}
++		read_unlock(&tasklist_lock);
++	}
++	return 0;
++}
++
++/**
++ * obtain_mm - obtain an mm context
++ *
++ * Description:
++ * Get an mm_struct and initialize it. Associate
++ * with our process.
++ **/
++int obtain_mm(task_t *p)
++{
++	struct mm_struct *mm, *active_mm;
++	int err;
++
++	if (p->mm && !task_test_dflags(p, DDEPUTY))
++		panic("openmosix: process->mm context had already");
++	/*
++	if (p->mm && task_test_dflags(p, DDEPUTY))
++		exit_mm(p);
++	*/
++	mm = mm_alloc();
++	if (!mm)
++		return -ENOMEM;
++	err = init_new_context(p, mm);
++	if (err) {
++		task_unlock(p);
++		mmdrop(mm);
++		return err;
++	}
++
++	spin_lock(&mmlist_lock);
++	list_add(&mm->mmlist, &init_mm.mmlist);
++	spin_unlock(&mmlist_lock);
++
++	task_lock(p);
++	active_mm = p->active_mm;
++	p->mm = mm;
++	p->active_mm = mm;
++	task_unlock(p);
++
++	activate_mm(active_mm, mm);
++	mmdrop(active_mm);
++	return 0;
++}
++
++void unstay_mm(struct mm_struct *mm)
++{
++	task_t *p;
++
++	if (atomic_read(&mm->mm_realusers) == 1 && mm == current->mm)
++	{
++		task_set_dreqs(current, DREQ_CHECKSTAY);
++		return;
++	}
++	read_lock(&tasklist_lock);
++	for_each_process(p)
++		if (p->mm == mm)
++			task_set_dreqs(p, DREQ_CHECKSTAY);
++	read_unlock(&tasklist_lock);
++}
++
++static inline int remote_pre_usermode(void)
++{
++	task_t *p = current;
++
++	if (p->om.contact && comm_peek(p->om.contact))
++		remote_do_comm(p);
++	return 0;
++}
++
++static inline int deputy_pre_usermode(void)
++{
++	deputy_main_loop();
++	return 0;
++}
++
++/**
++ * openmosix_pre_usermode - process some pre usermode events for current
++ **/
++asmlinkage int openmosix_pre_usermode(struct pt_regs regs)
++{
++	unsigned long flags;
++
++	if (task_test_dreqs(current, ~0)) {
++		local_save_flags(flags);
++		local_irq_enable();
++
++		task_do_request();
++
++		local_irq_restore(flags);
++	}
++
++	if (task_test_dflags(current, DMIGRATED)) {
++		local_save_flags(flags);
++		local_irq_enable();
++
++		if (task_test_dflags(current, DREMOTE))
++			return remote_pre_usermode();
++		if (task_test_dflags(current, DDEPUTY))
++			return deputy_pre_usermode();
++
++		local_irq_restore(flags);
++	}
++	return 0;
++}
++
++/**
++ * openmosix_init - Init all global variables and subsystem at boot
++ **/
++static int __init openmosix_init(void)
++{
++	/* kick off the kernel threads: */
++	kernel_thread(openmosix_mig_daemon, NULL, 0);
++
++	return 0;
++}
++
++subsys_initcall(openmosix_init);

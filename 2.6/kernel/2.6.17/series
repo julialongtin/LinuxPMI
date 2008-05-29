@@ -131,7 +131,7 @@ linuxpmi/clean/039-hpc_kcomd_c-kcomd-create-broken-cleanup.patch
 linuxpmi/clean/040-hpc_Kconfig-config-cleaup.patch
 
 # omcore
-# linuxpmi/clean/041-hpc_kernel_c-omcore-create-broken.patch
+linuxpmi/clean/041-hpc_kernel_c-omcore-create-broken.patch
 
 # remainder of first git tree
 linuxpmi/openmosix-git.patch
