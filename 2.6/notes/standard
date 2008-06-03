@@ -6,7 +6,7 @@ CLEAN: marked breakup if it is not a new file, and does two things that should b
 CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, etc).
 CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues). 
 CLEAN: re-read the notes, and correct if (likely) necissary.
-CLEAN: if a function is only called by one or two other function(s), start the description by explaining this.
+CLEAN: if a function is only called by a few other functions, start the description by explaining this.
 CLEAN: does it destroy its datastructures on error? check passed in pointers (from userspace, or other routines) for NULL, ... comment in notes.
 CLEAN: does its printk messages look like  "openMosix: An error occured. " (little o, punctuation!). comment in notes.
 SILVER: break up breakup patches into multiple patches.
@@ -24,8 +24,9 @@ GOLD: make sure theres a printk message for each error condition, and minimal er
 GOLD: printk should not be invoked directly, always as OMDEBUG or KCOMDEBUG or OMBUG or somesuch macro.
 GOLD: all datastructures/memory freed/destroyed/etc.
 GOLD: variable names will match kernel precident.
-GOLD: functions that manipulate lists will aquire, release spinlocks appropriately.
+GOLD: functions that manipulate lists will aquire and release spinlocks appropriately.
 GOLD: in asm-offsets.h, "DEFINE(PAGE_SIZE_asm, PAGE_SIZE);" sets precident, our defines should end in _asm here.
+GOLD: mm->realusers is always atomicly read and written.
 GOLD: all defines we add to headers will have comments.
 GOLD: kernel threads should not lock spinlocks directly. their helper functions should perform the locking.
 PLAT: patches are in the order they depend on one another.
@@ -42,9 +43,16 @@ Rules:
 2: don't lose data. its OK to retire a patch after you know everything it was responsible for, and can explain it to others. it is NOT ok to blindly replace code.
 3: to prove understanding, explain yourself. if you cannot explain what you read/learned in your own words, you do not truely understand it.
 4: premature optimization is the root of all evil. lets get it working, then we can worry about speed issues, memory consumption, bandwidth consumption (demand paging), etc.
+5: technology before politics. worry about political matters when they start to interfere with people doing stuff.
+
+Todo:
+
+compare the hpc/Makefile's idea of groupings to our defined classes above.
+
+ask debian legal what licensing issues will be caused by the inclusion of GPLV3 files in the linux kernel.
 
 create a "programming against openmosix howto".
-add following to wiki:
+add derivitive of the following to wiki:
 13:16 < juri_> i've successfully used unix pipes.
 13:19 < juri_> you create pipes with dup(2), fork, then use those pipes to maintain communication between your workers.
 13:22 < juri_> http://www.ecst.csuchico.edu/~beej/guide/ipc/pipes.html

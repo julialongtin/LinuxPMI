@@ -690,12 +690,21 @@ hunk	class		file patched				description								depends
 								mig_daemon kernel thread, and returns 0. the last line in this file
 								tells the subsystem system to call openmosix_init on initializing this
 								kernel component.
-42	config		creates hpc/Makefile			this Makefile contains the make fragment that tells the kernel source
-								how to build the openmosix hpc directory. they split the code into
+42	config		creates hpc/Makefile			this Makefile contains the make fragments that tells the kernel
+								what targets to build in the hpc/ directory. this code contains
 								five targets, obj-$(CONFIG_KCOMD) obj-$(CONFIG_OPENMOSIX) 
 								obj-$(CONFIG_OPENMOSIX_CTRL_FS) obj-$(CONFIG_OPENMOSIX_DEBUG)
-								and obj-$(CONFIG_OPENMOSIX_DEBUG_FS). this coincides with the configs
-								previously in linux/hpc/Kconfig.
+								and obj-$(CONFIG_OPENMOSIX_DEBUG_FS). each of these targets matches 
+								with the configuration variables defined by hpc/Kconfig.
+								obj-$(CONFIG_KCOMD) says to compile kcomd.o. obj-$(CONFIG_OPENMOSIX)
+								says to compile kernel.o, task.o, comm.o, remote.o, deputy.o,
+								copyuser.o, files.o, syscalls.o, migrecv.o, migsend.o, migctrl.o,
+								service.o, proc.o, and an arch-$(ARCH).o file containing archetecture
+								specific functionality. proc.o has a comment noting that its "legacy
+								code". obj-$(CONFIG_OPENMOSIX_CTRL_FS) says to create ctrlfs.o.
+								obj-$(CONFIG_OPENMOSIX_DEBUG) says to include debug.o, and 
+								an archetecture specific debug-$(ARCH).o. finally, 
+								obj-$(CONFIG_OPENMOSIX_DEBUG_FS) says to include debugfs.o.
 43	openmosix	creates hpc/migctrl.c			this file is functions for performing a migration related activity on
 								a given process. task_remote_expel runs on the remote node, and sends
 								a DREMOTE process back to its origional node. it calls do_exit for the	
