@@ -1,0 +1,24 @@
+Index: linux/hpc/Makefile
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/Makefile	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,19 @@
++# communication part
++obj-$(CONFIG_KCOMD)     += kcomd.o
++
++# core part
++obj-$(CONFIG_OPENMOSIX)		+= kernel.o task.o comm.o
++obj-$(CONFIG_OPENMOSIX)		+= remote.o deputy.o copyuser.o files.o syscalls.o
++obj-$(CONFIG_OPENMOSIX)		+= migrecv.o migsend.o migctrl.o
++obj-$(CONFIG_OPENMOSIX)		+= service.o
++obj-$(CONFIG_OPENMOSIX)		+= arch-$(ARCH).o
++
++# legacy
++obj-$(CONFIG_OPENMOSIX)		+= proc.o
++
++# new ctrl fs
++obj-$(CONFIG_OPENMOSIX_CTRL_FS)	+= ctrlfs.o
++
++# debug
++obj-$(CONFIG_OPENMOSIX_DEBUG)	+= debug.o debug-$(ARCH).o
++obj-$(CONFIG_OPENMOSIX_DEBUG_FS)+= debugfs.o
