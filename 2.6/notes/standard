@@ -8,7 +8,8 @@ CLEAN: marked cleanup if the patch needs minor non-function-changing modificatio
 CLEAN: re-read the notes, and correct if (likely) necissary.
 CLEAN: if a function is only called by a few other functions, start the description by explaining this.
 CLEAN: does it destroy its datastructures on error? check passed in pointers (from userspace, or other routines) for NULL, ... comment in notes.
-CLEAN: does its printk messages look like  "openMosix: An error occured. " (little o, punctuation!). comment in notes.
+CLEAN: printk() is depreciated. use one of the macros.
+CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel also tells us what function its in.
 SILVER: break up breakup patches into multiple patches.
 SILVER: clean up cleanup patches. leave dead code.
 SILVER: remove code later removed by CLEANed patch. modify later cleaned patch so it is additave only.
@@ -16,6 +17,7 @@ SILVER: classify each patch into: kcore kcomd config i386 x86_64 ppc... many oth
 SILVER: all functions will have a kdoc description.
 SILVER: dependancies are noted.
 SILVER: change EXPORT_SYMBOL to EXPORT_SYMBOL_GPL after verifying GPL license in header.
+SILVER: OMBUG() invocations should indicate what failed, uniquely. no glob for "a function i called somewhere in this function failed".
 GOLD: all files we create will have a header saying what they are for, why functions are there, and not someplace else.
 GOLD: include kcom.h before including prototype.h
 GOLD: all includes will indicate what they are there to include in comments.

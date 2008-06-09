@@ -611,7 +611,7 @@ hunk	class		file patched				description								depends
 								hpc/ctrlfs.c, which is the control filesystem used to tell the kernel
 								to migrate processes, as well as where to tell what node a process is
 								running on.
-041	openmosix	creates hpc/kernel.c			this file is the kernel's interface to the openmosix system. it	
+041	ominterface	creates hpc/kernel.c			this file is the kernel's interface to the openmosix system. it	
 								contains only functions that are meant to be called by the kernel.
 								first, we export our openmosix_options datastructure, which contains
 								four constants that are used as "ceilings" for the OMDEBUG_* debugging
@@ -690,7 +690,7 @@ hunk	class		file patched				description								depends
 								mig_daemon kernel thread, and returns 0. the last line in this file
 								tells the subsystem system to call openmosix_init on initializing this
 								kernel component.
-42	config		creates hpc/Makefile			this Makefile contains the make fragments that tells the kernel
+042	config		creates hpc/Makefile			this Makefile contains the make fragments that tells the kernel
 								what targets to build in the hpc/ directory. this code contains
 								five targets, obj-$(CONFIG_KCOMD) obj-$(CONFIG_OPENMOSIX) 
 								obj-$(CONFIG_OPENMOSIX_CTRL_FS) obj-$(CONFIG_OPENMOSIX_DEBUG)
@@ -705,35 +705,83 @@ hunk	class		file patched				description								depends
 								obj-$(CONFIG_OPENMOSIX_DEBUG) says to include debug.o, and 
 								an archetecture specific debug-$(ARCH).o. finally, 
 								obj-$(CONFIG_OPENMOSIX_DEBUG_FS) says to include debugfs.o.
-43	openmosix	creates hpc/migctrl.c			this file is functions for performing a migration related activity on
-								a given process. task_remote_expel runs on the remote node, and sends
-								a DREMOTE process back to its origional node. it calls do_exit for the	
-			who gets this result?			process, with SIGKILL as its reason for dieing. it even closes down
-								the link back to the home node. task_remote_wait_expel wraps the 
-								preceding function with a polite request to the home node, asking for
-								permission first. task_local_send sends a local (as in, this-is-home)
-								task to a remote host, opening and initializing a connection, then
-								calling mig_do_send() on the process. after sending the process remote,
-								it calls deputy_startup to enter the "current" process which is now a 
-								deputy stub into the deputy code. task_local_bring returns a remote
-								process to the current node, re-merging it with its deputy. it uses
-								obtain_mm to get a new mm struct, then mig_do_receive to do the "work".
-								it asks permission nicely. task_move_remove2remote is a stub. its 
-								eventual goal is obviously to handle moving a task between remote
-								hosts. the current code just migrates to or from the home node. 
-								__task_move_to_node moves a task to a given node, checking what method
-			return some sort of error to userspace	it should use. it will call remote2remote when appropriate, triggering
-								a bug, since that is a stub. task_move_to_node wraps 
-								__task_move_to_node, checking for a stay reason, and returning -1 if
-								there is a stay reason. task_go_home makes sure a task is DMIGRATED,
-								tries to send it home if so, and if its still DMIGRATED after calling
-								__task_move_to_node, printks an error. either way, it returns 0.
-								task_go_home_for_reason sends a node home, and makes sure a reason
-								why follows it home. the first if looks kinda bogus, but the rest of 
-								the function sets a stay reason, checks for DMIGRATED, and if it is,
-								sends it home via __task_move_to_node. if migration fails, we remove
-								the flag we added, and return the error value. 
-44	openmosix	creates hpc/migrecv.c			this file is functions for receiving pieces of processes, and filling	
+043	ominterface	creates hpc/migctrl.c			this file contains functions for moving processes via openmosix.
+								task_remote_expel is called either by task_remote_wait_expel or 
+								remote_do_comm() in hpc/remote.c, to send a DREMOTE process back to 
+								its origional node, merging it with its deputy. first we check to make
+								sure the task we've been passed is in DREMOTE state, and use BUG_ON
+								if its not. then, we use mig_send_hshake to request a migration back
+								from the home node. if this succeeds, we call mig_do_send to actually
+								perform the migration. after that, we destroy our link to the home node
+								by using task_set_comm to associate our link to null, then calling 
+								comm_close() against our old link (returned by task_set_comm). we then
+			who gets this result?			call do_exit(SIGKILL) to end the process. in case either of our
+								mig_send_hshake or mig_do_send calls fail, we OMBUG("failed\n"), and
+								return -1. task_remote_wait_expel is called by __task_move_to_node, to
+								return a task to the home node. it wraps the previous function, first
+								requesting permission to return home by sending a REM_BRING_HOME req,
+								then waiting on a DEP_COMING_HOME reply. if comm_recv fails, or we recv
+								something other than a DEP_COMING_HOME, we return -1. otherwise, we
+								call task_remote_expel. task_local_send is called by 
+								__task_move_to_node to send a local task to a remote host. first, we
+								check to make sure the task is not in DDEPUTY state. if it is, we
+			returning success in case of 'error'?	return 0, as this process is already running on a remote node. 
+								otherwise, we open a new connection using sockaddr_setup_port and 
+								comm_setup_connect, then attach it to this process with
+								task_set_comm. we set the current process into DDEPUTY state, and 
+			why use hshake here, and req above?	ask permission to send by sending a HSHAKE_MIG_REQUEST using 
+								mig_send_hshake. if that succeeds, we call mig_do_send to actually send	
+								the process to the remote node. when mig_do_send returns successfully,
+								the process has been sent to the remote node, and the local process is
+								now a deputy. we call deputy_startup, and return 0. if either 
+								comm_setup_connect, mig_send_hshake, or mig_do_send returns failure, we
+								remove our DDEPUTY flag, destroy our link to the remote node (if
+								applicable), and return 0. task_local_bring is called by
+								__task_move_to_node to return a remote process to the current node, 
+								re-merging it with its deputy. first, we check to make sure the current
+			returning success in case of error!	task is in DDEPUTY state. if its not, we return 0. we then use 
+								obtain_mm to get a new mm struct. we then make a DEP_COMING_HOME
+								request to the remote end, and use mig_recv_hshake to receive our
+								reply. assuming success, we use mig_do_receive to receive the process
+								back, clear our DDEPUTY flag, and use task_set_comm/comm_close to 
+								destroy our link. if obtain_mm, mig_recv_hshake, or mig_do_receive
+			unique ombug message for each failure!	return failure, we OMBUG("failed\n"), and return -1.
+								task_move_remove2remote is a stub. its eventual goal is obviously to 
+								handle moving a task between remote hosts. it just calls OMBUG(), and
+			no failure code?			returns 0. __task_move_to_node is called by task_move_to_node, 
+								task_go_home, and task_go_home_for_reason to move a task to a given 
+								node, using the appropriate function from above. first, we set flag
+								DPASSING on given task, indicating we're going to try and transfer it 
+								somewhere. then, we check to see if it has a DREMOTE flag. if it does,	
+			return some sort of error to userspace	and we were given a node to send it to, we use task_move_remote2remote,	
+								accomplishing nothing since that function is a stub. if DREMOTE is set, 
+								but we were not given a node to send it to, we call 
+								task_remote_wait_expel. if DREMOTE is not set, and we were given a node
+								to send to, we call task_local_send. otherwise, DREMOTE is not set, and
+								we have no where to send a process to, so we call task_local_bring.
+								after we've called one of these four functions, we clear the DPASSING
+								flag, and return the error passed to us by the function we called. 
+								task_move_to_node is called by hpc/task.c. it wraps __task_move_to_node 
+			printk!					first checking for a stay reason, and if there is, we printk() an error
+			check __task_move_to_node's return!	and return -1. otherwise, we call __task_move_to_node, and return 0. 
+								task_go_home is called by deputy_process_communication in hpc/deputy.c,
+								to send a task home when we have received a REM_BRING_HOME request.
+								first, we check to make sure this process is DMIGRATED. if its not, we 
+			printk!					printk() a warning, and return -1. otherwise, we call 
+								__task_move_to_node, supplying only a task as an argument, thereby
+								requesting a move to the home node. if its still DMIGRATED after 
+			check __task_move_to_node's return!	calling __task_move_to_node, we printk() a warning. either way, we 
+			printk! returning 0 in case of error?	return 0. task_go_home_for_reason is called by code added to 
+								arch/i386/kernel/vm86.c to send a task home, supplying a reason why, 
+								which is also sent to the home node. first, we check wether the reason
+			printk!					flag given is already marked on this process. if it is, we printk() a
+								warning. we then set that reason flag, an test wether the process is
+			returning 0 for error!			migrated or not. if its not, we return 0. otherwise, we call
+								__task_move_to_node the same way as the previous function, to send the
+								task home. we check __task_move_to_node's return, and if its not 0, we
+								clear the stay reason we just set. we then return the value returned by
+								__task_move_to_node.
+044	omrecv		creates hpc/migrecv.c			this file is functions for receiving parts of processes, and filling	
 								in appropriate data structures, along with the openmosix mig_daemon.
 								mig_recv_hshake receives a handshake, and sends a stock reply, with
 								our OPENMOSIX_VERSION in it. it should check values from remote, but it
