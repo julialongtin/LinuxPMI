@@ -687,9 +687,9 @@ hunk	class		file patched				description								depends
 								calling remote_pre_usermode or deputy_pre_usermode, then restore them
 								once we return from userspace. this function always returns 0 for
 								success. openmosix_init is called on subsystem load. it starts the 
-								mig_daemon kernel thread, and returns 0. the last line in this file
-								tells the subsystem system to call openmosix_init on initializing this
-								kernel component.
+								openmosix_mig_daemon kernel thread to receive incoming processes, and 
+								returns 0. the last line in this file tells the subsystem system to 
+								call openmosix_init upon initializing this kernel component.
 042	config		creates hpc/Makefile			this Makefile contains the make fragments that tells the kernel
 								what targets to build in the hpc/ directory. this code contains
 								five targets, obj-$(CONFIG_KCOMD) obj-$(CONFIG_OPENMOSIX) 
@@ -782,67 +782,123 @@ hunk	class		file patched				description								depends
 								clear the stay reason we just set. we then return the value returned by
 								__task_move_to_node.
 044	omrecv		creates hpc/migrecv.c			this file is functions for receiving parts of processes, and filling	
-								in appropriate data structures, along with the openmosix mig_daemon.
-								mig_recv_hshake receives a handshake, and sends a stock reply, with
-								our OPENMOSIX_VERSION in it. it should check values from remote, but it
-								dosent. mig_do_receive_mm receives the members of the mm structure
-								between start_code and env_end. mig_do_receive_vma receives a vm area.
-								we use do_mmap_pgoff to create the mapping in the mm structure. we 
-								preserve the VM_(READ|WRITE|EXEC) protection flags and 
-								VM_(GROWSDOWN|DENYWRITE|EXECUTABLE) behavior flags, and use 
-								sys_memadvise to give the kernel the same memory access hints as were 
-								on the origional VM area. we have code for handling the file pointer,
-								but it is disabled, and broken in the newest version.
-								mig_do_receive_page receives a page of memory, and maps it into the
-								given task. we use find_vma to find the vma that should own this page.	
-								we then allocate memory for the page in userspace, and receive a page's 
-								worth of data. we use kmap and kunmap to have the page mapped into 
-								kernel memory space while so we can fill it. we alloc a pte entry 
-								addressing this page (and optionaly entries in the pmd, and pud), then	
-			use set_pte_atomic?			use set_pte to add that pte entry to the given process' mm structure. 
-								we apply the containing vma's vm_page_prot page protection flags. we 
-								unmap the automatic mapping created by pte_alloc_map using pte_unmap. 
-								page_dup_rmap marks the page as in-use, and inc_mm_counter marks the 
-								mm structure as owning one more page. in case of error, we return -1. 
-								mig_do_receive_fp sets the flag telling the scheduler this process uses
-								floating point math, then calls the archetecture specific function for 
-								receiving a floating point state. mig_do_receive_proc_context receives 
-								the processor context of a process. first, it calls the archetecture 
-								specific handler to set up things like processor registers and TLS 	
-								entries, then handles copying the cross-arch items, like id, user
-								credentials, signal related stuff. we have a note about copying an 
-								rlimit here, but no code to go with it.	we copy the task members comm 
-								and personality, and call arch_pick_mmap_layout to set the task->mm 
-								structure up. mig_do_receive contains the large select case that calls	
-								all the above functions. we use __get_free_page to get a page already 
-								mapped in GFP_KERNEL, then set the task in question's state flag to 
-								DINCOMING. we clear the used_math flag, and go into the receive loop.
-								in this loop, we first receive a req structure, then a req.dlen length
-								section into our page. if req.dlen is over a pagesize, we OM_BUG. 
-								after that, we decode req.type, and dispatch to the appropriate
-								function. the loop ends when we receive a ABORT, the default case, or
-								MIG_TASK is called, which is the last stage in migration. MIG_TASK's
-								case replies that migration is done, clears our state of DINCOMING,
-								flushes the tlb for this process, and returns 0. in case of failure,
-								we return -1. mig_handle_migration is the function that a newly
-								spawned, ready to be filled with state process is started in, in order	
-								for it to receive the contents of a process being migrated to this
-								node. we use task_set_comm() to setup our link back to the home node,
-								then obtain_mm to set up our new mm structure. we call mig_recv_hshake	
-								to start talking to the remote end, call mig_do_receive to receive all
-								the remote process data, reparent ourself to init, then run
-								arch_kickstart to jump from our deputy code, to the process (now
-								in a runable state). openmosix_mig_daemon is the migration daemon
-								itsself. it waits for communication, then launches a user thread in
-								function mig_handle_migration. we set our dflags to mark ourself as 
-								DREMOTEDAEMON, then initialize our socket/socketaddr. we use
-								set_our_addr to initialize the socketaddr, then comm_setup_listen to
-								open our listening socket. once we have a socket, we enter the
-								listening loop. in this loop, we run comm_accept to get a channel from
-								a remote kernel, and if we get one, we call user_thread, sending mlink
-								as the argument to the new process. if spawning returns an error, we
-								close mlink ourselves, on either case, we return to the top of loop,	
-								and wait for a new connection. 
+								in the appropriate data structures. it also contains the openmosix 
+								mig_daemon. mig_recv_hshake is called by mig_handle_migration, as well
+								as task_local_bring in hpc/migctrl.c. it receives a omp_mig_handshake, 
+								and sends a reply, with our OPENMOSIX_VERSION in it. we return -1 if
+								either the send or recv fail, along with invoking OMBUG with a short
+								description of what happened. in case of success, we return 0.
+			bad comment!				mig_do_receive_mm is called by mig_do_receive to set the passed task's
+								mm structure to the values stored in the passed in omp_mig_mm
+								structure, starting with start_code and ending at env_end. it starts
+								by OMDEBUG_MIG'ing a trace message, then uses memcpy to push the values
+								from the passed in omp_mig_mm to the processes given's mm structure.
+			bad comment!				mig_do_receive_vma is called by mig_handle_migration to set up a vm
+								area in the current process matching the passed in omp_mig_vma
+								structure's definition. we start by OMDEBUG_MIG'ing a trace message,
+								including the start address of the vm, and its size. we then have
+			broken!					commented out code, that is supposed to use task_rfiles_get to retreive
+								the file pointer that was initially associated to this page, in the
+								case of a page mmap'd from a file. next, we call do_mmap_pgoff to 
+								create the mapping in the mm structure. we supply it with a NULL file
+								argument, the vm_start, vm_size, and vm_pgoff from the passed in
+								omp_mig_vma. for the prot argument, we create a long containing the
+								VM_(READ|WRITE|EXEC) protection flags from the vm_flags in the
+								omp_mig_vma. for the flags argument, we create a long containing the
+								VM_(GROWSDOWN|DENYWRITE|EXECUTABLE) behavior flags from vm_flags in the	
+								omp_mig_vma, adding MAP_FIXED and MAP_PRIVATE. we check the result
+								of do_mmap_pgoff with IS_ERR(result), and if we have an error, we
+								return PTR_ERR(result). otherwise, we check vm_flags for the 
+								VM_READHINTMASK flag, and if its present, we use sys_memadvise directly
+								to give the kernel either MADV_RANDOM or MADV_SEQUENTIAL memory access
+								hints for this page, depending on wether vm_flags is marked VM_SEQ_READ
+								or not. assuming the IS_ERR earlier didnt cause us to return, we now
+								return 0 indicating success. mig_do_receive_page is called by 
+								mig_do_receive to receive a page of memory, and map it into the given 
+								task at the appropriate location. like the previous functions, first
+								we OMDEBUG_MIG a trace message, this time including the address of the
+								page we're creating. we then use find_vma to find the vm area that 
+								should own this page. if theres no VMA for this page, we OMBUG, then
+								return -1. otherwise, we allocate memory for the page in userspace
+								using alloc_page(GFP_HIGHUSER). if that fails, we OMBUG, then return
+			what about different size pages?	-ENOMEM. we kmap the page into kernel space so we can fill it, then 
+								receive a page's worth of data using comm_recv. after comm_recv, we
+								kunmap the page. to add the page in the task at the correct spot, we
+								alloc a pte entry pointing to the address we're mapping our page to 
+								(and optionaly entries in the pmd, and pud), then check to make sure 
+								the entry in question has no page already mapped to it. if it does,
+								we OMBUG() about it. either way, we use set_pte to point this pte to	 http://kernel.lupaworld.com/downloads/The_Linux_Kernel_Memory_API.pdf
+								our page, after applying the containing vma's vm_page_prot page
+								protection flags while converting the address to a pte with mk_pte, 
+								and marking the resulting pte "structure" dirty using pte_mkdirty.
+			use set_pte_atomic?			we then unmap the pte entry from kernel space using pte_unmap. 
+								page_dup_rmap marks the page as in-use by a pte, and inc_mm_counter 
+								marks the mm structure as owning one more page. in case either 
+								comm_recv, pud_alloc, pmd_alloc, or pte_alloc_map return an error, we
+								free the page we allocated earlier with __free_page, and return -1.
+								mig_do_receive_fp is called by mig_do_receive to set up the floating
+								point state of a given task. it first calls OMDEBUG_MIG to print a
+			current task, or passed task?		tracing message, then uses set_used_math() to mark the current(!)
+								task as one that uses floating point math. we then call the 
+								archetecture specific function for setting up a floating point state.
+								mig_do_receive_proc_context is called by mig_do_receive to set up 
+								the processor context of the passed in task to the values stored in
+								the passed in omp_mig_task structure. first, it calls the
+								archetecture specific handler to set up things like processor
+								registers and TLS entries, then handles copying the cross-arch items,
+								like the pid and tgid, the user credentials (uid, euid, suid, fsuid,
+								gid, egid, sgid, and fsgid),and various signal related members (
+								blocked, real_blocked, sas_ss_sp, and sas_ss_sp_size). we also copy the	
+								signal handler's 'action'. we have a note about copying an rlimit here,
+								but no code to go with it. we copy the task's comm and personality
+								members, then call arch_pick_mmap_layout to set the task's mm structure	
+								up. mig_do_receive is called by task_local_bring in hpc/migctrl.c to
+								receive a process from a remote node, back into its deputy. to
+								begin, we use __get_free_page to get a page thats mapped in GFP_KERNEL,
+								then set the passed in task's state flag to DINCOMING. we clear the 
+								used_math flag, and go into the receive loop. in this loop, we first 
+								receive a req structure. we examine the dlen member of the received
+								structure to see if it is over a pagesize, and if it is, we BUG_ON, 
+								panicing the system. after that check, we decode req.type, and dispatch
+								the data received, and the task to operate on to the appropriate 
+								function . the loop ends when we receive a ABORT, the default case, or
+								case MIG_TASK is called, which is the last stage in migration. 
+								MIG_TASK's case sends a req back along the socket indicating that 
+								migration is complete, clears our state of DINCOMING, flushes the tlb
+								for this processes mm structure, and returns 0. in case of failure in
+								our __get_free_page call, either of the comm_recv calls, or any of the 
+								mig_do_receive_* functions that can return failure, we clear the
+			if __get_free_page fails, is it right	DINCOMING flag, free our data page, OMBUG a failure message, and return	
+			to free its result?			-1. mig_handle_migration is the function that a newly spawned, ready to
+								be filled with state task is kicked into by openmosix_mig_daemon, in 
+								order for the task to receive the contents of a task being migrated to
+								this node. first we OM_VERBOSE_MIG a trace message, then we use 
+								task_set_comm() to setup our link back to the home node. we use 
+								obtain_mm to get a new mm structure for this task, and call 
+								mig_recv_hshake	to inform the home that we're ready to start receiving
+								data. we call mig_do_receive to receive all the process data, re-parent	
+								ourself to init, then run arch_kickstart to jump into the process 
+								(now in a "runable" state). openmosix_mig_daemon is the migration 
+								daemon itsself. first we daemonize ourself with om_daemonize as 
+								"omkmigd". we set a flag marking ourself DREMOTEDAEMON, and
+								then initialize our socket/socketaddr. we use set_our_addr to 
+								initialize the socketaddr, then comm_setup_listen to open our listening 
+			printk()!				socket. if comm_setup_listen returns null, we printk a warning, flush 
+								our signals, mark ourselves TASK_INTERRUPTABLE, schedule_timeout(HZ), 
+								and loop up to just before we called comm_setup_listen, thereby 
+								entering a loop, waiting for comm_setup_listen to work. once we have a 
+								socket, we enter the listening loop. in this loop, we run comm_accept 
+								to attempt to get a channel from a remote kernel. if we get EINTR, 
+								ERESTART, EAGAIN, or ERESTARTSYS, we check for a pending SIGCHLD. if
+								we get one, we printk a debugging message. either way, we flush our
+								signals, and re-start the loop. if the error returned by comm_accept
+								wasn't one of those four errors, and wasn't NULL, we OMBUG a failure
+								message, close our link, and return to the spot just before we call
+								comm_setup_listen. if the error is NULL, then we've got a connection.
+								we then call user_thread, sending the socket as the argument to the
+								new process. if spawning the new process returns an error, we
+								close the socket ourselves, either way, when user_thread returns,
+								we return to the top of loop, and wait for a new connection. 
 45	openmosix	creates hpc/migsend.c			migsend is the other half of migrecv, which is to say, its responsible
 								for tearing down a process, and sending it to a remote node.
 								mig_send_hshake sends a handshake containing a type, the OPENMOSIX
