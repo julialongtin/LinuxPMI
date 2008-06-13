@@ -1,0 +1,246 @@
+Index: linux/hpc/migsend.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/migsend.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,241 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/errno.h>
++#include <linux/mm.h>
++#include <linux/mman.h>
++#include <linux/stddef.h>
++#include <linux/highmem.h>
++#include <linux/personality.h>
++#include <asm/tlbflush.h>
++#include <asm/mmu_context.h>
++#include <hpc/comm.h>
++#include <hpc/task.h>
++#include <hpc/hpc.h>
++#include <hpc/debug.h>
++#include <hpc/service.h>
++#include <hpc/prototype.h>
++#include <hpc/mig.h>
++#include <hpc/protocol.h>
++#include <hpc/version.h>
++#include <hpc/arch.h>
++
++/* handle sending of migration request, and check answer */
++int mig_send_hshake(task_t *p, struct socket *mlink, int type)
++{
++	struct omp_mig_handshake hshake, hshake_recv;
++	int error;
++
++	hshake.type = type;
++	hshake.version = OPENMOSIX_VERSION;
++	hshake.personality = p->personality;
++
++	error = comm_send(mlink, &hshake, sizeof(hshake));
++        if (error < 0) {
++		OMBUG("send failed: %d\n", error);
++		return -1;
++	}
++
++	error = comm_recv(mlink, &hshake_recv, sizeof(hshake_recv));
++        if (error < 0) {
++		OMBUG("recv failed %d\n", error);
++                return -1;
++        }
++
++	if (hshake_recv.type != (hshake.type | HSHAKE_REPLY)) {
++		/* it's a no go ... */
++		OMBUG("no go\n");
++		return -1;
++	}			
++
++	return 0;
++}
++
++static int mig_send_fp(task_t *p)
++{
++	struct omp_mig_fp m;
++
++	if (!used_math())
++		return 0;
++
++	arch_mig_send_fp(p, &m);
++	return comm_send_hd(p->om.contact, MIG_FP, &m, sizeof(m));
++}
++
++
++static int mig_send_mm(task_t *p)
++{
++	struct omp_mig_mm s;
++
++	memcpy(&s, &p->mm->start_code, sizeof(s));
++
++	return comm_send_hd(p->om.contact, MIG_MM, &s, sizeof(s));
++}
++
++static inline void mig_send_vma_file(task_t *p, struct vm_area_struct *vma,
++							struct omp_mig_vma *m)
++{
++	struct inode *inode = vma->vm_file->f_dentry->d_inode;
++
++	m->vm_pgoff = vma->vm_pgoff;
++	m->i_size = inode->i_size;
++
++	if (task_test_dflags(p, DREMOTE)) {
++		struct rfile_inode_data *data;
++
++		data = (struct rfile_inode_data *) inode->u.generic_ip;
++		m->vm_file = data->file;
++	} else {
++		m->vm_file = vma->vm_file;
++		m->f_dentry = vma->vm_file->f_dentry;
++	}
++}
++
++static int mig_send_vmas(task_t *p)
++{
++	struct vm_area_struct *vma;
++	struct omp_mig_vma m;
++	int ret = 0;
++
++	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
++	{
++		m.vm_start= vma->vm_start;
++		m.vm_size = vma->vm_end - vma->vm_start;
++		m.vm_flags = vma->vm_flags;
++		m.vm_file = vma->vm_file;
++		m.vm_pgoff = 0;
++		if (vma->vm_file)
++			mig_send_vma_file(p, vma, &m);
++
++		ret = comm_send_hd(p->om.contact, MIG_VMA, &m, sizeof(m));
++		if (ret < 0) {
++			OMBUG("send vma failed\n");
++			break;
++		}
++
++	}
++	return ret;
++}
++
++
++static int mig_send_pages(task_t *p)
++{
++	struct vm_area_struct * vma;
++	unsigned long addr;
++	int error;
++
++	for (vma = p->mm->mmap; vma; vma = vma->vm_next)
++	{
++		if (!(vma->vm_flags & VM_READ))
++			continue;
++		for (addr = vma->vm_start; addr < vma->vm_end; addr += PAGE_SIZE)
++		{
++			error = comm_send_hd(p->om.contact, MIG_PAGE, &addr,
++								sizeof(addr));
++			if (error < 0)
++				goto fail;
++
++			error = comm_send(p->om.contact, (void *) addr,
++								PAGE_SIZE);
++			if (error < 0)
++				goto fail;
++		}
++	}
++	return 0;
++fail:
++	OMBUG("failed (addr: %p)\n", (void *) addr);
++	return -1;
++}
++
++
++static int mig_send_proc_context(task_t *p)
++{
++	struct omp_mig_task m;
++	struct omp_req req;
++	int error;
++
++	m.ptrace = p->ptrace;
++
++	m.pid = p->pid;
++	m.tgid = p->tgid;
++
++	/* credentials */
++	m.uid = p->uid;
++	m.euid = p->euid;
++	m.suid = p->suid;
++	m.fsuid = p->fsuid;
++
++	m.gid = p->gid;
++	m.egid = p->egid;
++	m.sgid = p->sgid;
++	m.fsgid = p->fsgid;
++
++	/* signals */
++	m.blocked = p->blocked;
++	m.real_blocked = p->real_blocked;
++	m.sas_ss_sp = p->sas_ss_sp;
++	m.sas_ss_size = p->sas_ss_size;
++	memcpy(m.sighand, p->sighand->action, sizeof(struct k_sigaction)
++								* _NSIG);
++
++	/* others */
++	m.nice = task_nice(p);
++	m.caps = p->cap_effective;
++	p->om.remote_caps = m.caps;
++
++	m.personality = p->personality;
++
++	memcpy(m.comm, p->comm, sizeof(m.comm));
++
++	arch_mig_send_proc_context(p, &m);
++
++	error = comm_send_hd(p->om.contact, MIG_TASK, &m, sizeof(m));
++	if (error < 0)
++		goto fail;
++
++	error = comm_recv(p->om.contact, &req, sizeof(req));
++
++	if (req.type == (MIG_TASK | REPLY))
++		return 0; /* commit point */
++
++fail:
++	OMBUG("failed\n");
++	return -1;
++}
++
++int mig_do_send(task_t *p)
++{
++	arch_mig_send_pre(p);
++
++	if (mig_send_mm(p)) goto fail_mig;
++	if (mig_send_vmas(p)) goto fail_mig;
++	if (mig_send_pages(p)) goto fail_mig;
++	if (mig_send_fp(p)) goto fail_mig;
++	if (arch_mig_send_specific(p)) goto fail_mig;
++	if (mig_send_proc_context(p)) goto fail_mig;
++
++	arch_mig_send_post(p);
++
++	return 0;
++fail_mig:
++	OMBUG("failed\n");
++	comm_send_req(p->om.contact, MIG_ABORT);
++	return -1;
++}

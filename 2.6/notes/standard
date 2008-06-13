@@ -9,7 +9,7 @@ CLEAN: re-read the notes, and correct if (likely) necissary.
 CLEAN: if a function is only called by a few other functions, start the description by explaining this.
 CLEAN: does it destroy its datastructures on error? check passed in pointers (from userspace, or other routines) for NULL, ... comment in notes.
 CLEAN: printk() is depreciated. use one of the macros.
-CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel also tells us what function its in.
+CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel also tells us what function called OMBUG().
 SILVER: break up breakup patches into multiple patches.
 SILVER: clean up cleanup patches. leave dead code.
 SILVER: remove code later removed by CLEANed patch. modify later cleaned patch so it is additave only.
