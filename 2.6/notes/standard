@@ -3,8 +3,9 @@ origional -> linuxpmi/clean/ -> linuxpmi/silver/ -> linuxpmi/gold -> linuxpmi/pl
 
 CLEAN: marked create if this creates a new file.
 CLEAN: marked breakup if it is not a new file, and does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
-CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, etc).
+CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, etc).
 CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues). 
+CLEAN: marked final if the patch is the last patch in our set to touch a given file.
 CLEAN: re-read the notes, and correct if (likely) necissary.
 CLEAN: if a function is only called by a few other functions, start the description by explaining this.
 CLEAN: does it destroy its datastructures on error? check passed in pointers (from userspace, or other routines) for NULL, ... comment in notes.
@@ -46,6 +47,13 @@ Rules:
 3: to prove understanding, explain yourself. if you cannot explain what you read/learned in your own words, you do not truely understand it.
 4: premature optimization is the root of all evil. lets get it working, then we can worry about speed issues, memory consumption, bandwidth consumption (demand paging), etc.
 5: technology before politics. worry about political matters when they start to interfere with people doing stuff.
+
+Security Rules:
+1: never turn a pointer to a kernelspace object over to userspace, per al viro. makes life easier for rootkitters. exception is for functions that do stuff, then panic().
+
+Userspace Interfacing Rules:
+1: don't ignore invalid input silently.
+2: writing to un-writable file should return -EACCES.
 
 Todo:
 

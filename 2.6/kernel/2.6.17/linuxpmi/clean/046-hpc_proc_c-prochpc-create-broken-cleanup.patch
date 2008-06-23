@@ -1,0 +1,389 @@
+Index: linux/hpc/proc.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/proc.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,384 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/errno.h>
++#include <linux/proc_fs.h>
++#include <linux/socket.h>
++#include <linux/ctype.h>
++#include <asm/uaccess.h>
++#include <hpc/hpc.h>
++#include <hpc/proc.h>
++#include <hpc/version.h>
++#include <hpc/service.h>
++#include <hpc/prototype.h>
++#include <hpc/task.h>
++#include <hpc/debug.h>
++#include <hpc/mig.h>
++
++/*
++ *	PID set/get accessor
++ */
++static int proc_pid_set_where(struct task_struct *p, char *buf, size_t size)
++{
++	int ret;
++	struct sockaddr destination;
++
++	if (size >= 4 && strnicmp(buf, "home", 4) == 0) {
++		printk("HOME detected\n");
++		ret = task_register_migration(p, NULL);
++	} else {
++		ret = string_to_sockaddr(buf, &destination);
++		if (ret >= 0)
++			task_register_migration(p, &destination);
++	}
++	return size;
++}
++
++static int proc_pid_get_where(struct task_struct *p, char *buf, size_t size)
++{
++	int length;
++	struct sockaddr address;
++
++	if (p->om.contact && task_test_dflags(p, DMIGRATED)) {
++		comm_getname(p->om.contact, &address, 1);
++		length = sockaddr_to_string(&address, buf);
++		length += sprintf(buf + length, "\n");
++	} else
++		length = sprintf(buf, "home\n");
++
++	return length;
++}
++
++static char *stayreason_string[32] = {
++	"monkey",	"mmap_dev",	"VM86_mode",	NULL,
++	"priv_inst",	"mem_lock",	"clone_vm",	"rt_sched",
++	"direct_io",	"system",	NULL,		NULL,
++	NULL,		NULL,		NULL,		NULL,
++	NULL,		NULL,		NULL,		NULL,
++	NULL,		NULL,		NULL,		NULL,
++	"extern_1",	"extern_2",	"extern_3",	"extern_4",
++	NULL,		NULL,		NULL,		"user_lock"
++};
++
++static int proc_pid_get_stay(struct task_struct *p, char *buf, size_t size)
++{
++	int length, i;
++
++	length = 0;
++	for (i = 0; i < 31; i++)
++		if (task_test_stay(p, 1 << i))
++			length += snprintf(buf + length, size - length,
++					"%s\n", stayreason_string[i]);
++	if (!length)
++		buf[0] = 0;
++	return length;
++}
++
++static int proc_pid_get_debug(struct task_struct *p, char *buf, size_t size)
++{
++	int length;
++
++	length = sprintf(buf, "debug: dflags: 0x%.8x\n", p->om.dflags);
++	return length;
++}
++
++static int proc_admin_set_bring(char *buf, size_t size)
++{
++	printk(KERN_DEBUG "oM: proc: set bring");
++	return size;
++}
++
++static int proc_admin_set_expel(char *buf, size_t size)
++{
++	printk(KERN_DEBUG "oM: proc: set expel");
++	return size;
++}
++
++static int proc_admin_get_version(char *buf, size_t size)
++{
++	int length;
++
++	length = sprintf(buf, "openMosix version: %d.%d.%d\n",
++			OPENMOSIX_VERSION_TUPPLE);
++	return length;
++}
++
++/* create /proc/hpc/admin/ entry */
++#define E(name,mode,s,g) {0,sizeof(name)-1,(name),(mode), \
++				proc_admin_set_##s, \
++				proc_admin_get_##g }
++
++static om_proc_entry_t proc_om_entry_admin[] =
++{
++	E("bring", S_IFREG|S_IRUGO|S_IWUGO, bring, 0),
++	E("expel", S_IFREG|S_IRUGO|S_IWUGO, expel, 0),
++	E("version", S_IFREG|S_IRUGO|S_IWUGO, 0, version),
++};
++
++#undef E
++
++/* create /proc/${pid}/ entry */
++#define E(name,s,g) {0,sizeof(name)-1,(name),0, \
++			proc_pid_set_##s, \
++			proc_pid_get_##g}
++
++static om_proc_pid_entry_t proc_om_entry_pid[] =
++{
++	E("where", where, where),
++	E("stay", 0, stay),
++	E("debug", 0, debug),
++};
++
++#undef E
++
++/**
++ * openmosix_proc_pid_getattr - Get attributes from task
++ * @p: the task we want attributes
++ * @name: name of the attributes
++ * @buf: the page to write the value to
++ * @size: unused
++ **/
++int openmosix_proc_pid_getattr(struct task_struct *p,
++			char *name, void *buf, size_t size)
++{
++	int length, i;
++
++	if (!size)
++		return -ERANGE;
++
++	length = -EINVAL;
++	for (i = 0; i < ARRAY_SIZE(proc_om_entry_pid); i++)
++	{
++		om_proc_pid_entry_t * tmpentry = &proc_om_entry_pid[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			length = (tmpentry->get)(p, buf, size);
++			break;
++		}
++	}
++	return length;
++}
++
++/**
++ * openmosix_proc_pid_setattr - Set attributes to task
++ * @p: the task we want attributes
++ * @name: name of the attributes
++ * @buf: the page to get the value from
++ * @size: size bytes to read
++ **/
++int openmosix_proc_pid_setattr(struct task_struct *p,
++			char *name, void *buf, size_t size)
++{
++	int error, i;
++
++	error = -EINVAL;
++	for (i = 0; i < ARRAY_SIZE(proc_om_entry_pid); i++)
++	{
++		om_proc_pid_entry_t * tmpentry = &proc_om_entry_pid[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			error = (tmpentry->set)(p, buf, size);
++			break;
++		}
++	}
++	return error;
++}
++
++/**
++ * proc_callback_read - read an attribute and return to userspace
++ *
++ * Handle page creation and correct verification then call the callback
++ **/
++static ssize_t proc_callback_read(struct file * file, char * buf,
++				  size_t count, loff_t *ppos,
++				  om_proc_entry_t *entry)
++{
++	unsigned long page;
++	ssize_t length;
++	ssize_t end;
++	char *name;
++	int i;
++
++	if (count > PAGE_SIZE)
++		count = PAGE_SIZE;
++	if (!(page = __get_free_page(GFP_KERNEL)))
++		return -ENOMEM;
++
++	name = (char *) file->f_dentry->d_name.name;
++
++	length = -EINVAL;
++	/* browse entry to find callback for file name */
++	for (i = 0; entry[i].name; i++)
++	{
++		om_proc_entry_t * tmpentry = &entry[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			length = (tmpentry->get)((char *) page, count);
++			break;
++		}
++	}
++
++	if (length < 0) {
++		free_page(page);
++		return length;
++	}
++	/* Static 4kB (or whatever) block capacity */
++	if (*ppos >= length) {
++		free_page(page);
++		return 0;
++	}
++	if (count + *ppos > length)
++		count = length - *ppos;
++	end = count + *ppos;
++	if (copy_to_user(buf, (char *) page + *ppos, count))
++		count = -EFAULT;
++	else
++		*ppos = end;
++	free_page(page);
++	return count;
++}
++
++/**
++ * proc_callback_write - set an attribute from userspace buf
++ *
++ * Handle page creation and correct verification then call the callback
++ **/
++static ssize_t proc_callback_write(struct file * file, const char * buf,
++				   size_t count, loff_t *ppos,
++				   om_proc_entry_t *entry)
++{
++	char *page, *name;
++	ssize_t length;
++	int i;
++
++	if (count > PAGE_SIZE)
++		count = PAGE_SIZE;
++	if (*ppos != 0) {
++		/* No partial writes. */
++		return -EINVAL;
++	}
++	page = (char*)__get_free_page(GFP_USER);
++	if (!page)
++		return -ENOMEM;
++	length = -EFAULT;
++	if (copy_from_user(page, buf, count))
++		goto out;
++
++	name = (char *) file->f_dentry->d_name.name;
++
++	/* browse entry to find callback for file name */
++	for (i = 0; entry[i].name; i++)
++	{
++		om_proc_entry_t * tmpentry = &entry[i];
++		if (!strncmp(name, tmpentry->name, tmpentry->len))
++		{
++			length = (tmpentry->set)(page, count);
++			break;
++		}
++	}
++
++out:
++	free_page((unsigned long) page);
++	return length;
++}
++
++/*
++ * openMosix proc dir file_ops handler
++ */
++#define PROC_OM_SUBSYS_READ(subsys)					\
++	static ssize_t proc_om_read_##subsys(struct file * file,	\
++						char *buf,		\
++						size_t count,		\
++						loff_t *ppos)		\
++	{								\
++		return proc_callback_read(file, buf, count,		\
++				ppos, proc_om_entry_##subsys);		\
++	}
++
++#define PROC_OM_SUBSYS_WRITE(subsys)					\
++	static ssize_t proc_om_write_##subsys(struct file * file,	\
++						const char *buf,	\
++						size_t count,		\
++						loff_t *ppos)		\
++	{								\
++		return proc_callback_write(file, buf, count,		\
++				ppos, proc_om_entry_##subsys);		\
++	}
++
++PROC_OM_SUBSYS_READ(admin)
++PROC_OM_SUBSYS_WRITE(admin)
++
++#undef PROC_OM_SUBSYS_READ
++#undef PROC_OM_SUBSYS_WRITE
++
++static struct file_operations proc_om_admin_operations = {
++	.read = proc_om_read_admin,
++	.write = proc_om_write_admin,
++};
++
++/**
++ * openmosix_proc_create_entry - create @entry in @dir with their callbacks
++ * @dir:	directory to create the entries into
++ * @entry:	entries to add into directory
++ * @r:		read callback
++ * @w:		write callback
++ */
++static void openmosix_proc_create_entry(struct proc_dir_entry *dir,
++					om_proc_entry_t *entry,
++					struct file_operations *fileops)
++{
++	struct proc_dir_entry *de;
++	int i;
++
++	for (i = 0; entry[i].name; i++)
++	{
++		om_proc_entry_t * tmp = &entry[i];
++		de = create_proc_entry(tmp->name, tmp->mode, dir);
++		if (!de) {
++			OMBUG("unable to create entry\n");
++			continue;
++		}
++		de->proc_fops = fileops;
++	}
++}
++
++/*
++ * init hpc proc directory
++ */
++void openmosix_proc_init(void)
++{
++	struct proc_dir_entry *dir_root, *dir_admin;
++
++	dir_root = proc_mkdir("hpc", NULL);
++	if (!dir_root) {
++		OMBUG("unable to create root directory\n");
++		return;
++	}
++
++	dir_admin = proc_mkdir("hpc/admin", NULL);
++
++	if (!dir_admin) {
++		OMBUG("unable to create admin directory\n");
++		return;
++	}
++
++	openmosix_proc_create_entry(dir_admin, proc_om_entry_admin,
++					&proc_om_admin_operations);
++}
