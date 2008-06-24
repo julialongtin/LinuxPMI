@@ -3,14 +3,15 @@ origional -> linuxpmi/clean/ -> linuxpmi/silver/ -> linuxpmi/gold -> linuxpmi/pl
 
 CLEAN: marked create if this creates a new file.
 CLEAN: marked breakup if it is not a new file, and does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
-CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, etc).
-CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues). 
+CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, memory leaks in error handling, etc).
+CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues).
 CLEAN: marked final if the patch is the last patch in our set to touch a given file.
 CLEAN: re-read the notes, and correct if (likely) necissary.
 CLEAN: if a function is only called by a few other functions, start the description by explaining this.
 CLEAN: does it destroy its datastructures on error? check passed in pointers (from userspace, or other routines) for NULL, ... comment in notes.
-CLEAN: printk() is depreciated. use one of the macros.
-CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel also tells us what function called OMBUG().
+CLEAN: printk() is depreciated. note any usage of printk.
+CLEAN: STUBs should be noted as well.
+CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel will also tell us what function called OMBUG().
 SILVER: break up breakup patches into multiple patches.
 SILVER: clean up cleanup patches. leave dead code.
 SILVER: remove code later removed by CLEANed patch. modify later cleaned patch so it is additave only.
@@ -24,13 +25,13 @@ GOLD: include kcom.h before including prototype.h
 GOLD: all includes will indicate what they are there to include in comments.
 GOLD: all functions will have a description of what context they are called from, or who their callers are.
 GOLD: make sure theres a printk message for each error condition, and minimal error handling for each function that can return errors.
-GOLD: printk should not be invoked directly, always as OMDEBUG or KCOMDEBUG or OMBUG or somesuch macro.
+GOLD: printk should not be invoked directly, always as OMDEBUG or KCOMDEBUG or OMBUG or OMDEBUG_SYS or somesuch macro.
 GOLD: all datastructures/memory freed/destroyed/etc.
 GOLD: variable names will match kernel precident.
 GOLD: functions that manipulate lists will aquire and release spinlocks appropriately.
-GOLD: in asm-offsets.h, "DEFINE(PAGE_SIZE_asm, PAGE_SIZE);" sets precident, our defines should end in _asm here.
 GOLD: mm->realusers is always atomicly read and written.
 GOLD: all defines we add to headers will have comments.
+GOLD: patches will comply with the below 'Kernel Precidents', 'Security Rules', and 'Userspace Interfacing Rules' sections.
 GOLD: kernel threads should not lock spinlocks directly. their helper functions should perform the locking.
 PLAT: patches are in the order they depend on one another.
 PLAT: headers say what they're for including before they're included.
@@ -54,6 +55,10 @@ Security Rules:
 Userspace Interfacing Rules:
 1: don't ignore invalid input silently.
 2: writing to un-writable file should return -EACCES.
+
+Kernel Precidents:
+1: __func__ is newer, and prefered in new code over __FUNCTION__
+2: in asm-offsets.h, "DEFINE(PAGE_SIZE_asm, PAGE_SIZE);" sets precident, our defines should end in _asm here.
 
 Todo:
 

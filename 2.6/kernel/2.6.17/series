@@ -148,6 +148,9 @@ linuxpmi/clean/045-hpc_migsend_c-omsend-create-broken-cleanup.patch
 # prochpc
 linuxpmi/clean/046-hpc_proc_c-prochpc-create-broken-cleanup.patch
 
+# omremote
+linuxpmi/clean/047-hpc_remote_c-omremote-create-broken-cleanup.patch
+
 # remainder of first git tree
 linuxpmi/openmosix-git.patch
 

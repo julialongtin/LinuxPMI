@@ -1109,59 +1109,110 @@ hunk	class		file patched				description								depends
 								finally, it calls openmosix_proc_create_entry to create the 'files' in
 								/proc/hpc/admin/. if either proc_mkdir call fails, we OMBUG about it,
 								and return.
-47	openmosix-rmt	creates linux/hpc/remote.c		this file is routines for the remote node to request work done on the 
-								home node. remote_disappear is the function our process jumps to when
-								its time to die. remote_inode_map is a vm_operations_struct mapping
-								.nopage to filemap_nopage. remote_file_mmap points the provided
-								vma->vm_ops to use remote_inode_map. remote_readpage follows a more
-								normal codepath. we make sure the passed page is mapped to kernel space	
-								(so we can write to it), we send the d_inode belonging to the file and
-								and the requested offset to the home node, get a reply, and write the
-								reply directly into the page passed in. we unmap the page, and return 0	
-								for success. remote_do_mmap sends the address, length, flags,
-								protection flags, fd, and pgoff to the remote node, and we receive a 
-								structure containing file and isize members. we pass our returned
-								result to task_rfiles_get(), and receive back a file pointer, which we
-								use in our own do_mmap_pgoff() call. in this way, the mmap is done on	
-								both the remote and home nodes. remote_wait waits for a req struct from	
-								the remote end, checks its type, and calls OMBUG if it wasn't the 
-								req.type expected. remote_do_signal is called when the deputy stub on
-								the home node receives a signal. we receive a omp_signal structure, 
-								grab the lock for this process' signal handler, and call
-								__group_send_sig_info() to call the signal handler. remote_do_comm
-								processes communication from the home node, on behalf of the remote
-								node. its set up to dispatch DEP_SIGNAL and DEP_COMING_HOME by calling	
-								remote_do_signal or task_remote_expell, appropriately.
-								remote_do_syscall sends a syscall request from the remote to the home
-								node. if comm_recv kicks up an error, we call remote_disappear, which
-								kills the process, and never returns. remote_do_fork performs a fork
-								call on the home node, connecting to the new process. we use 
-								sockaddr_inherit to make our new sockaddr have the same type (ipv4 vs
-								ipv6) and address as our current sockaddr. we open a listening socket
-								using this sockaddr, and use comm_getname to fill in our sockaddr. we
-								then send our clone_flags, stack_start, stack_size, pt_regs structure,	
-								and sockaddr (now pointing to our newly listening port) to the home
-								node. we use remote_wait to wait on a response, and if we get a reply,
-								we call do_fork ourselves, find_task_by_pid(), and set the child's
-								socket to our newly created socket. we then return with the child's
-								PID. count_len is just a cut-and-paste from fs/exec.c. it appears to
-								count the length of argv members, but abort if there are more argv
+047	omremote	creates linux/hpc/remote.c		this file is routines for the remote node to request work done on the 
+								home node. remote_disappear is called by both remote_do_syscall in
+								this file, and remote_handle_user in hpc/copyuser.c when a syscall 
+								fails. its purpose is to kill the process on the remote end. it just
+								calls do_exit(SIGKILL), and never returns. remote_inode_map is a
+								vm_operations_struct mapping just the .nopage member to the normal
+								filemap_nopage function. remote_file_mmap is used by the rdentry code
+								in hpc/files.c, as a member of the remote_file_operations structure
+								contained in a dentry on the remote node. it points the provided
+								vma's vm_ops structure to use the previously defined remote_inode_map.
+								remote_readpage is also used by the rdentry code in hpc/files.c, as a
+								member of the remote_aops structure also contained in a dentry on the
+								remote node. its called to read a page from the home node, on behalf
+								of the remote process. first, we map the passed page into kernel space	
+								(so we can write to it). we then get the file * origionally associated
+								with this page on the home node using rfiles_inode_get_file, and 
+								calculate the offset, placing both these in a omp_page_req structure.
+								we send this structure to the home node with comm_send_hd, get a reply,
+								and write the reply directly into the page passed in. we set the page
+								as being up to date, unmap the page, and return 0 indicating success.
+								if our comm_recv or comm_send_hd return an error, we OMBUG() about it,
+								mark the page as NOT up to date, as well as marking it as having an
+								error, and return the error comm_recv or comm_send_hd gave us. 
+			ppc needs to do this as well!		remote_do_mmap is called by both arch/i386/kernel/sys_i386.c's 
+								sys_mmap2, and arch/x86_64/kernel/sys_x86_64's sys_mmap2. its purpose
+								is to perform a mmap on the home node, on behalf of the remote process.
+								we place all our arguments into a omp_mmap_req structure, and send them
+								to the home node with comm_send_hd. we receive a omp_mmap_ret structure
+								containing file and isize members. we pass these members to
+			check the result of task_rfiles_get?	task_rfiles_get(), and receive back a file pointer. we down_write the
+								mmap_sem semaphore belonging to the mm structure of this process, and
+								do our own do_mmap_pgoff() call. in this way, the mmap is done on	
+								both the remote and home nodes. we up_write the earlier semaphore, 
+								and return the result from do_mmap_pgoff. if either our comm_recv or
+								comm_send_hd fail, we return the error. remote_wait is called by
+								remote_do_fork, as well as remote_do_execve. it waits for a req struct
+								from the home node, and checks its type against the passed in value. it
+								also checks against the passed in len, to make sure the expected amount
+								of data was sent. if either of these checks fail, we OMBUG about it,
+								and return -1. remote_do_signal is called by remote_do_comm when the 
+								deputy stub on the home node sends a signal. we comm_recv a omp_signal
+			printk!					structure, printk a trace message, grab the lock for the current 
+			check __group_send_sig_info's error!	process' signal handler, and call __group_send_sig_info() to call the 
+								signal handler. we then drop the signal handler lock, and return 0. 
+								remote_do_comm handles incoming communication from the home node, on
+								behalf of the remote node. its set up to comm_recv a req packet, then
+			check error returned by			dispatch DEP_SIGNAL and DEP_COMING_HOME by calling remote_do_signal or
+			remote_do_signal and task_remote_expel!	task_remote_expel, appropriately. we return 0 after dispatching. if
+								comm_recv fails, or if we get a req that isn't DEP_SIGNAL or
+			be specific on type of error!		DEP_COMING_HOME, we OMBUG() "failed", call do_exit(-1), and return -1.
+			shouldnt do_exit kill the process?	remote_do_syscall is called by om_sys_remote in hpc/syscalls.c to send
+			why are we returning even?		a syscall request from the remote to the home node. we start by
+			why arent we using the earlier		OMDEBUG_SYS()ing a trace message. then we pack the syscall requested,
+			remote_disappear function?		along with its arguments into a omp_syscall_req structure. we 
+								comm_send_hd this structure, and OMDEBUG_SYS() a trace message. we
+								call remote_handle_user to handle memory requests from the home node,
+								on behalf of the syscall handler on the home node. once the home node
+								tells remote_handle_user its done issuing requests, remote_handle_user
+								returns. we then comm_recv a omp_syscall_ret structure. after that, we
+								OMDEBUG_SYS() another trace message, and return the return value packed
+								into the omp_syscall_ret structure. if comm_send_hd, 
+								remote_handle_user, or comm_recv return an error, we immediately call
+			never returns! why do we return after	remote_disappear, which kills the process, and never returns. after
+			remote_disappear?			calling remote_disappear, we return -1. remote_do_fork performs a fork
+								call on both the home node and the remote node, connecting the new
+			printk!					processes together. first, we printk() a trace message, and use
+								sockaddr_inherit to make the sockaddr for our child have the same type
+								(ipv4 vs ipv6) and address as our parent's sockaddr. we stuff our 
+								passed in clone_flags, stack_start, stack_size, and pt_regs into a
+								omp_fork_req structure, then open a listening socket using our child's
+								sockaddr. when comm_setup_listen returns, we use comm_getname to get	http://www.linuxjournal.com/article/7660
+								the address of the node on the other end of our child socket (in a 
+								sockaddr structure), then add our sockaddr structure to our 
+								omp_fork_req structure. we use comm_send_hd to send our omp_fork_req
+								to the home node (over our parent's connection). we use remote_wait to
+								wait for a reply, saving the reply in a omp_fork_ret structure. we then
+								call do_fork ourselves, and use find_task_by_pid() to locate the child.
+								we set the child's socket to our newly created socket with 
+								task_set_comm, and return the child's PID. if comm_setup_listen,
+			specific error messages!		comm_getname, comm_send_hd, or remote_wait fails, we OMBUG() about it,
+			printk!					and return -1. if find_task_by_pid fails, we printk() about it, and
+								return -1. count_len is just a cut-and-paste from fs/exec.c. it appears
+								to count the length of argv members, but abort if there are more argv
 								members than requested. we return a count of argv members found, and
 								set a pointer passed in to the length of the argv entries in total.
 								remote_do_execve performs an execve system call while on the remote
-								node. first we get the length of the file we're execve'ing from
-								userspace with strlen_user(). then, we generage m.argc, by calling
+								node. first we get the length of the name of the file we're execve'ing 
+			check strlen_user's return!		from userspace with strlen_user(), and place it in a omp_execve_req
+								structure. then, we add argc to our omp_execve_req, by calling
 								count_len. we tell count_len not to abort if the number of arguments is
-								greater than the ammount of void * that can fit in PAGE_SIZE * 
-								MAX_ARG_PAGES - sizeof(void *). we then do the same thing to generate	
-								m.envc. in the same function invocations, we also fill in m.argvlen and	
-								m.envplen. we fill m.regs with the passed in regs, and allocate some 
-								kernel space memory to hold filename, argv, and envp. we copy_from_user
-								filename, argv, and envp, then send struct m, which now contains all
-								the constant sized members of our request. we send a the copy of
-								filename, argv, and envp thats in-kernel, free our in-kernel memory
-								buffer, and wait for a reply. if we get one, we return 0, else, return
-								error. 
+								greater than the ammount of void * that can fit in (PAGE_SIZE * 
+								MAX_ARG_PAGES - sizeof(void *))/sizeof(void *). we then do the same 
+								thing to fill in the envc member. we copy the passed in pt_regs
+								structure into our omp_execve_req, then allocate enough space from 
+								GFP_KERNEL to hold our filename, argv, and envp, including newlines
+								we fill this space by using copy_user to grab the filename, argv, and
+								envp, terminating each with a newline. we use comm_send_hd to send our
+								omp_execve_req structure, and comm_send to send the space containing
+								our filename, argv, and envp. we then free this space. we call
+								remote_wait to get our response from the home node, and return 0. if
+								either of our count_len invocations, comm_send_hd, comm_send, or
+			what about freeing data?		remote_wait return an error, we immediately return with that error.
+								if our kmalloc fails, we return -ENOMEM. if our copy_from_user
+								invocations fail, we return -EFAULT. 
 48			creates linux/hpc/service.c		this file contains the om_daemonize function, and four sockaddr related
 								conversion functions. feels like it should be broken up. om_daemonize	
 								creates a kernel thread, and optionally sets a high priority mode.
@@ -1517,4 +1568,3 @@ hunk	class		file patched				description								depends
 								the nineth passes stay_reason to stay_me_and_my_clones. the last one
 			whitespace?				makes it where get_unmapped_area always returns PAGE_ALIGN pages. 
 88			net/socket.c				the last of the code exporting sock_alloc so kcom can use it.
- LocalWords:  theres
