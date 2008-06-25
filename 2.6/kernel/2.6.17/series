@@ -13,9 +13,9 @@
 # source hpc/Kconfig
 linuxpmi/clean/001-arch_i386_Kconfig-source_hpc_Kconfig-final.patch
 
-# i386, syscall
+# i386, remote, home
 # syscall magic, assembly level
-linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets-final.patch
+linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets-cleanup-final.patch
 linuxpmi/clean/003-arch_i386_kernel_entry_S-breakup-oneway-broken.patch
 
 # i386, fxsr
