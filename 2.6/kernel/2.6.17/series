@@ -15,7 +15,7 @@ linuxpmi/clean/001-arch_i386_Kconfig-source_hpc_Kconfig-final.patch
 
 # i386, syscall
 # syscall magic, assembly level
-linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets-oneway-final.patch
+linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets-final.patch
 linuxpmi/clean/003-arch_i386_kernel_entry_S-breakup-oneway-broken.patch
 
 # i386, fxsr
@@ -29,11 +29,11 @@ linuxpmi/clean/005-arch_i386_kernel_omasm_h-remote_sys_call_table-create-final.p
 # i386, userthread, forkfromremote
 linuxpmi/clean/006-arch_i386_kernel_process_c-breakup-oneway-final.patch
 
-# i386, kcore
+# i386, ksocket
 linuxpmi/clean/007-arch_i386_kernel_signal_c-OM_NSTATIC_do_signal.patch
 
 # re-direct sys_mmap2 so that remote processes mapping memory without MAP_ANONYMOUS get forwarded to remote_do_mmap
-# i386, remote_mmap
+# i386, mmap, remote
 linuxpmi/clean/008-arch_i386_kernel_sys_i386_c-forward_mmap2_to_remote_do_mmap.patch
 
 # i386

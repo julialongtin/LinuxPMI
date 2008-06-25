@@ -28,7 +28,7 @@ hunk	class		file patched				description								noteworthy references
 	kcore							path. add a function for creating an in-kernel user thread,
 								and re-direct the entry point ret_from_fork to ret_from_deputy_fork for
 								processes that are DDEPUTY in copythread().
-007	i386,kcore	arch/i386/kernel/signal.c		change do_signal function from static to OM_NSTATIC			OM_NSTATIC
+007	i386,ksocket	arch/i386/kernel/signal.c		change do_signal function from static to OM_NSTATIC
 008	i386,omguest	arch/i386/kernel/sys_i386.c		redirect sys_mmap2 so that processes marked DREMOTE mapping memory	linux/hpc.h, remote_do_mmap
 								without MAP_ANONYMOUS get forwarded to remote_do_mmap
 009	i386,omguest	arch/i386/kernel/vm86.c			update DSTAY_86 flag to prevent migration when a process is using VM86 	linux/hpc.h, task_lock, task_unlock, task_clear_stay,

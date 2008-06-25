@@ -3,7 +3,7 @@ origional -> linuxpmi/clean/ -> linuxpmi/silver/ -> linuxpmi/gold -> linuxpmi/pl
 
 CLEAN: marked create if this creates a new file.
 CLEAN: marked breakup if it does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
-CLEAN: marked oneway if parts of this file do not disappear with openmosix turned off in the config (missing #ifdef CONFIG_OPENMOSIX)(excluding the config system itsself, and new files)
+CLEAN: marked oneway if parts of this file do not disappear with openmosix turned off in the config (missing #ifdef CONFIG_OPENMOSIX)(excluding the config system itsself, header includes, and new files)
 CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, memory leaks in error handling, redundant code, etc).
 CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues).
 CLEAN: marked final if the patch is the last patch in our set to touch a given file.
