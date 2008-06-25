@@ -2,8 +2,9 @@
 origional -> linuxpmi/clean/ -> linuxpmi/silver/ -> linuxpmi/gold -> linuxpmi/plat
 
 CLEAN: marked create if this creates a new file.
-CLEAN: marked breakup if it is not a new file, and does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
-CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, memory leaks in error handling, etc).
+CLEAN: marked breakup if it does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
+CLEAN: marked oneway if parts of this file do not disappear with openmosix turned off in the config (missing #ifdef CONFIG_OPENMOSIX)(excluding the config system itsself, and new files)
+CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, memory leaks in error handling, redundant code, etc).
 CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues).
 CLEAN: marked final if the patch is the last patch in our set to touch a given file.
 CLEAN: re-read the notes, and correct if (likely) necissary.
@@ -14,7 +15,7 @@ CLEAN: STUBs should be noted as well.
 CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel will also tell us what function called OMBUG().
 SILVER: break up breakup patches into multiple patches.
 SILVER: clean up cleanup patches. leave dead code.
-SILVER: remove code later removed by CLEANed patch. modify later cleaned patch so it is additave only.
+NO: SILVER: remove code later removed by CLEANed patch. modify later cleaned patch so it is additave only.
 SILVER: classify each patch into: kcore kcomd config i386 x86_64 ppc... many others.
 SILVER: all functions will have a kdoc description.
 SILVER: dependancies are noted.
@@ -33,6 +34,7 @@ GOLD: mm->realusers is always atomicly read and written.
 GOLD: all defines we add to headers will have comments.
 GOLD: patches will comply with the below 'Kernel Precidents', 'Security Rules', and 'Userspace Interfacing Rules' sections.
 GOLD: kernel threads should not lock spinlocks directly. their helper functions should perform the locking.
+GOLD: all of the patches should do nothing if openmosix is turned off.
 PLAT: patches are in the order they depend on one another.
 PLAT: headers say what they're for including before they're included.
 PLAT: is it in the right file? move hunks that are in the wrong place.
@@ -63,6 +65,8 @@ Kernel Precidents:
 Todo:
 
 compare the hpc/Makefile's idea of groupings to our defined classes above.
+
+aparently, #ifdef is valid in a .S file. if it is, make our modifications to entry.S not one-way.
 
 ask debian legal what licensing issues will be caused by the inclusion of GPLV3 files in the linux kernel.
 

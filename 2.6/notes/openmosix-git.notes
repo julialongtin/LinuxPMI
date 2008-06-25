@@ -1,26 +1,33 @@
-hunk	class		file patched				description								depends
-001	i386,config	arch/i386/Kconfig			add hpc/Kconfig to build process					hpc/Kconfig
-002	i386,kcore	arch/i386/kernel/asm-offsets.c		generate assembly offsets to openmosix members of the task structure,	hpc/task.h
-								and define DDEPUTY and DREMOTE constants, all for assembly routines.
-003	i386,kcore	arch/i386/kernel/entry.S		add two new entry points to the kernel, ret_from_deputy_fork, and	asm/asm-offsets.h "omasm.h", GET_THREAD_INFO
-								ret_from_kickstart. ret_from_deputy_fork is a copy of ret_from_fork.
-								ret_from_kickstart just calls GET_THREAD_INFO, and jmps to
-								syscall_exit, returning to userspace. we then add a call to
-								openmosix_pre_usermode in ENTRY(resume_userspace). in the next two
-								hunks, we add code to select which syscall table to use based on weather
-								the current process is marked DREMOTE or not. this is added once in
-								ENTRY(sysenter_entry), and again in ENTRY(system_call).
-004	i386,kcore	arch/i386/kernel/i387.c			fxsr support is support for fast saving of floating point/sse/etc	OM_NSTATIC
-								state to a 512 byte block. we're changing from declaring the conversion
-								functions for fxsr<->387 from static to OM_NSTATIC, and adding a
-								function for finding support during run time.
-005	i386,omguest	creates arch/i386/kernel/omasm.h	this is the syscall table called by processes that are guests.
-								it contains a mapping of whether a function is to be passed to the
-								home node, or processed locally.
-006	userthread	arch/i386/kernel/process.c		add entry for user_thread_helper in the kernel_thread_helper execution	linux/hpc.h
-								path. add a function for creating an in-kernel user thread,
-	kcore							and re-direct the entry point ret_from_fork to ret_from_deputy_fork for
-								processes that are DDEPUTY.
+hunk	class		file patched				description								noteworthy references
+001	i386,config	arch/i386/Kconfig			add hpc/Kconfig to the build process					
+002	i386,kcore	arch/i386/kernel/asm-offsets.c		generate offsets to task.om, and openmosix_task.dflags and define 	
+			DDEPUTY_asm? DREMOTE_asm? conditional?	the DDEPUTY and DREMOTE constants, all for assembly routines to use.
+003	i386,kcore	arch/i386/kernel/entry.S		add two new entry points to the kernel, ret_from_deputy_fork, and
+			how do we make these changes		ret_from_kickstart. ret_from_deputy_fork is entered by a process, when
+			conditional? #ifdefs?			its eip is set to this function by the code we add in the function
+								copy_thread in arch/i386/kernel/processes.c. ret_from_deputy_fork is an
+								identical copy of ret_from_fork. ret_from_kickstart is called from
+			isnt this GET_THREAD_INFO redundant?	arch_kickstart in hpc/i386.c. it calls GET_THREAD_INFO, and jmps to
+								syscall_exit, returning to userspace for the 'first' time, on a remote
+								node. we then modify the resume_userspace entry point, to call 
+								openmosix_pre_usermode. in the next two hunks, we add code to select 
+								which syscall table to use based on whether the current process is 
+								marked DREMOTE or not. this is added once in ENTRY(sysenter_entry),
+								and again in ENTRY(system_call). we also modify syscall_exit and 
+								sysenter_exit to GET_THREAD_INFO into %ebp.
+004	i386,kcore	arch/i386/kernel/i387.c			fxsr support is support for fast saving of the i387's 
+								floating point/sse/etc state to a 512 byte block. its a new feature, 
+								not present in earlier i387 style floating point processors. this patch
+								changes from declaring the conversion functions for fxsr<->387 from
+								static to OM_NSTATIC, and adds a function for finding out whether
+								support exists during run time.
+005	i386,omremote	creates arch/i386/kernel/omasm.h	this is the syscall table called by processes that are guests.
+								it contains a mapping of whether a syscall is to be passed to the
+								home node, or handled locally.
+006	userthread	arch/i386/kernel/process.c		add entry for user_thread_helper in the kernel_thread_helper execution	
+	kcore							path. add a function for creating an in-kernel user thread,
+								and re-direct the entry point ret_from_fork to ret_from_deputy_fork for
+								processes that are DDEPUTY in copythread().
 007	i386,kcore	arch/i386/kernel/signal.c		change do_signal function from static to OM_NSTATIC			OM_NSTATIC
 008	i386,omguest	arch/i386/kernel/sys_i386.c		redirect sys_mmap2 so that processes marked DREMOTE mapping memory	linux/hpc.h, remote_do_mmap
 								without MAP_ANONYMOUS get forwarded to remote_do_mmap
@@ -1213,8 +1220,8 @@ hunk	class		file patched				description								depends
 			what about freeing data?		remote_wait return an error, we immediately return with that error.
 								if our kmalloc fails, we return -ENOMEM. if our copy_from_user
 								invocations fail, we return -EFAULT. 
-48			creates linux/hpc/service.c		this file contains the om_daemonize function, and four sockaddr related
-								conversion functions. feels like it should be broken up. om_daemonize	
+048			creates hpc/service.c			this file contains the om_daemonize function, and four sockaddr related
+								conversion functions. om_daemonize is called by
 								creates a kernel thread, and optionally sets a high priority mode.
 								first we call daemonize(). then, we zero the euid, suid, and gid of 
 								current. we alloc a new group_info with groups_alloc(0). we grab 

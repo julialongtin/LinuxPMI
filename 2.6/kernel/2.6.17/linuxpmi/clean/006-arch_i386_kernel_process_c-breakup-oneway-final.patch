@@ -1,0 +1,73 @@
+Index: linux/arch/i386/kernel/process.c
+===================================================================
+--- linux.orig/arch/i386/kernel/process.c	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/i386/kernel/process.c	2006-09-28 15:02:16.000000000 +0200
+@@ -54,10 +54,13 @@
+ 
+ #include <linux/err.h>
+ 
++#include <linux/hpc.h>
++
+ #include <asm/tlbflush.h>
+ #include <asm/cpu.h>
+ 
+ asmlinkage void ret_from_fork(void) __asm__("ret_from_fork");
++asmlinkage void ret_from_deputy_fork(void) __asm__("ret_from_deputy_fork");
+ 
+ static int hlt_counter;
+ 
+@@ -323,6 +326,10 @@
+ extern void kernel_thread_helper(void);
+ __asm__(".section .text\n"
+ 	".align 4\n"
++#ifdef CONFIG_OPENMOSIX
++	"user_thread_helper:\n\t"
++	"subl $60,%esp\n\t"
++#endif
+ 	"kernel_thread_helper:\n\t"
+ 	"movl %edx,%eax\n\t"
+ 	"pushl %edx\n\t"
+@@ -355,6 +362,32 @@
+ }
+ EXPORT_SYMBOL(kernel_thread);
+ 
++#ifdef CONFIG_OPENMOSIX
++extern void user_thread_helper(void);
++/*
++ * Create an user thread
++ * difference from kernel_thread are: no CLONE_VM, SIGCHLD, and leave space
++ * on the stack for user registers pt_regs.
++ */
++int user_thread(int (*fn)(void *), void * arg, unsigned long flags)
++{
++	struct pt_regs regs;
++
++	memset(&regs, 0, sizeof(regs));
++	regs.ebx = (unsigned long) fn;
++	regs.edx = (unsigned long) arg;
++	regs.xds = __USER_DS;
++	regs.xes = __USER_DS;
++	regs.orig_eax = -1;
++	regs.eip = (unsigned long) user_thread_helper;
++	regs.xcs = __KERNEL_CS;
++	regs.eflags = X86_EFLAGS_IF | X86_EFLAGS_SF | X86_EFLAGS_PF | 0x2;
++	
++	/* Ok, create the new process.. */
++	return do_fork(flags | SIGCHLD | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
++}
++#endif /* CONFIG_OPENMOSIX */
++
+ /*
+  * Free current thread data structures etc..
+  */
+@@ -427,6 +460,10 @@
+ 	p->thread.esp0 = (unsigned long) (childregs+1);
+ 
+ 	p->thread.eip = (unsigned long) ret_from_fork;
++#ifdef CONFIG_OPENMOSIX
++	if (task_test_dflags(current, DDEPUTY))
++		p->thread.eip = (unsigned long) ret_from_deputy_fork;
++#endif /* CONFIG_OPENMOSIX */
+ 
+ 	savesegment(fs,p->thread.fs);
+ 	savesegment(gs,p->thread.gs);

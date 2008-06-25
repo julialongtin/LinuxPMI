@@ -1,0 +1,36 @@
+Index: linux/arch/i386/kernel/i387.c
+===================================================================
+--- linux.orig/arch/i386/kernel/i387.c	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/i386/kernel/i387.c	2006-09-28 15:02:16.000000000 +0200
+@@ -86,7 +86,7 @@
+  * FPU tag word conversions.
+  */
+ 
+-static inline unsigned short twd_i387_to_fxsr( unsigned short twd )
++OM_NSTATIC inline unsigned short twd_i387_to_fxsr( unsigned short twd )
+ {
+ 	unsigned int tmp; /* to avoid 16 bit prefixes in the code */
+  
+@@ -100,7 +100,7 @@
+         return tmp;
+ }
+ 
+-static inline unsigned long twd_fxsr_to_i387( struct i387_fxsave_struct *fxsave )
++OM_NSTATIC inline unsigned long twd_fxsr_to_i387( struct i387_fxsave_struct *fxsave )
+ {
+ 	struct _fpxreg *st = NULL;
+ 	unsigned long tos = (fxsave->swd >> 11) & 7;
+@@ -534,6 +534,13 @@
+ 	return fpvalid;
+ }
+ 
++#ifdef CONFIG_OPENMOSIX
++int cpu_feature_has_fxsr(void)
++{
++	return cpu_has_fxsr;
++}
++#endif /* CONFIG_OPENMOSIX */
++
+ int dump_task_extended_fpu(struct task_struct *tsk, struct user_fxsr_struct *fpu)
+ {
+ 	int fpvalid = tsk_used_math(tsk) && cpu_has_fxsr;

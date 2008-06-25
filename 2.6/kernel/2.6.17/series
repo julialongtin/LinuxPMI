@@ -10,23 +10,24 @@
 
 
 # i386, config
-linuxpmi/clean/001-arch_i386_Kconfig-source_hpc_Kconfig.patch
+# source hpc/Kconfig
+linuxpmi/clean/001-arch_i386_Kconfig-source_hpc_Kconfig-final.patch
 
 # i386, syscall
 # syscall magic, assembly level
-linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets.patch
-linuxpmi/clean/003-arch_i386_kernel_entry_S-breakup.patch
+linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets-oneway-final.patch
+linuxpmi/clean/003-arch_i386_kernel_entry_S-breakup-oneway-broken.patch
 
 # i386, fxsr
-# OM_NSTATIC, fxsr<->i387 conversion functions, add function for determining fxsr support
-linuxpmi/clean/004-arch_i386_kernel_i387_c-breakup.patch
+# OM_NSTATIC the fxsr<->i387 conversion functions, add function for determining fxsr support during runtime.
+linuxpmi/clean/004-arch_i386_kernel_i387_c-breakup-final.patch
 
 # i386, syscall, remote
-# remote syscall table, determines wether a remote process' syscall request is processed locally, or sent home.
-linuxpmi/clean/005-arch_i386_kernel_omasm_h-remote_sys_call_table.patch
+# remote syscall table, determines wether a remote process' syscall request is handled locally, or sent home.
+linuxpmi/clean/005-arch_i386_kernel_omasm_h-remote_sys_call_table-create-final.patch
 
 # i386, userthread, forkfromremote
-linuxpmi/clean/006-arch_i386_kernel_process_c-breakup.patch
+linuxpmi/clean/006-arch_i386_kernel_process_c-breakup-oneway-final.patch
 
 # i386, kcore
 linuxpmi/clean/007-arch_i386_kernel_signal_c-OM_NSTATIC_do_signal.patch
@@ -150,6 +151,9 @@ linuxpmi/clean/046-hpc_proc_c-prochpc-create-broken-cleanup.patch
 
 # omremote
 linuxpmi/clean/047-hpc_remote_c-omremote-create-broken-cleanup.patch
+
+# omsocket, omcore
+# linuxpmi/clean/048-
 
 # remainder of first git tree
 linuxpmi/openmosix-git.patch

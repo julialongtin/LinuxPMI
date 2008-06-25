@@ -1,0 +1,26 @@
+Index: linux/arch/i386/kernel/asm-offsets.c
+===================================================================
+--- linux.orig/arch/i386/kernel/asm-offsets.c	2006-09-28 15:02:03.000000000 +0200
++++ linux/arch/i386/kernel/asm-offsets.c	2006-09-28 15:02:16.000000000 +0200
+@@ -13,6 +13,7 @@
+ #include <asm/fixmap.h>
+ #include <asm/processor.h>
+ #include <asm/thread_info.h>
++#include <hpc/task.h>
+ 
+ #define DEFINE(sym, val) \
+         asm volatile("\n->" #sym " %0 " #val : : "i" (val))
+@@ -69,4 +70,13 @@
+ 
+ 	DEFINE(PAGE_SIZE_asm, PAGE_SIZE);
+ 	DEFINE(VSYSCALL_BASE, __fix_to_virt(FIX_VSYSCALL));
++
++#ifdef CONFIG_OPENMOSIX
++	OFFSET(TASK_om, task_struct, om);
++	OFFSET(OM_dflags, openmosix_task, dflags);
++	BLANK();
++
++	DEFINE(DDEPUTY, DDEPUTY);
++	DEFINE(DREMOTE, DREMOTE);
++#endif /* CONFIG_OPENMOSIX */
+ }
