@@ -6,7 +6,7 @@ CLEAN: marked breakup if it does two things that should be in two patches, or if
 CLEAN: marked oneway if parts of this file do not disappear with openmosix turned off in the config (missing #ifdef CONFIG_OPENMOSIX)(excluding the config system itsself, header includes, and new files)
 CLEAN: marked oneway if its a header file that is missing its #ifdef CONFIG_OPENMOSIX.
 CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, memory leaks in error handling, redundant code, etc).
-CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code || spacing issues).
+CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code, spacing issues, variable naming issues).
 CLEAN: marked final if the patch is the last patch in our set to touch a given file.
 CLEAN: re-read the notes, and correct if (likely) necissary.
 CLEAN: if a function is only called by a few other functions, start the description by explaining this.
@@ -68,7 +68,11 @@ Todo:
 compare the hpc/Makefile's idea of groupings to our defined classes above.
 aparently, #ifdef is valid in a .S file. if it is, make our modifications to entry.S not one-way.
 cpu_has_xmm?
+find out why we don't migrate vm86 processes. hpa has no idea why we shouldn't.
+find or write a program that uses vm86 mode. preferably something simple, like something that writes a result to the console, kicks into vm86, does work, returns from vm86, and starts over..
+
 ask debian legal what licensing issues will be caused by the inclusion of GPLV3 files in the linux kernel.
+
 
 create a "programming against openmosix howto".
 add derivitive of the following to wiki:

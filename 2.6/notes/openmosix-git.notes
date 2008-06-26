@@ -9,7 +9,7 @@ hunk	class		file patched				description								noteworthy references
 			the versions used by assembly code.	defined in hpc/task.h.
 003	i386,remote	arch/i386/kernel/entry.S		we modify this file to add two new entry points to the kernel, utilize
 	remotefork	how do we make these changes		the syscall mapping table in arch/i386/kernel/omasm.h(in both the
-			conditional? #ifdefs?			normal int 80h syscall path, and the sysenter path), and make the two
+	local		conditional? #ifdefs?			normal int 80h syscall path, and the sysenter path), and make the two
 								syscall exit points store a pointer to the thread_info of this process.
 								ret_from_deputy_fork is entered by a process, when its eip is set to 
 								this function by the code we add in the function copy_thread in 
@@ -30,7 +30,7 @@ hunk	class		file patched				description								noteworthy references
 								changes from declaring the conversion functions for fxsr<->387 from
 								static to OM_NSTATIC, and adds a function for finding out whether
 								support exists during run time.
-005	i386,omremote	creates arch/i386/kernel/omasm.h	this file contains the syscall table called by processes which are
+005	i386,remote	creates arch/i386/kernel/omasm.h	this file contains the syscall table called by processes which are
 			whats the litimus test for whether to	DREMOTE. it contains a mapping of whether a syscall is to be passed to
 			process locally or back home?		the home node, or handled locally.
 006	userthread	arch/i386/kernel/process.c		in this patch, we add an entry for user_thread_helper in the 
@@ -55,13 +55,26 @@ hunk	class		file patched				description								noteworthy references
 								enabled, and so that the sign and parity bits are turned on. we then
 								call do_fork, adding flags indicating that we don't want this process
 								to receive SIGCHILD, and that it cannot be ptraced. we return the
-								result of the do_fork call.
+								result of the do_fork call. finally, we modify copy_thread so that for
+								processes marked DDEPUTY, instead of the parent process returning to
+								userspace and immediately entering the kernel at ret_from_fork, we set
+								it to enter the kernel at ret_from_deputy_fork.
 007	i386,ksocket	arch/i386/kernel/signal.c		this patch changes the do_signal function from static to OM_NSTATIC
-008	i386,omguest	arch/i386/kernel/sys_i386.c		modify sys_mmap2 so that processes marked DREMOTE mapping memory
-			conditional #include?			without MAP_ANONYMOUS get forwarded to remote_do_mmap
-009	i386,omguest	arch/i386/kernel/vm86.c			update DSTAY_86 flag to prevent migration when a process is using VM86 	linux/hpc.h, task_lock, task_unlock, task_clear_stay,
-								mode.									task_go_home_for_reason, DSTAY_86
-010	i386?,omguest	arch/i386/lib/usercopy.c		redirect strnlen_user to deputy_strlen_user if openmosix_memory_away().	deputy_strlen_user, openmosix_memory_away
+008	i386,remote	arch/i386/kernel/sys_i386.c		this patch modifies sys_mmap2 so that processes marked DREMOTE mapping
+								memory without MAP_ANONYMOUS get forwarded to remote_do_mmap.
+009	i386,local	arch/i386/kernel/vm86.c			this patch changes the save_v86_state and return_to_32bit functions
+	remote							so that they clear the DSTAY_86 flag before they exit. it also changes
+								both sys_vm86 and sys_vm86old so that they return a process to its
+								home node if it attempts to enter vm86 mode. the code we add to 
+								save_v86_state and return_to_32bit simply task_lock()s the current 
+								task, uses task_clear_stay() to clear the DSTAY_86 flag, and 
+								task_unlock()s the current task. the code we add to sys_vm86 and
+								sys_vm86old simply calls task_go_home_for_reason(), specifying
+								DSTAY_86. if task_go_home_for_reason returns non-zero, we force the
+			better error message?			function we're in to return -ENOMEM, as we must be on remote, and
+								migration must have failed.
+010	i386,remotemem	arch/i386/lib/usercopy.c		this patch changes strlen_user to redirect to deputy_strlen_user if
+								openmosix_memory_away().
 011	ppc,config	arch/ppc/Kconfig			add hpc/Kconfig to build process					"hpc/Kconfig"
 012	ppc,syscall	arch/ppc/kernel/asm-offsets.c		defines offsets of task->om, and om->dflags, along with defining the 	hpc/task.h
 								constant values for DDEPUTY and DREMOTE so that assembly routines
@@ -811,7 +824,7 @@ hunk	class		file patched				description								noteworthy references
 								which is also sent to the home node. first, we check wether the reason
 			printk!					flag given is already marked on this process. if it is, we printk() a
 								warning. we then set that reason flag, an test wether the process is
-			returning 0 for error!			migrated or not. if its not, we return 0. otherwise, we call
+			returning 0 for error!			DREMOTE or not. if its not, we return 0. otherwise, we call
 								__task_move_to_node the same way as the previous function, to send the
 								task home. we check __task_move_to_node's return, and if its not 0, we
 								clear the stay reason we just set. we then return the value returned by

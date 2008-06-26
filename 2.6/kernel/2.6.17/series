@@ -27,20 +27,23 @@ linuxpmi/clean/004-arch_i386_kernel_i387_c-breakup-final.patch
 linuxpmi/clean/005-arch_i386_kernel_omasm_h-remote_sys_call_table-create-final.patch
 
 # i386, userthread, forkfromremote
+# create user_thread_helper entry point, create user_thread creation function, redirect ret_from_fork to ret_from_deputy_fork
 linuxpmi/clean/006-arch_i386_kernel_process_c-breakup-oneway-final.patch
 
 # i386, ksocket
-linuxpmi/clean/007-arch_i386_kernel_signal_c-OM_NSTATIC_do_signal.patch
+# change do_signal from static to OM_NSTATIC
+linuxpmi/clean/007-arch_i386_kernel_signal_c-OM_NSTATIC_do_signal-final.patch
 
-# re-direct sys_mmap2 so that remote processes mapping memory without MAP_ANONYMOUS get forwarded to remote_do_mmap
 # i386, mmap, remote
-linuxpmi/clean/008-arch_i386_kernel_sys_i386_c-forward_mmap2_to_remote_do_mmap.patch
+# re-direct sys_mmap2 so that remote processes mapping memory without MAP_ANONYMOUS get forwarded to remote_do_mmap
+linuxpmi/clean/008-arch_i386_kernel_sys_i386_c-forward_mmap2_to_remote_do_mmap-final.patch
 
-# i386
-linuxpmi/clean/009-arch_i386_kernel_vm86_c-auto_update_DSTAY86.patch
+# i386, local, remote
+# set DSTAY_86 when process is using vm86 mode
+linuxpmi/clean/009-arch_i386_kernel_vm86_c-auto_update_DSTAY86-final.patch
 
-# i386, usercopy
-linuxpmi/clean/010-arch_i386_lib_usercopy_c-strnlen_user_redirect-cleanup.patch
+# i386, remotemem
+linuxpmi/clean/010-arch_i386_lib_usercopy_c-strnlen_user_redirect-cleanup-final.patch
 
 
 # ppc, config
