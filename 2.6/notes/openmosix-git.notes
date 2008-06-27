@@ -1,6 +1,6 @@
 hunk	class		file patched				description								noteworthy references
 001	i386,config	arch/i386/Kconfig			this patch adds hpc/Kconfig to the build process					
-002	i386,remote	arch/i386/kernel/asm-offsets.c		this patch defines offsets to members inside of structures and defines
+002	i386,remote	arch/i386/kernel/asm-offsets.c		this patch defines offsets to members inside of structures, and defines
 	syscall							used by the assembly code in arch/i386/kernel/entry.S. first, we
 								generate the offset to the om member of the task structure, from the
 								begining of the structure. we then generate an offset to the dflags 
@@ -101,8 +101,10 @@ hunk	class		file patched				description								noteworthy references
 								contains a mapping of wether a syscall is to be passed to the home
 								node, or handled locally.
 015	x86_64,config	arch/x86_64/Kconfig			this patch adds hpc/Kconfig to build process
-016	x86_64,syscall	arch/x86_64/kernel/asm-offsets.c	generate assembly offset to task->om and om->dflags, define DDEPUTY	hpc/task.h
-			insertion point cleanup			and DREMOTE so that assembly routines can use these four values in
+016	x86_64,syscall	arch/x86_64/kernel/asm-offsets.c	this patch defines offsets to members inside of structures, and defines
+								used by the assembly code in arch/x86_64/kerel/entry.S. first, we
+								
+								and DREMOTE so that assembly routines can use these four values in
 								calculations, and define an ENTRY(task).
 017	x86_64,syscall	arch/x86_64/kernel/entry.S		add ret_from_kickstart entry point to the kernel that just returns.	"omasm.h"
 								add code to select which syscall table to use based on whether the

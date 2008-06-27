@@ -13,7 +13,7 @@
 # source hpc/Kconfig
 linuxpmi/clean/001-arch_i386_Kconfig-source_hpc_Kconfig-final.patch
 
-# i386, remote, syscall, home
+# i386, syscall, remote, home
 # syscall magic, assembly level
 linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets-cleanup-final.patch
 linuxpmi/clean/003-arch_i386_kernel_entry_S-breakup-oneway-broken.patch
@@ -57,13 +57,15 @@ linuxpmi/clean/012-arch_ppc_kernel_asm_offsets_c-define_offsets-cleanup-final.pa
 linuxpmi/clean/013-arch_ppc_kernel_entry_S-breakup-final.patch
 
 # ppc, syscall
-linuxpmi/clean/014-arch_ppc_kernel_misc_S-breakup.patch
-
+# remote syscall table, and function to create user threads.
+linuxpmi/clean/014-arch_ppc_kernel_misc_S-breakup-final.patch
 
 # x86_64, config
-linuxpmi/clean/015-arch_x86_64_Kconfig-source_hpc_Kconfig.patch
+# source hpc/Kconfig
+linuxpmi/clean/015-arch_x86_64_Kconfig-source_hpc_Kconfig-final.patch
 
-# x86_64, syscall
+# x86_64, syscall, remote, home
+# syscall magic, assembly level
 linuxpmi/clean/016-arch_x86_64_kernel_asm_offsets_c-breakup-cleanup.patch
 linuxpmi/clean/017-arch_x86_64_kernel_entry_S-cleanup-breakup.patch
 
