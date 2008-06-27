@@ -1,21 +1,22 @@
 hunk	class		file patched				description								noteworthy references
 001	i386,config	arch/i386/Kconfig			this patch adds hpc/Kconfig to the build process					
-002	i386,remote	arch/i386/kernel/asm-offsets.c		this patch adds offsets inside of structures and defines used by the
-								assembly code in arch/i386/kernel/entry.S. first, we generate the
-								offset to the om member of the task structure, from the begining of the
-								structure. we then generate an offset to the dflags member, inside of
-			DDEPUTY and DREMOTE should have a	task.om, which is of type openmosix_task. finally, we define DDEPUTY
-			following _asm, indicating they're	and DREMOTE constants, setting them to the DDEPUTY and DREMOTE values
-			the versions used by assembly code.	defined in hpc/task.h.
+002	i386,remote	arch/i386/kernel/asm-offsets.c		this patch defines offsets to members inside of structures and defines
+	syscall							used by the assembly code in arch/i386/kernel/entry.S. first, we
+								generate the offset to the om member of the task structure, from the
+								begining of the structure. we then generate an offset to the dflags 
+			DDEPUTY and DREMOTE should have a	member, inside of task.om, which is of type openmosix_task. finally,
+			following _asm, indicating they're	we define DDEPUTY and DREMOTE constants, setting them to the DDEPUTY
+			the versions used by assembly code.	and DREMOTE values defined in hpc/task.h.
 003	i386,remote	arch/i386/kernel/entry.S		we modify this file to add two new entry points to the kernel, utilize
 	remotefork	how do we make these changes		the syscall mapping table in arch/i386/kernel/omasm.h(in both the
-	local		conditional? #ifdefs?			normal int 80h syscall path, and the sysenter path), and make the two
-								syscall exit points store a pointer to the thread_info of this process.
-								ret_from_deputy_fork is entered by a process, when its eip is set to 
-								this function by the code we add in the function copy_thread in 
+	local		conditional? #ifdefs?			normal int 80h syscall path, and the sysenter path), make the two
+	syscall							syscall exit points store a pointer to the thread_info of this process,
+								and insert a call to openmosix_pre_usermode in the userspace return
+								path. ret_from_deputy_fork is entered by a process, when its eip is set
+								to this function by the code we add in the function copy_thread in 
 								arch/i386/kernel/processes.c. ret_from_deputy_fork is an identical copy
 								of ret_from_fork. ret_from_kickstart is called from arch_kickstart in
-			isnt this GET_THREAD_INFO redundant?	hpc/i386.c. it calls GET_THREAD_INFO, and jmps to syscall_exit,
+			isnt this GET_THREAD_INFO redundant?	hpc/arch-i386.c. it calls GET_THREAD_INFO, and jmps to syscall_exit,
 								returning to userspace for the 'first' time on a remote node. we then 
 								modify the resume_userspace entry point, to call openmosix_pre_usermode
 								between doing work_pending, and restor_all'ing. in the next two hunks,
@@ -75,17 +76,31 @@ hunk	class		file patched				description								noteworthy references
 								migration must have failed.
 010	i386,remotemem	arch/i386/lib/usercopy.c		this patch changes strlen_user to redirect to deputy_strlen_user if
 								openmosix_memory_away().
-011	ppc,config	arch/ppc/Kconfig			add hpc/Kconfig to build process					"hpc/Kconfig"
-012	ppc,syscall	arch/ppc/kernel/asm-offsets.c		defines offsets of task->om, and om->dflags, along with defining the 	hpc/task.h
-								constant values for DDEPUTY and DREMOTE so that assembly routines
-								can use these four values in calculations.
-013	ppc,syscall	arch/ppc/kernel/entry.S			add code to check whether we're in a DREMOTE process state, and
-								use a our remote_sys_call_table if so. define a ret_from_kickstart
-								entry point, that branches to ret_from_syscall. we also add code to
-								call openmosix_pre_usermode on the restore_user path.
-014	ppc,userthread	arch/ppc/kernel/misc.S			define SIGCHLD 17, add an assembly function to create usermode
-			hold syscall table in omasm.h!		threads, and create the remote syscall table.
-015	x86_64,config	arch/x86_64/Kconfig			add hpc/Kconfig to build process					"hpc/Kconfig"
+011	ppc,config	arch/ppc/Kconfig			this patch adds hpc/Kconfig to the build process
+012	ppc,remote	arch/ppc/kernel/asm-offsets.c		this patch defines offsets to members inside of structures, and defines
+	syscall							used by the assembly code in arch/ppc/kernel/entry.S. first, we
+								generate the offset to the om member of the task structure, from the
+								begining of the structure. we then generate an offset to the dflags 
+			DDEPUTY and DREMOTE should have a	member, inside of task.om, which is of type openmosix_task. finally,
+			following _asm, indicating they're	we define DDEPUTY and DREMOTE constants, setting them to the DDEPUTY
+			the versions used by assembly code.	and DREMOTE values defined in hpc/task.h.
+013	ppc,remote	arch/ppc/kernel/entry.S			we modify this file to a new entry point to the kernel, utilize the
+	syscall							syscall mapping table in arch/ppc/kernel/misc.h, and insert a call to
+								openmosix_pre_usermode in our userspace return path. first we modify
+								syscall_dotrace_cont, selecting which syscall table to use based on
+								whether the current task is marked DREMOTE or not. ret_from_kickstart
+								is called from arch_kickstart. ret_from_kickstart branches directly to 
+								ret_from_syscall, returning to userspace for the 'first' time on a
+								remote enode. our last hunk branches directly to openmosix_pre_usermode
+								in the restore_user path.
+014	ppc,userthread	arch/ppc/kernel/misc.S			in this patch, we add an assembly function to create usermode threads,
+								and create the remote syscall table. first we define SIGCHLD. our next
+								hunk creates a user_thread function similar to the one in
+								arch/i386/kernel/process.c, except hand written in assembly. finally,
+			move syscall table to omasm.h!		we create the syscall table used by processes which are DREMOTE. it
+								contains a mapping of wether a syscall is to be passed to the home
+								node, or handled locally.
+015	x86_64,config	arch/x86_64/Kconfig			this patch adds hpc/Kconfig to build process
 016	x86_64,syscall	arch/x86_64/kernel/asm-offsets.c	generate assembly offset to task->om and om->dflags, define DDEPUTY	hpc/task.h
 			insertion point cleanup			and DREMOTE so that assembly routines can use these four values in
 								calculations, and define an ENTRY(task).
