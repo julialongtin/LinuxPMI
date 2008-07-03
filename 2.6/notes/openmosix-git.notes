@@ -14,17 +14,18 @@ hunk	class		file patched				description								noteworthy references
 								and insert a call to openmosix_pre_usermode in the userspace return
 								path. ret_from_deputy_fork is entered by a process, when its eip is set
 								to this function by the code we add in the function copy_thread in 
-								arch/i386/kernel/processes.c. ret_from_deputy_fork is an identical copy
+			if this is identical, why use it?	arch/i386/kernel/processes.c. ret_from_deputy_fork is an identical copy
 								of ret_from_fork. ret_from_kickstart is called from arch_kickstart in
-			isnt this GET_THREAD_INFO redundant?	hpc/arch-i386.c. it calls GET_THREAD_INFO, and jmps to syscall_exit,
-								returning to userspace for the 'first' time on a remote node. we then 
-								modify the resume_userspace entry point, to call openmosix_pre_usermode
-								between doing work_pending, and restor_all'ing. in the next two hunks,
-								we add code to select which syscall table to use based on whether the
-								current task is marked DREMOTE or not. this is added once in 
-								ENTRY(sysenter_entry), and again in ENTRY(system_call). we also modify
-								syscall_exit and sysenter_exit to store the result of GET_THREAD_INFO 
-								into %ebp.
+			isnt this GET_THREAD_INFO redundant?	hpc/arch-i386.c. it calls GET_THREAD_INFO(%bsp), and jmps to 
+								syscall_exit, returning to userspace for the 'first' time on a remote
+								node. we then modify the resume_userspace entry point, to call 
+								openmosix_pre_usermode between doing work_pending, and restor_all'ing.
+								in the next two hunks, we add code to select which syscall table to use
+								based on whether the current task is marked DREMOTE or not. this is
+								added once in ENTRY(sysenter_entry), and again in ENTRY(system_call).
+								we also modify syscall_exit and sysenter_exit to store the result of
+								GET_THREAD_INFO into %ebp, cleaning up after our own code clobbers the
+								register.
 004	i386,i387	arch/i386/kernel/i387.c			fxsr support is support for fast saving of the i387's floating 
 								point/sse/sse2/etc state to a 512 byte block. its a new feature,
 								not present in earlier i387 style floating point processors. this patch
@@ -32,8 +33,9 @@ hunk	class		file patched				description								noteworthy references
 								static to OM_NSTATIC, and adds a function for finding out whether
 								support exists during run time.
 005	i386,remote	creates arch/i386/kernel/omasm.h	this file contains the syscall table called by processes which are
-			whats the litimus test for whether to	DREMOTE. it contains a mapping of whether a syscall is to be passed to
-			process locally or back home?		the home node, or handled locally.
+			whats the rule for whether to process	DREMOTE. it contains a mapping of whether a syscall is to be passed to
+			locally or back home?			the home node, or handled locally.
+			#define self out if !CONFIG_OPENMOSIX
 006	userthread	arch/i386/kernel/process.c		in this patch, we add an entry for user_thread_helper in the 
 	remotefork						kernel_thread_helper execution path, add a function for creating an 
 								in-kernel user thread, and re-direct the entry point ret_from_fork to
@@ -96,26 +98,49 @@ hunk	class		file patched				description								noteworthy references
 014	ppc,userthread	arch/ppc/kernel/misc.S			in this patch, we add an assembly function to create usermode threads,
 								and create the remote syscall table. first we define SIGCHLD. our next
 								hunk creates a user_thread function similar to the one in
-								arch/i386/kernel/process.c, except hand written in assembly. finally,
+			rewrite in C, if possible!		arch/i386/kernel/process.c, except hand written in assembly. finally,
 			move syscall table to omasm.h!		we create the syscall table used by processes which are DREMOTE. it
 								contains a mapping of wether a syscall is to be passed to the home
 								node, or handled locally.
 015	x86_64,config	arch/x86_64/Kconfig			this patch adds hpc/Kconfig to build process
-016	x86_64,syscall	arch/x86_64/kernel/asm-offsets.c	this patch defines offsets to members inside of structures, and defines
-								used by the assembly code in arch/x86_64/kerel/entry.S. first, we
-								
-								and DREMOTE so that assembly routines can use these four values in
-								calculations, and define an ENTRY(task).
-017	x86_64,syscall	arch/x86_64/kernel/entry.S		add ret_from_kickstart entry point to the kernel that just returns.	"omasm.h"
-								add code to select which syscall table to use based on whether the
-								current process is DREMOTE or not. re-define the PTREGSCALL macro to
-								create two macros when used, one normal, one om_ version, that calls
-			need to know x86_64 asm!		our om_ptregscall_common entry to wrap the call. we provide our own
-								om_stub_execve that sends things remote, call openmosix_pre_usermode
-								on the return path from syscall, and add assembly code to create
-								usermode threads, define a user_child_rip helper function.
+016	x86_64,remote	arch/x86_64/kernel/asm-offsets.c	this patch defines offsets to members inside of structures, and defines
+	syscall		remove ifdef around header. redundant.	used by the assembly code in arch/x86_64/kerel/entry.S. first, we
+			move this define with the others.	generate the offset to the om member of the task structure, from the
+			add a define around task! is task used?	begining of the structure. next we define an entry for task. in our
+								last hunk, we generate an offset to the dflags member, inside of
+			DDEPUTY and DREMOTE should have a	task.om. we then define DDEPUTY and DREMOTE, setting them to the
+			following asm!				DDEPUTY and DREMOTE values defined in hpc/task.h.
+017	x86_64,remote	arch/x86_64/kernel/entry.S		we modify this file to add a new entry point for returning from
+	syscall		dont define out omasm.h			kickstart, utilize the syscall mapping table in 
+								arch/x86_64/kernel/omasm.h, modify the PTREGSCALL macro to create om_
+								entries for each of the 6 functions that take a PTREGS argument, insert
+								an om_ptregscall_common entry point, insert a om_stub_execve entry
+								point, insert a call to openmosix_pre_usermode, and insert a
+			re-write user_thread in C!		user_thread function written in assembly. ret_from_kickstart restores
+								the state of the registers to how they were before it was called, and
+								returns to userspace for the first time, on a remote node. in the
+								system_call entry point, we check for DREMOTE in task.om.dflags.
+			why the fake frame? CFI_ADJUST!		if we find it, we jump over a stack frame, call into our
+			UNFAKE_STACK_FRAME?			remote_sys_call_table, step back under the stack frame, and jmp to 
+								ret_from_syscall. otherwise, we pass through to the normal syscall
+								handler. next, we re-define the PTREGSCALL macro so that when its used,
+								it creates two entries instead of one. one 'normal' entry, and one
+								entry prepended with om_, that loads the address of an om_ version of 
+								the function being declared, and calls our om_ptregscall_common
+								entry to dispatch. om_ptregscall_common is our version of
+			non-functional differences?		ptregscall_common. the only functional difference is ours begins by 
+								jumping over a stack frame, does the same work as ptregscall_common to
+								call the C function pointed to in rax, and peel back to before the
+								stack frame we jumped over. entry om_stub_execve is similar to
+								stub_execve, only call remote_do_execve instead of sys_execve, and we
+								save the contents of r11(eflags) in r15 during this call, restoring
+								afterwards. our next hunk modifies the common_interrupt entry to call
+								our openmosix_pre_usermode function during the return to userspace.
+			move to C?				finally, we create our user_thread entry, which is responsible for
+								creating our 'user thread', similar to the two previous user_thread
+								functions.
 018	x86_64,omguest	creates arch/x86_64/kernel/omasm.h	this is the syscall table called by processes that are guests.
-								it contains a mapping of whether a function is to be passed to the
+			#define self out if !CONFIG_OPENMOSIX	it contains a mapping of whether a function is to be passed to the
 								home node, or processed locally.
 019	x86_64,omguest	arch/x86_64/kernel/sys_x86_64.c		redirect sys_mmap2 so that remote processes mapping memory without	<linux/hpc.h>
 								MAP_ANONYMOUS get forwarded to remote_do_mmap

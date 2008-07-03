@@ -16,7 +16,7 @@ linuxpmi/clean/001-arch_i386_Kconfig-source_hpc_Kconfig-final.patch
 # i386, syscall, remote, home
 # syscall magic, assembly level
 linuxpmi/clean/002-arch_i386_kernel_asm_offsets_c-define_offsets-cleanup-final.patch
-linuxpmi/clean/003-arch_i386_kernel_entry_S-breakup-oneway-broken.patch
+linuxpmi/clean/003-arch_i386_kernel_entry_S-breakup-oneway-broken-cleanup.patch
 
 # i386, fxsr
 # OM_NSTATIC the fxsr<->i387 conversion functions, add function for determining fxsr support during runtime.
@@ -66,7 +66,7 @@ linuxpmi/clean/015-arch_x86_64_Kconfig-source_hpc_Kconfig-final.patch
 
 # x86_64, syscall, remote, home
 # syscall magic, assembly level
-linuxpmi/clean/016-arch_x86_64_kernel_asm_offsets_c-breakup-cleanup.patch
+linuxpmi/clean/016-arch_x86_64_kernel_asm_offsets_c-breakup-cleanup-oneway-final.patch
 linuxpmi/clean/017-arch_x86_64_kernel_entry_S-cleanup-breakup.patch
 
 # x86_64, syscall, remote
