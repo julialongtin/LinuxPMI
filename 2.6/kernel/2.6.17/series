@@ -67,7 +67,7 @@ linuxpmi/clean/015-arch_x86_64_Kconfig-source_hpc_Kconfig-final.patch
 # x86_64, syscall, remote, home
 # syscall magic, assembly level
 linuxpmi/clean/016-arch_x86_64_kernel_asm_offsets_c-breakup-cleanup-oneway-final.patch
-linuxpmi/clean/017-arch_x86_64_kernel_entry_S-cleanup-breakup.patch
+linuxpmi/clean/017-arch_x86_64_kernel_entry_S-cleanup-breakup-broken.patch
 
 # x86_64, syscall, remote
 linuxpmi/clean/018-arch_x86_64_kernel_omasm_h-remote_sys_call_table.patch
