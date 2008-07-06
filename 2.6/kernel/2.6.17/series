@@ -64,26 +64,26 @@ linuxpmi/clean/014-arch_ppc_kernel_misc_S-breakup-final.patch
 # source hpc/Kconfig
 linuxpmi/clean/015-arch_x86_64_Kconfig-source_hpc_Kconfig-final.patch
 
-# x86_64, syscall, remote, home
+# x86_64, remote, home, syscall
 # syscall magic, assembly level
 linuxpmi/clean/016-arch_x86_64_kernel_asm_offsets_c-breakup-cleanup-oneway-final.patch
 linuxpmi/clean/017-arch_x86_64_kernel_entry_S-cleanup-breakup-broken.patch
 
-# x86_64, syscall, remote
-linuxpmi/clean/018-arch_x86_64_kernel_omasm_h-remote_sys_call_table.patch
+# x86_64, remote, syscall
+# the remote syscall mapping table. tells wether to handle a syscall locally or remote.
+linuxpmi/clean/018-arch_x86_64_kernel_omasm_h-remote_sys_call_table-create-oneway-final.patch
 
-# x86_64, remote_mmap
-linuxpmi/clean/019-arch_x86_64_kernel_sys_x86_64_c-forward_mmap2_to_remote_do_mmap.patch
+# x86_64, remote, remote_mmap
+# perform mmaps on both ends when mmaps are requested by a remote process.
+linuxpmi/clean/019-arch_x86_64_kernel_sys_x86_64_c-forward_mmap2_to_remote_do_mmap-final.patch
 
-# x86_64, rmem
-linuxpmi/clean/020-arch_x86_64_lib_copy_user_S-forward_to_deputy_copy_user.patch
-
-# x86_64, rmem
-linuxpmi/clean/021-arch_x86_64_lib_usercopy_c-forward_remote_memory_calls.patch
-
+# x86_64, local, rmem
+# forward memory accesses from the home kernel to the remote node's userspace when working with a deputy process.
+linuxpmi/clean/020-arch_x86_64_lib_copy_user_S-forward_copy_user_to_deputy_copy_user-cleanup-final.patch
+linuxpmi/clean/021-arch_x86_64_lib_usercopy_c-forward_remote_memory_calls-cleanup-final.patch
 
 # rmem
-linuxpmi/clean/022-fs_namei_c-forward_getname.patch
+linuxpmi/clean/022-fs_namei_c-forward_getname-broken-cleanup-final.patch
 
 # omprocfs
 linuxpmi/clean/023-fs_proc_base_c-proc_PID_om.patch
