@@ -16,7 +16,7 @@ CLEAN: STUBs should be noted as well.
 CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel will also tell us what function called OMBUG().
 SILVER: break up breakup patches into multiple patches.
 SILVER: clean up cleanup patches. leave 'dead' code.
-SILVER: classify each patch into: kcomd config i386 x86_64 ppc remote local... many others.
+SILVER: classify each patch into: kcomd config i386 x86_64 ppc remote local rmem remotefork... many others.
 SILVER: all functions will have a kdoc description.
 SILVER: dependancies are noted.
 SILVER: change EXPORT_SYMBOL to EXPORT_SYMBOL_GPL after verifying GPL license in header.
@@ -66,7 +66,7 @@ Userspace Interfacing Rules:
 
 Kernel Precidents:
 1: __func__ is newer, and prefered in new code over __FUNCTION__
-2: in asm-offsets.h, "DEFINE(PAGE_SIZE_asm, PAGE_SIZE);" sets precident, our defines should end in _asm here.
+2: in asm-offsets.h, "DEFINE(PAGE_SIZE_asm, PAGE_SIZE);" sets precident, our defines should end in _asm here. -- confirmed by hpa, prevents namespace collisions.
 
 Todo:
 
@@ -80,7 +80,6 @@ both of the above tests should run in a loop, that takes long enough for us to m
 merge our test suite with http://ltp.sourceforge.net/, if possible. someone needs to evaluate their work VS our needs. 
 find out when it is appropriate to task_lock(current). when task_set_stay is being called?
 ask debian legal what licensing issues will be caused by the inclusion of GPLV3 files in the linux kernel.
-
 
 create a "programming against openmosix howto".
 add derivitive of the following to wiki:
