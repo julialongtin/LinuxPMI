@@ -1,60 +1,3 @@
-
-origional -> linuxpmi/clean/ -> linuxpmi/silver/ -> linuxpmi/gold -> linuxpmi/plat
-
-SILVER: break up breakup patches into multiple patches.
-SILVER: clean up cleanup patches. leave 'dead' code.
-SILVER: classify each patch into: kcomd config i386 x86_64 ppc remote local rmem remotefork... many others.
-SILVER: all functions will have a kdoc description.
-SILVER: dependancies are noted.
-SILVER: change EXPORT_SYMBOL to EXPORT_SYMBOL_GPL after verifying GPL license in header.
-SILVER: OMBUG() invocations should indicate what failed, uniquely. no glob for "a function i called somewhere in this function failed".
-SILVER: patches to the same file will be next to each other in sequence.
-SILVER: assembly routines will have close to line-by-line comments.
-SILVER: each #ifdef CONFIG_OPENMOSIX has an #endif /* CONFIG_OPENMOSIX */
-GOLD: all files we create will have a header saying what they are for, why functions are there, and not someplace else.
-GOLD: include kcom.h before including prototype.h
-GOLD: remove code later removed by CLEANed patch. modify later cleaned patch so it is additave only.
-GOLD: all includes will indicate what they are there to include in comments.
-GOLD: all functions will have a description of what context they are called from, or who their callers are.
-GOLD: make sure theres a printk message for each error condition, and minimal error handling for each function that can return errors.
-GOLD: printk should not be invoked directly, always as OMDEBUG or KCOMDEBUG or OMBUG or OMDEBUG_SYS or somesuch macro.
-GOLD: all datastructures/memory freed/destroyed/etc.
-GOLD: variable names will match kernel precident.
-GOLD: functions that manipulate lists will aquire and release spinlocks appropriately.
-GOLD: mm->realusers is always atomicly read and written.
-GOLD: all defines we add to headers will have comments.
-GOLD: patches will comply with the below 'Kernel Precidents', 'Security Rules', and 'Userspace Interfacing Rules' sections.
-GOLD: kernel threads should not lock spinlocks directly. their helper functions should perform the locking.
-GOLD: all of the patches should do nothing if openmosix is turned off.
-PLAT: patches are in the order they depend on one another.
-PLAT: headers say what they're for including before they're included.
-PLAT: merge patches that occur to the same file into one patch.
-PLAT: is it in the right file? move hunks that are in the wrong place.
-PLAT: where is its twin?
-PLAT: is their a third edge to this sword, and where is it?
-PLAT: functions that check their arguments or aquire locks around most of the function will be two functions, one to do that, the other to "do work".
-PLAT: remove dead code.
-
-Rules:
-
-1: take care of yourself first. if what your working on dosent benifit you, you'll burn yourself out.
-2: don't lose data. its OK to retire a patch after you know everything it was responsible for, and can explain it to others. it is NOT ok to blindly replace code.
-3: to prove understanding, explain yourself. if you cannot explain what you read/learned in your own words, you do not truely understand it.
-4: premature optimization is the root of all evil. lets get it working, then we can worry about speed issues, memory consumption, bandwidth consumption (demand paging), etc.
-5: technology before politics. worry about political matters when they start to interfere with people doing stuff.
-
-Security Rules:
-1: never turn a pointer to a kernelspace object over to userspace, per al viro. makes life easier for rootkitters. exception is for functions that do stuff, then panic().
-
-Userspace Interfacing Rules:
-1: don't ignore invalid input silently.
-2: writing to un-writable file in /proc should return -EACCES.
-3: find out what reading from un-readable files should return in /proc!
-
-Kernel Precidents:
-1: __func__ is newer, and prefered in new code over __FUNCTION__
-2: in asm-offsets.h, "DEFINE(PAGE_SIZE_asm, PAGE_SIZE);" sets precident, our defines should end in _asm here. -- confirmed by hpa, prevents namespace collisions.
-
 Todo:
 
 compare the hpc/Makefile's idea of groupings to our defined classes above.
@@ -68,3 +11,4 @@ merge our test suite with http://ltp.sourceforge.net/, if possible. someone need
 find out when it is appropriate to task_lock(current). when task_set_stay is being called?
 ask debian legal what licensing issues will be caused by the inclusion of GPLV3 files in the linux kernel.
 
+create a "programming against openmosix howto".
