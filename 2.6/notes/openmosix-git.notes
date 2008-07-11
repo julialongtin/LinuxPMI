@@ -167,23 +167,24 @@ hunk	class		file patched				description								noteworthy references
 			cannonicalize the filename passed in,   openmosix_memory_away().
 			not just return it!
 			missing comment on #endif
-023	omprocfs	fs/proc/base.c				this patch adds "files" named where, stay, and debug in a directory
+023	local,procfs	fs/proc/base.c				this patch adds "files" named where, stay, and debug in a directory
 								named "hpc" in the /proc/$PID/ directory of each process on the
-			take out #ifdef around header include.	local node. first, we include the hpc/hpc.h header. in the next two
-								hunks we add entries for PROC_TGID_OPENMOSIX,
-								PROC_TGID_OPENMOSIX_WHERE, PROC_TGID_OPENMOSIX_STAY, 
-								PROC_TGID_OPENMOSIX_DEBUG, PROC_TID_OPENMOSIX, 
-								PROC_TID_OPENMOSIX_WHERE, PROC_TID_OPENMOSIX_STAY, and
-								PROC_TID_OPENMOSIX_DEBUG into enum pid_directory_inos. this enum sets
-								the inode number for each of our "files" in /proc to unique values.
-								next we create the "om" entry with inode number PROC_TGID_OPENMOSIX 
-								in the tgid_base_stuff structure. we then do the same thing again, 
-								creating a "om" entry with inode number PROC_TID_OPENMOSIX in
-								tid_base_stuff. next we create a pair of structures 
-								(tgid_openmosix_stuff and tid_openmosix_stuff), containing entries for	
-								PROC_TGID_OPENMOSIX_WHERE/"where", PROC_TID_OPENMOSIX_WHERE/"where",
-								PROC_TGID_OPENMOSIX_STAY/"stay", PROC_TID_OPENMOSIX_STAY/"stay",
-								PROC_TGID_OPENMOSIX_DEBUG/"debug", and 
+			take out #ifdef around header include.	local node. this makes it the 'root' of our procfs handling code. it
+								actually passes off the work involved to hpc/proc.c. first, we include
+								the hpc/hpc.h header. in the next two hunks we add entries for 
+								PROC_TGID_OPENMOSIX, PROC_TGID_OPENMOSIX_WHERE,
+								PROC_TGID_OPENMOSIX_STAY, PROC_TGID_OPENMOSIX_DEBUG,
+								PROC_TID_OPENMOSIX, PROC_TID_OPENMOSIX_WHERE, PROC_TID_OPENMOSIX_STAY,
+								and PROC_TID_OPENMOSIX_DEBUG into enum pid_directory_inos. this enum
+								sets the inode number for each of our "files" in /proc to unique
+								values. next we create the "om" entry with inode number
+								PROC_TGID_OPENMOSIX in the tgid_base_stuff structure. we then do the
+								same thing again, creating a "om" entry with inode number
+								PROC_TID_OPENMOSIX in tid_base_stuff. next we create a pair of
+								structures (tgid_openmosix_stuff and tid_openmosix_stuff), containing
+								entries for PROC_TGID_OPENMOSIX_WHERE/"where", 
+								PROC_TID_OPENMOSIX_WHERE/"where", PROC_TGID_OPENMOSIX_STAY/"stay",
+								PROC_TID_OPENMOSIX_STAY/"stay", PROC_TGID_OPENMOSIX_DEBUG/"debug", and 
 								PROC_TID_OPENMOSIX_DEBUG/"debug". these entries declare the contents of
 								our /proc/$PID/om/ directory. in our next hunk, we add
 								proc_pid_openmosix_read and proc_pid_openmosix_write functions, and a
@@ -236,7 +237,9 @@ hunk	class		file patched				description								noteworthy references
 								proc_tgid_openmosix_inode_operations and
 								proc_tid_openmosix_inode_operations structures, mapping .lookup to
 								proc_tgid_openmosix_lookup or proc_tid_openmosix_lookup.
-024	omprocfs	fs/proc/root.c				call openmosix_proc_init inside proc_root_init.				hpc/hpc.h
+024	omprocfs	fs/proc/root.c				this patch changes proc_root_init to call openmosix_proc_init. first,
+			remove #ifdef around include		we include our hpc/hpc.h header. then, we add our call to
+								openmosix_proc_init (from hpc/proc.c) into proc_root_init.
 025	kcore		fs/select.c				EXPORT_SYMBOL_GPL(do_select); if CONFIG_KCOMD				
 026	i386,arch_mig	creates hpc/arch-i386.c			this file contains architecture specific send/receive code, along with	http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
 								(in the case of x86) compatibility/conversion routines for translating	<hpc/debug.h>
