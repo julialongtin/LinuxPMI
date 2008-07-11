@@ -1,19 +1,6 @@
 
 origional -> linuxpmi/clean/ -> linuxpmi/silver/ -> linuxpmi/gold -> linuxpmi/plat
 
-CLEAN: marked create if this creates a new file.
-CLEAN: marked breakup if it does two things that should be in two patches, or if sections of this file belong in a seperate .c or .h file.
-CLEAN: marked oneway if parts of this file do not disappear with openmosix turned off in the config (missing #ifdef CONFIG_OPENMOSIX)(excluding the config system itsself, header includes, and new files)
-CLEAN: marked oneway if its a header file that is missing its #ifdef CONFIG_OPENMOSIX.
-CLEAN: marked broken if the patch contains obviously broken code (incomplete, fixmes, an inc and test but no dec, STUBs, memory leaks in error handling, redundant code, etc).
-CLEAN: marked cleanup if the patch needs minor non-function-changing modifications (dead/2.4 code, spacing issues, variable naming issues, missing comments in assembly).
-CLEAN: marked final if the patch is the last patch in our set to touch a given file.
-CLEAN: re-read the notes, and correct if (likely) necissary.
-CLEAN: if a function is only called by a few other functions, start the description by explaining this.
-CLEAN: does it destroy its datastructures on error? check passed in pointers (from userspace, or other routines) for NULL, ... comment in notes.
-CLEAN: printk() is depreciated. note any usage of printk.
-CLEAN: STUBs should be noted as well.
-CLEAN: OMBUG() invocations should not include a prefix. OMBUG("text here\n") ends up looking like "[OMBUG] text here\n". the kernel will also tell us what function called OMBUG().
 SILVER: break up breakup patches into multiple patches.
 SILVER: clean up cleanup patches. leave 'dead' code.
 SILVER: classify each patch into: kcomd config i386 x86_64 ppc remote local rmem remotefork... many others.
@@ -81,10 +68,3 @@ merge our test suite with http://ltp.sourceforge.net/, if possible. someone need
 find out when it is appropriate to task_lock(current). when task_set_stay is being called?
 ask debian legal what licensing issues will be caused by the inclusion of GPLV3 files in the linux kernel.
 
-create a "programming against openmosix howto".
-add derivitive of the following to wiki:
-13:16 < juri_> i've successfully used unix pipes.
-13:19 < juri_> you create pipes with dup(2), fork, then use those pipes to maintain communication between your workers.
-13:22 < juri_> http://www.ecst.csuchico.edu/~beej/guide/ipc/pipes.html
-13:22 < juri_> try that. thats what i'm talking about.
-13:23 < juri_> i successfully used that on openmosix 2.4 to communicate between remote processes.
