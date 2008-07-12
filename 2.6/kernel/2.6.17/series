@@ -91,7 +91,7 @@ linuxpmi/clean/023-fs_proc_base_c-proc_PID_om-cleanup-final.patch
 
 # local, procfs
 # call our init function
-linuxpmi/clean/024-fs_proc_root_c-init_openmosix_procfs.patch
+linuxpmi/clean/024-fs_proc_root_c-init_openmosix_procfs-cleanup-final.patch
 
 # kcore
 linuxpmi/clean/025-fs_select_c-export_do_select.patch
