@@ -83,6 +83,7 @@ linuxpmi/clean/020-arch_x86_64_lib_copy_user_S-forward_copy_user_to_deputy_copy_
 linuxpmi/clean/021-arch_x86_64_lib_usercopy_c-forward_remote_memory_calls-cleanup-final.patch
 
 # local, rmem
+# forward memory access from the home kernel during getname. HAS A BUG IN IT!
 linuxpmi/clean/022-fs_namei_c-forward_getname-broken-cleanup-final.patch
 
 # local, procfs
@@ -93,7 +94,8 @@ linuxpmi/clean/023-fs_proc_base_c-proc_PID_om-cleanup-final.patch
 # call our init function
 linuxpmi/clean/024-fs_proc_root_c-init_openmosix_procfs-cleanup-final.patch
 
-# kcore
+# ksocket
+# export do_select for our usage.
 linuxpmi/clean/025-fs_select_c-export_do_select.patch
 
 # i386, arch_mig

@@ -237,10 +237,12 @@ hunk	class		file patched				description								noteworthy references
 								proc_tgid_openmosix_inode_operations and
 								proc_tid_openmosix_inode_operations structures, mapping .lookup to
 								proc_tgid_openmosix_lookup or proc_tid_openmosix_lookup.
-024	omprocfs	fs/proc/root.c				this patch changes proc_root_init to call openmosix_proc_init. first,
+024	local,procfs	fs/proc/root.c				this patch changes proc_root_init to call openmosix_proc_init. first,
 			remove #ifdef around include		we include our hpc/hpc.h header. then, we add our call to
 								openmosix_proc_init (from hpc/proc.c) into proc_root_init.
-025	kcore		fs/select.c				EXPORT_SYMBOL_GPL(do_select); if CONFIG_KCOMD				
+025	ksocket,local,	fs/select.c				this patch exports the do_select function, so that hpc/kcomd.c can use
+	remote							it to check for data on our pile of incoming sockets. this function is
+								is only exported if CONFIG_KCOMD is selected.
 026	i386,arch_mig	creates hpc/arch-i386.c			this file contains architecture specific send/receive code, along with	http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
 								(in the case of x86) compatibility/conversion routines for translating	<hpc/debug.h>
 								state between two different but compatible floating point register	<hpc/protocol.h>
