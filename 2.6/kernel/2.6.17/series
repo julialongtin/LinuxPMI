@@ -98,8 +98,9 @@ linuxpmi/clean/024-fs_proc_root_c-init_openmosix_procfs-cleanup-final.patch
 # export do_select for our usage.
 linuxpmi/clean/025-fs_select_c-export_do_select.patch
 
-# i386, arch_mig
-linuxpmi/clean/026-hpc_arch_i386_c-arch_mig.patch
+# i386, local, remote, arch_mig, syscall
+# archetecture specific migration functionality. and then some.
+linuxpmi/clean/026-hpc_arch_i386_c-arch_mig-create-breakup-broken-cleanup.patch
 
 # ppc, arch_mig
 linuxpmi/clean/027-hpc_arch_ppc_c-arch_mig.patch

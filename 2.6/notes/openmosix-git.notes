@@ -243,38 +243,94 @@ hunk	class		file patched				description								noteworthy references
 025	ksocket,local,	fs/select.c				this patch exports the do_select function, so that hpc/kcomd.c can use
 	remote							it to check for data on our pile of incoming sockets. this function is
 								is only exported if CONFIG_KCOMD is selected.
-026	i386,arch_mig	creates hpc/arch-i386.c			this file contains architecture specific send/receive code, along with	http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
-								(in the case of x86) compatibility/conversion routines for translating	<hpc/debug.h>
-								state between two different but compatible floating point register	<hpc/protocol.h>
-								save/restore subsystems. first, we forward declare twd_fxsr_to_i387 and	<hpc/arch.h>
-								twx_i387_to_fxsr, and utilize them in creating fxsave_to_fsave and 	<hpc/task.h>
-								fsave_to_fxsave functions. after that, we add the arch specific receive	<hpc/hpc.h>
-								functions arch_mig_receive_specific, arch_mig_receive_proc_context,	<hpc/prototype.h>
-								and arch_mig_receive_fp. arch_mig_receive_specific is a stub that 
-								returns 1 by default, but 0 if the passed structure's type is set to
-								MIG_ARCH_I386_LDT. receive_proc_context copies values from the 
-								passed omp_mig_task to the user registers, debug registers, FS, GS, and 
-								the GDT's TLS entries. arch_mig_receive_fp uses the fxsave conversion	
-								functions to receive the floating point state, changing format if
-								necessary. arch_mig_send_pre is created to clear the LDT, 
-								arch_mig_send_post to load the LDT, if there is one. then a stub 
-								arch_mig_send_specific that looks like it was to "send" the LDT, but 
-								instead prints a warning. we then add arch_mig_send_fp, which calls
-								unlazy_fpu, then fills in the fp state(along with the fxsr flag).	
-								next we have arch_mig_send_proc_context, which copies the user, debug,	
-								GS, and GS registers, along with the GDT's TLS entries. if the task	
-								is marked DDEPUTY, we also copy the boot CPU's features. 		
-								arch_kickstart is the function called to jump from openmosix kernel
-								code, into the newly created process. it set all the user registers, 
-								sets the debug registers, loads the TLS, sets up the segmentation
-								registers FS and GS, sets CS to our __USER_CS, flushes signals, then 
-								jmps to ret_from_kickstart. at this point there's a break in the file, 
-			split this back off			like this section used to be another file. we include some headers,	<hpc/syscalls.h>
-								then define arch_exec_syscall, which dumps some debugging, then calls a
-								given syscall, returning what the syscall returns. we define asmlinkage
-								om_sys_fork, which calls remote_do_fork,
-								and the asmlinkage om_sys_clone, which does some setup, then calls 
-								remote_do_fork with different arguments than the previous function.
+026	i386, local	creates hpc/arch-i386.c			this file contains functions converting between two different but	 http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
+	remote, syscall	this file should be broken up.		compatible x87 floating point state formats, for sending and receiving
+	archmig							archetecture specific sections of a given task's state, a function for
+								starting a new guest process, and support functions for handling
+								syscall requests from entry.S. first, we forward declare the functions
+								twd_fxsr_to_i387 and twd_i387_to_fxsr from arch/i386/kernel/i387.c.
+								we utilize them in creating fxsave_to_fsave and fsave_to_fxsave
+			make the order of operations in these	functions. fxsave_to_fsave is called by the later declared
+			two functions identical.		arch_mig_receive_fp to convert from fxsave to fsave format. we start
+								by copying the contents of the cwd, swd, fip, fcs, foo, and fos fields
+								of the from union to the to union. we then use twd_fxsr_to_i387() to
+								fill in our twd member. we then save padding[0] to our fop member, and
+								padding[1] to our mxcsr mrmber. next we perform a memcopy loop to copy
+								and convert the st_space member. this member contains fields that are
+								16 bytes long in fxsave format, and 10 bytes long in fsave format. we
+								loop through the fields, copying only the first 10 bytes to our to's
+								st_space. finally, we memcopy the xmm_space member. fsave_to_fxsave is
+								also called by arch_mig_receive_fp, to convert from fsave to fxsave
+								format. we start by copying the contents of the cwd, swd, fip, fcs,
+								foo, and fos to the 'to' union, from the 'from' union. we use
+								twd_i387_to_fxsr() to fill in our twd member, save padding[0] to our
+								fop member, and save padding[1] to our mxcsr member. after that, we
+								enter a loop, memcopying our 10 byte long members of st_space to 16
+								byte spaces. finally, we memcopy the xmm_space member. the next three
+								functions are for receiving archetecture specific state information.
+			BROKEN!	does not handle setting up	arch_mig_receive_specific is called by mig_do_receive in
+			LDT entries!				hpc/migrecv.c. its purpose is to receive the archetecture specific part
+								of a process. the one in this file has code to warn us that we're not
+								setting up the LDT correctly, and still returns success. if its asked
+								to setup anything else, we return -1. arch_mig_receive_proc_context is
+								called at the top of mig_do_receive_proc_context, from hpc/migrecv.c.
+								its function is to set up the CPU state from the passed in omp_mig_task
+								structure. we start by getting the pt_regs structure of the task we're
+			check failure in this function!		setting up with ARCH_TAK_GET_USER_REGS. we then overwrite it with
+								omp_mig_task's regs member. we overwrite our task's thread.debugreg
+								with arch.debugreg from omp_mig_task, as well as overwriting thread.fs
+								and thread.gs with arch.fs and arch.gs (setting up our segmentation
+								registers). we then copy the contents of the tls_array structure, which	http://lwn.net/Articles/5851/
+								contains the 'thread local space' segment offsets. this function always
+								returns 0. arch_mig_receive_fp is called by mig_do_recieve_fp, from
+								hpc/migrecv.c. its function is to set up the FPU state from the passed
+								in omp_mig_fp structure. we start by calling unlazy_fpu, to initialize
+								the FPU, then we check wether the current CPU has the fsxr instruction,
+								and whether the remote CPU has the fsxr instruction. if they both do,
+								or if they both don't, that means the floating point save is in the
+								same format, so we just memcpy the state from the omp_mig_fp struct to
+								the task's thread.i387 structure. otherwise, we call one of the above
+								two conversion functions (fxsave_to_fsave, or fsave_to_fxsave) to
+								perform the copy, while translating the formats. the next two functions
+								are called by mig_do_send in hpc/migsend.c, before and after doing the
+								actual work of sending a task to another node (home or remote).
+								arch_mig_send_pre clears the LDT if there is one set for this process,
+								and arch_mig_send_post loads the LDT back up, if there is one.
+								the next three functions are the send side, to match the three
+								arch_mig_recieve functions earlier. all three of these functions are
+								called from mig_do_send, in hpc/migsend.c. arch_mig_send_specific is a
+			STUB!					stub that looks like it was supposed to send the LDT, but instead
+								prints a warning if an LDT is being used. arch_mig_send_fp is called
+								to send the FPU state. we call unlazy_fpu, then fill in the fp
+								state(along with the fxsr flag). arch_mig_send_proc_context is called
+								to send the CPU context of a task. in it, we store the user registers,
+								segmentation registers (FS and GS), the thread local space entries, and
+								the debugreg registers to the passed in struct omp_mig_task. in
+								addition, if this task is marked DDEPUTY (meaning we're on the home
+								node), we also send the features of the boot CPU. arch_kickstart is the
+								function called to start up a newly "created" task. in it, we set up 
+								debug registers 0-3, 6, and 7 with set_debugreg(). we intentionally
+								omit registers 4 and 5 due to them being just aliases for 6 and 7. we
+								use load_TLS, sets up the thread local spaces, and use loadsegment to
+			do we need to flush pending signals?	load our FS and GS registers. we set CS to __USER_CS, flush pending
+								signals, and execute an assembly fragment that causes us to immediately
+								jump to the ret_from_kickstart entry point in entry.S. at this point
+			split this back off.			there's a break in the file, like this section used to be another file.
+								we include some headers, then define three functions that are part of
+								our syscall handling subsystem. arch_exec_syscall is called by 
+								deputy_do_syscall, to call a requested syscall on behalf of a remote
+								process. we use OMDEBUG_SYS to print a tracing message, look up the
+								requested syscall in the sys_call_table, and return the result of
+								calling it (through a function pointer) with the passed in arguments.
+			these functions belong in the same	the next two functions are called via the remote_sys_call_table in
+			place as user_thread!			/arch/i386/kernelomasm.h, by guest processes. om_sys_fork is called by 
+								a guest process, trying to fork. we just wrap remote_do_fork, passing
+								it a clone_flag of SIGCHLD, and null arguments for parent and child
+								thread pointers. om_sys_clone performs similarly, first checking for a
+								new stack pointer in CX. if there isn't one, we re-use the current
+								task's stack pointer. we accept the clone_flags in register ebx, the
+								parent tidptr in edx, and the child tidptr in edi. we pass all of this
+								to the same remote_do_fork as the previous function.
 027	ppc,arch_mig	creates hpc/arch-ppc.c			very similar to the previous file, but cleaner. 			<asm/uaccess.h>
 								arch_mig_receive_specific is a stub, returning 0.			<linux/kallsyms.h>
 			arch_mig_receive_proc_context and	arch_mig_receive_proc_context fills the passed structure with the 	<linux/sched.h>
@@ -1101,7 +1157,7 @@ hunk	class		file patched				description								noteworthy references
 								omp_mig_task state structure via comm_send_hd, then wait for a reply, 
 			check comm_recv's error value!		and return 0 if we get one. if comm_send_hd fails, we OMBUG about it, 
 								and return -1. mig_do_send is the wrapper that calls all the above 
-								in the proper order. its called by either task_remote_expel or 
+			bad prototypes of arch_mig functions!	in the proper order. its called by either task_remote_expel or 
 								task_local_send in hpc/migctrl.c. first we call arch_mig_send_pre to
 								do any archetecture specific work that needs done before migration. 
 								then, we send the task's components in the following order: MM, vmas, 
