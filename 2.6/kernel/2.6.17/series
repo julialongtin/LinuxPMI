@@ -102,8 +102,9 @@ linuxpmi/clean/025-fs_select_c-export_do_select.patch
 # archetecture specific migration functionality. and then some.
 linuxpmi/clean/026-hpc_arch_i386_c-arch_mig-create-breakup-broken-cleanup.patch
 
-# ppc, arch_mig
-linuxpmi/clean/027-hpc_arch_ppc_c-arch_mig.patch
+# ppc, local, remote, arch_mig, syscall
+# archetecture specific send/recv functions.
+linuxpmi/clean/027-hpc_arch_ppc_c-arch_mig-create-breakup-final.patch
 
 # x86_64, arch_mig
 linuxpmi/clean/028-hpc_arch_x86_64_c-arch_mig.patch

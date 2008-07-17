@@ -331,22 +331,41 @@ hunk	class		file patched				description								noteworthy references
 								task's stack pointer. we accept the clone_flags in register ebx, the
 								parent tidptr in edx, and the child tidptr in edi. we pass all of this
 								to the same remote_do_fork as the previous function.
-027	ppc,arch_mig	creates hpc/arch-ppc.c			very similar to the previous file, but cleaner. 			<asm/uaccess.h>
-								arch_mig_receive_specific is a stub, returning 0.			<linux/kallsyms.h>
-			arch_mig_receive_proc_context and	arch_mig_receive_proc_context fills the passed structure with the 	<linux/sched.h>
-			arch_mig_send_proc_context are the	contents of the user registers of the current process.			<hpc/debug.h>
-			same! oops!				arch_mig_receive_fp loads the current process' thread state with the 	<asm/ptrace.h>
-								floating point registers, scratchpad, and second scratchpad register	<hpc/prototype.h>
-			could we use const elsewhere to flag	from the passed in omp_mig_fp *. arch_mig_send_pre and			<hpc/protocol.h>
-			the previous mistake?			arch_mig_send_post are void stubs. arch_mig_send_specific is a stub	<hpc/arch.h>
-								that returns 0. arch_mig_send_fp fills the passed structure with the
-								contents of the floating point registers, the scratchpad, and second
-								scratchpad from the current process. arch_mig_send_proc_context
-								fills the passed structure with the contents of the user registers of
-								the current process. arch_kickstart branches to ret_from_kickstart,
-								to jump into userspace code in a newly created remote process
-								from openmosix kernel code. arch_exec_syscall calls a given syscall,
-								returning the results the syscall returned.
+027	ppc,arch_mig	creates hpc/arch-ppc.c			this patch is very similar to the previous patch, but cleaner.
+								arch_mig_receive_specific just returns 0. its called by mig_do_receive
+								from hpc/migrecv.c. its purpose is to receive the archetecture specific
+								part of a process, which aparently the PPC dosent have. 
+								arch_mig_receive_proc_context is called at the top of
+								mig_do_receive_proc_context, from hpc/migrecv.c. its purpose is to set 
+								the user registers of the current task to the contents of the passed in
+								omp_mig_task structure. in it, we simply use ARCH_TASK_GET_USER_REGS to
+			check return of memcpy!			retreive the registers in question, then memcpy over them from our
+								passed in structure. we always return 0. arch_mig_receive_fp is called
+								by mig_do_receive_fp, from hpc/migrecv.c. its function is to set up the
+								current task's FPU state to the one passed in the omp_mig_fp structure.
+								in it, we memcopy the floating point registers from the passed in
+			FIXME: fpscr_pad not needed?		structure over the task->thread->fpr, and copy the fpscr and fpscr_pad
+								as well. arch_mig_send_pre and arch_mig_send_post are void no-ops.
+								their purpose is to make a process "ready to be migrated" while we're
+								pulling the process apart, which aparently dosent need done on PPC.
+								they're called at the begining and end of mig_do_send in hpc/migsend.c,
+								respectively. arch_mig_send_specific is also a no-op, as the PPC has no
+								architecture specific "parts" of a process. in it, we just return 0.
+								arch_mig_send_fp is called by mig_do_send to fill the passed in
+								omp_mig_fp structure with the floating point state of the current
+			check this memcpy!			task. in it, we memcopy the task->thread->fpr structure into the
+			FIXME: fpscr_pad not needed?		omp_mig_fp, and set the fpscr and fpscr_pad members as well. we always
+								return 0. arch_mig_send_proc_context is called by mig_do_send to fill
+								in the passed in omp_mig_task structure with the CPU state of the
+								current task. in it, we use ARCH_TASK_GET_USER_REGS to get the pt_regs
+			check this memcpy!			structure, and just memcpy it into our omp_mig_task structure. we
+								return 0. arch_kickstart is called by mig_handle_migration to start a
+								guest process for the first time. to accomplish this, we get the user
+			what are we doing with mr 1, or the 	registers, and branch to ret_from_kickstart, passing our user registers
+			user registers?				as input. arch_exec_syscall is called by deputy_do_syscall to call a
+								requested syscall on behalf of a remote process, returning its result.
+								we look up the requested syscall in the sys_call_table, and return the
+								result of calling it.
 028	x86_64		creates hpc/arch-x86_64.c		similar to the previous file.						<asm/uaccess.h>
 								arch_mig_receive_specific is a stub, returning 0. 			<linux/kernel.h>
 								arch_receive_proc_context copies from our task structure to our		<linux/kallsyms.h>
