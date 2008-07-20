@@ -386,13 +386,17 @@ hunk	class		file patched				description								noteworthy references
 								om_sys_clone, om_sys_rt_sigsuspend, and om_sys_signalstack are declared
 								as unimplemented functions, printing an error and returning -1 when
 								called.
-029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. we use TCP/IP
-								sockets to pass information back and forth between kernels.
-			sock and sk need synced			first, we define three timeout variables (conn_remote_timeo,
-								comm_connect_timeo, and comm_reconn_timeo), which are initialized from
-			bad comments				values #defined in hpc/comm.h. comm_shutdown, is a wrapper to safely 
-								call sock->ops->shutdown. comm_getname is a wrapper to safely call
-								sock->ops->getname. it returns -1 if somethings null that shouldn't be,
+029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. in it, we use TCP/IP
+								sockets to pass migration related information between kernels.
+								first we define POLLIN_SET to be the set of events we want poll to tell
+								us about on a given socket, during comm_peek and comm_wait's invocation
+								of comm_poll. we then define three timeout variables 
+			dead code!				(conn_remote_timeo, comm_connect_timeo, and comm_reconn_timeo), which 
+								are initialized from values #defined in hpc/comm.h, and are used
+								nowhere. comm_shutdown is called in case of an error on recv()ing data
+								in comm_recv. its a wrapper, which safely calls sock->ops->shutdown,
+								making sure sock and sock->ops are non-null. comm_getname bis a wrapper
+								to safely call sock->ops->getname. it returns -1 if somethings null that shouldn't be,
 								or if getname returns null. comm_data_ready is a wrapper which calls
 								wake_up_interruptable to wake up task(s) in the sockets sleeping task
 			who else needs to do this?		queue. comm_setup_tcp first saves our current address space limit,	http://mail.nl.linux.org/kernelnewbies/2001-11/msg00204.html
