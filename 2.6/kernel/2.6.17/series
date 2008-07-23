@@ -106,7 +106,8 @@ linuxpmi/clean/026-hpc_arch_i386_c-arch_mig-create-breakup-broken-cleanup.patch
 # archetecture specific send/recv functions.
 linuxpmi/clean/027-hpc_arch_ppc_c-arch_mig-create-breakup-final.patch
 
-# x86_64, arch_mig
+# x86_64, local, remote, arch_mig
+# archetecture specific send/recv functions, plus syscall handling and guest process startup.
 linuxpmi/clean/028-hpc_arch_x86_64_c-arch_mig.patch
 
 # kcom

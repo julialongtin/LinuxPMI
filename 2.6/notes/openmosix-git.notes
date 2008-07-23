@@ -243,10 +243,10 @@ hunk	class		file patched				description								noteworthy references
 025	ksocket,local,	fs/select.c				this patch exports the do_select function, so that hpc/kcomd.c can use
 	remote							it to check for data on our pile of incoming sockets. this function is
 								is only exported if CONFIG_KCOMD is selected.
-026	i386, local	creates hpc/arch-i386.c			this file contains functions converting between two different but	 http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
-	remote, syscall	this file should be broken up.		compatible x87 floating point state formats, for sending and receiving
-	archmig							archetecture specific sections of a given task's state, a function for
-								starting a new guest process, and support functions for handling
+026	i386, local,	creates hpc/arch-i386.c			this file contains functions converting between two different but	 http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
+	remote, 	this file should be broken up.		compatible x87 floating point state formats, for sending and receiving
+	archmig,						archetecture specific sections of a given task's state, a function for
+	syscall							starting a new guest process, and support functions for handling
 								syscall requests from entry.S. first, we forward declare the functions
 								twd_fxsr_to_i387 and twd_i387_to_fxsr from arch/i386/kernel/i387.c.
 								we utilize them in creating fxsave_to_fsave and fsave_to_fxsave
@@ -276,7 +276,7 @@ hunk	class		file patched				description								noteworthy references
 								called at the top of mig_do_receive_proc_context, from hpc/migrecv.c.
 								its function is to set up the CPU state from the passed in omp_mig_task
 								structure. we start by getting the pt_regs structure of the task we're
-			check failure in this function!		setting up with ARCH_TAK_GET_USER_REGS. we then overwrite it with
+			check failure in this function!		setting up with ARCH_TASK_GET_USER_REGS. we then overwrite it with
 								omp_mig_task's regs member. we overwrite our task's thread.debugreg
 								with arch.debugreg from omp_mig_task, as well as overwriting thread.fs
 								and thread.gs with arch.fs and arch.gs (setting up our segmentation
@@ -324,17 +324,17 @@ hunk	class		file patched				description								noteworthy references
 								calling it (through a function pointer) with the passed in arguments.
 			these functions belong in the same	the next two functions are called via the remote_sys_call_table in
 			place as user_thread!			/arch/i386/kernelomasm.h, by guest processes. om_sys_fork is called by 
-								a guest process, trying to fork. we just wrap remote_do_fork, passing
-								it a clone_flag of SIGCHLD, and null arguments for parent and child
-								thread pointers. om_sys_clone performs similarly, first checking for a
-								new stack pointer in CX. if there isn't one, we re-use the current
-								task's stack pointer. we accept the clone_flags in register ebx, the
-								parent tidptr in edx, and the child tidptr in edi. we pass all of this
-								to the same remote_do_fork as the previous function.
-027	ppc,arch_mig	creates hpc/arch-ppc.c			this patch is very similar to the previous patch, but cleaner.
-								arch_mig_receive_specific just returns 0. its called by mig_do_receive
-								from hpc/migrecv.c. its purpose is to receive the archetecture specific
-								part of a process, which aparently the PPC dosent have. 
+								a guest process, trying to fork. we wrap remote_do_fork, passing it a
+								clone_flag of SIGCHLD, and null arguments for parent and child thread
+								pointers. om_sys_clone performs similarly, first checking for a new
+								stack pointer in CX. if there isn't one, we re-use the current task's
+								stack pointer. we accept the clone_flags in register ebx, the parent
+								tidptr in edx, and the child tidptr in edi. we pass all of this to the
+								same remote_do_fork as the previous function.
+027	ppc, local,	creates hpc/arch-ppc.c			this patch is very similar to the previous patch, but cleaner.
+	remote,							arch_mig_receive_specific just returns 0. its called by mig_do_receive
+	arch_mig,						from hpc/migrecv.c. its purpose is to receive the archetecture specific
+	syscall							part of a process, which aparently the PPC dosent have. 
 								arch_mig_receive_proc_context is called at the top of
 								mig_do_receive_proc_context, from hpc/migrecv.c. its purpose is to set 
 								the user registers of the current task to the contents of the passed in
@@ -366,37 +366,70 @@ hunk	class		file patched				description								noteworthy references
 								requested syscall on behalf of a remote process, returning its result.
 								we look up the requested syscall in the sys_call_table, and return the
 								result of calling it.
-028	x86_64		creates hpc/arch-x86_64.c		similar to the previous file.						<asm/uaccess.h>
-								arch_mig_receive_specific is a stub, returning 0. 			<linux/kernel.h>
-								arch_receive_proc_context copies from our task structure to our		<linux/kallsyms.h>
-			none of these functions return failure.	omp_mig_task structure the user registers, ds, es, fs, gs, fsindex,	<linux/sched.h>
-			why do they not return void?		gsindex, then uses write_pda to set gs to point to the per-processor	<hpc/debug.h>
-								datastructure. arch_mig_receive_fp calls unlazy_fpu, then memcopies the	<asm/ptrace.h>
-								thread.i387 datastructure. arch_mig_send_pre clears the LDT,		<asm/desc.h>
-								arch_mig_send_post loads the LDT (if we have one in our context). 	<asm/i387.h>
-								arch_mig_send_specific is a stub, returning 0.				<hpc/protocol.h>
-								arch_mig_send_proc_context copies from our omp_mig_task structure to 	<hpc/arch.h>
-								our task structure the user registers, ds, es, fs, gs, fsindex, 	<hpc/task.h>
-								gsindex, then uses read_pda to get the pointer to our per-processor	<hpc/syscalls.h>
-								datastructure out of the gs register. arch_kickstart sets debugging 	<hpc/prototype.h>
-								registers 0-3,6,7, loads up the segmentation registers, flushes
-								pending signals, and jmps to ret_from_kickstart. arch_exec_syscall just
-								calls a given syscall returning the results the syscall returned.
-								asmlinkage om_sys_fork calls remote_do_fork. om_sys_iopl, om_sys_vfork,
-								om_sys_clone, om_sys_rt_sigsuspend, and om_sys_signalstack are declared
-								as unimplemented functions, printing an error and returning -1 when
-								called.
-029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. in it, we use TCP/IP
-								sockets to pass migration related information between kernels.
-								first we define POLLIN_SET to be the set of events we want poll to tell
-								us about on a given socket, during comm_peek and comm_wait's invocation
-								of comm_poll. we then define three timeout variables 
-			dead code!				(conn_remote_timeo, comm_connect_timeo, and comm_reconn_timeo), which 
-								are initialized from values #defined in hpc/comm.h, and are used
-								nowhere. comm_shutdown is called in case of an error on recv()ing data
-								in comm_recv. its a wrapper, which safely calls sock->ops->shutdown,
-								making sure sock and sock->ops are non-null. comm_getname bis a wrapper
-								to safely call sock->ops->getname. it returns -1 if somethings null that shouldn't be,
+028	x86_64		creates hpc/arch-x86_64.c		this patch is very similar to the previous two patches.
+								arch_mig_receive_specific is called by mig_do_receive from
+								hpc/migrecv.c, to receive the architecture specific parts of a process.
+			STUB! ldt handling?			this function is a stub, returning 0. arch_receive_proc_context is
+								called at the top of hpc/migrecv.c's mig_do_receive_proc_context. its
+								function is to set up the CPU state, using the passed in omp_mig_task
+								structure as input. in it, we start by using ARCH_TASK_GET_USER_REGS to
+								retreive our task's pt_regs structure, which we overwrite with the regs
+								member from omp_mig_task, using memcpy. we then copy our segment
+								pointers (ds, es, fs, gs), our index registers (fsindex, gsindex), and
+								our userspace stack pointer (userrsp) from omp_mig_task's arch member
+			this is way different from x86.		to our task structure's thread member. we call write_pda to associate
+			check differences!			our new stack pointer with our task, and return 0. arch_mig_receive_fp
+								is called by hpc/migrecv.c's mig_do_receive_fp. its function is to
+								set up the FPU state, using the passed in omp_mig_fp structure as
+			bad comment. not all amd64 is opteron.	input. in it, we call unlazy_fpu, then memcopy our omp_mig_fp's data
+								member over the task's thread.i387 structure.  arch_mig_send_pre
+								is called at the top of hpc/migsend.c's mig_do_send. its function is to
+								prepare a task for migration. in it, we clear the LDT, if one is
+								present. arch_mig_send_post is called at the bottom of hpc/migsend.c's
+								mig_do_send, after migration of a process is complete. it restores the
+								LDT, if we cleared it earlier. arch_mig_send_specific is called by
+								hpc/migsend.c's mig_do_send, to send the architecture specific section
+			FIXME: send the LDT			of a process. it should be sending the LDT, but instead is a stub, 
+			FIXME: ordering. CPU, FPU, all else.	returning 0. arch_mig_send_fp is called by hpc/migsend.c's mig_do_send
+								to store the passed in task's FPU state in the passed in omp_mig_fp
+								structure. in this function, we unlazy_fpu, then memcopy the task's
+			check this memcpy.			thread.i387 structure into the omp_mig_fp. we return 0.
+								arch_mig_send_proc_context is called by hpc/migsend.c's mig_do_send to
+								store the passed in task's CPU state in the passed in omp_mig_task.
+								we aquire a pointer to the user registers using 
+			check this memcpy.			ARCH_TASK_GET_USER_REGS, and memcopy them in to the regs member of the
+			no thread locals in recv function!	passsed in omp_mig_fp structure. we then copy all the thread local 
+								spaces to the omp_mig_task's arch.tls_array. we copy the segmentation
+								and index registers (ds, es, fs, gs, fsindex, and gsindex), then
+								retreive our stack pointer using read_pda(oldrsp), copying it as well.
+								this function returns return 0, indicating success.
+								arch_kickstart is called by mig_handle_migration, in hpc/migrecv.c.
+								its function is to jump from our kernel code to the user space code of 
+								a guest process for the first time. to accomplish this, first we use
+			load_TLS is commented out! bug!		set_debugreg to load the debugging registers (0-3, 6, and 7). then,
+								we load the segmentation registers, using loadsegment for ds, es, and
+								fs, and use load_gs_index for the gs segment register. we set the
+								task's cs to __USER_CS, and its ds to __USER_DS, and set_fs(USER_DS).
+			should we be flushing?			we then flush pending signals, and jmp to ret_from_kickstart. this
+								function by definition never returns. arch_exec_syscall is called from
+								deputy_do_syscall in hpc/deputy.c. its function is to call a given
+								syscall, returning the results the syscall returned. in this
+								implimentation, we create inline assembly functions to perform the
+								call. om_sys_fork is called via the remote process table, by a guest
+								process trying to fork. we wrap remote_do_fork from hpc/remote.c,
+								passing it a clone_flag of SIGCHLD, and null arguments for parent and
+								child thread pointers. finally, we define five functions as stubs,
+			printk!					which printk an 'not implimented' message and return. each of these
+			not implimented? #warning.		functions is called by the remote_syscall_table. they are: om_sys_iopl,
+								om_sys_vfork, om_sys_clone, om_sys_rt_sigsuspend, and 
+								om_sys_signalstack. they return -1.
+029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. we use TCP/IP
+								sockets to pass information back and forth between kernels.
+			sock and sk need synced			first, we define three timeout variables (conn_remote_timeo,
+								comm_connect_timeo, and comm_reconn_timeo), which are initialized from
+			bad comments				values #defined in hpc/comm.h. comm_shutdown, is a wrapper to safely 
+								call sock->ops->shutdown. comm_getname is a wrapper to safely call
+								sock->ops->getname. it returns -1 if somethings null that shouldn't be,
 								or if getname returns null. comm_data_ready is a wrapper which calls
 								wake_up_interruptable to wake up task(s) in the sockets sleeping task
 			who else needs to do this?		queue. comm_setup_tcp first saves our current address space limit,	http://mail.nl.linux.org/kernelnewbies/2001-11/msg00204.html
