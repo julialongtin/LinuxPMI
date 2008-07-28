@@ -423,21 +423,35 @@ hunk	class		file patched				description								noteworthy references
 			not implimented? #warning.		functions is called by the remote_syscall_table. they are: om_sys_iopl,
 								om_sys_vfork, om_sys_clone, om_sys_rt_sigsuspend, and 
 								om_sys_signalstack. they return -1.
-029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. we use TCP/IP
-								sockets to pass information back and forth between kernels.
-			sock and sk need synced			first, we define three timeout variables (conn_remote_timeo,
-								comm_connect_timeo, and comm_reconn_timeo), which are initialized from
-			bad comments				values #defined in hpc/comm.h. comm_shutdown, is a wrapper to safely 
-								call sock->ops->shutdown. comm_getname is a wrapper to safely call
-								sock->ops->getname. it returns -1 if somethings null that shouldn't be,
-								or if getname returns null. comm_data_ready is a wrapper which calls
-								wake_up_interruptable to wake up task(s) in the sockets sleeping task
-			who else needs to do this?		queue. comm_setup_tcp first saves our current address space limit,	http://mail.nl.linux.org/kernelnewbies/2001-11/msg00204.html
-								turns on kernel address space, uses sock_setsockopt
-			should this be comm_wrappers.c?		to set SO_KEEPALIVE, then uses sock->ops->setsockopt to set
-								TCP_KEEPINTVL TCP_KEEPCNT, TCP_KEEPIDLE, and TCP_NODELAY. it restores	http://www-128.ibm.com/developerworks/linux/library/l-hisock.html
-								our original address space limit, and exits. comm_socket is a wrapper
-								around sock_create, returning NULL on error. comm_bind is a wrapper
+029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. in it, we use TCP/IP
+								sockets to pass migration related information between kernels.
+								first we define POLLIN_SET to be the set of events we want poll to tell
+								us about on a given socket, during comm_peek and comm_wait's invocation
+								of comm_poll. we then define three timeout variables 
+			dead code!				(conn_remote_timeo, comm_connect_timeo, and comm_reconn_timeo), which 
+								are initialized from values #defined in hpc/comm.h, and are used
+								nowhere. comm_shutdown is called in case of an error on recv()ing data
+								in comm_recv. its a wrapper, which safely calls sock->ops->shutdown,
+								making sure sock and sock->ops are non-null. comm_getname bis a wrapper
+								to safely call sock->ops->getname. we return -1 in case sock->ops is
+								null, sock->ops->getname is null, or if getname returns null.
+								otherwise, we return the size of the passed in sockaddr. 
+			dead code!				comm_data_ready is a wrapper which calls wake_up_interruptable to wake
+								all the tasks in the passed in socket's sleeping task queue. it is
+								called by no-one, and is in fact dead code. comm_setup_tcp is called by 
+								the later defined comm_accept, to set up the options on the passed in 
+			who else does this?			connection. first we save our current user space address space 
+								selector, and set ourselves to use the kernel address space. then, we	http://mail.nl.linux.org/kernelnewbies/2001-11/msg00204.html
+								use sock_setsockopt to set SO_KEEPALIVE on the passed in socket, then
+			FIXME? old code.			use sock->ops->setsockopt to set TCP_KEEPINTVL TCP_KEEPCNT, 
+								TCP_KEEPIDLE, and TCP_NODELAY. finally, we restore our origional 	http://www-128.ibm.com/developerworks/linux/library/l-hisock.html
+								address space limit, and exit with 0 if everything was successful. if
+								any of our setsockopt functions return non-zero, we restore our
+								origional address space limit, and return the error value in question.
+			this function is useless!		comm_socket is called by comm_setup_listen, and comm_setup_connect. 
+								its function is to be a wrapper around sock_create, returning NULL in
+								case of an error, instead of the error sock_create would normally
+								return. comm_bind is a wrapper
 			missing checks!				around sock->ops->bind that logs an error via printk, comm_listen is a
 			missing checks!				wrapper around sock->ops->listen. comm_connect connects to a remote
 			missing checks!				kernel via the passed socket, to the passed address. it adds the
