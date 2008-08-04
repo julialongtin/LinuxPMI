@@ -448,47 +448,145 @@ hunk	class		file patched				description								noteworthy references
 								address space limit, and exit with 0 if everything was successful. if
 								any of our setsockopt functions return non-zero, we restore our
 								origional address space limit, and return the error value in question.
-			this function is useless!		comm_socket is called by comm_setup_listen, and comm_setup_connect. 
+			this function is useless.		comm_socket is called by comm_setup_listen, and comm_setup_connect. 
 								its function is to be a wrapper around sock_create, returning NULL in
 								case of an error, instead of the error sock_create would normally
-								return. comm_bind is a wrapper
-			missing checks!				around sock->ops->bind that logs an error via printk, comm_listen is a
-			missing checks!				wrapper around sock->ops->listen. comm_connect connects to a remote
-			missing checks!				kernel via the passed socket, to the passed address. it adds the
-								current process to the socket's sleeping task queue, and asynchronously	
-								asks for the connection to be established. we enter a loop, marking 
-								the current process TASK_INTERRUPTIBLE, requesting connection
-								establishment asynchronously, then uses schedule_timeout to go away. 
-								when the connection succeeds, we leave the loop, mark the current 
-								process TASK_RUNNING, and return 0. comm_close is a wrapper around 
-								sock_release. comm_peek returns whether a socket has data pending. 
-			sighfile needs more docs.		comm_poll waits on an "event" to occur on a socket via poll(), until
-								the passed timeout period, or MAX_SCHEDULE_TIMEOUT. it uses a similar
-								method as the earlier comm_connect, only we use poll() to see if there	
-								is any data waiting for us on the socket. if there is, return 1,  
-			comm_wait should be a define?		otherwise we return 0 when we hit our timeout period. comm_wait is a 
-								wrapper around comm_poll, filling in some default parameters. comm_accept
-								receives a passed socket thats been connected to, creates a new socket, 
-								and uses it to accept a connection from a remote kernel. once comm_poll
-								indicates there's data on the passed socket, we use comm_setup_tcp 
-								to set the connection options on the new socket. if that succeeds, we 
-								return 0. otherwise, we destroy our newly created socket, and return 
-								the relevant error. comm_dorecv wraps the sock_recvmsg api to
-			s/lenght/length				read a given amount of data from a socket. comm_recv wraps
-								comm_dorecv, but also uses the address space change trick of earlier to
-								jump into KERNEL_DS, and in case of short read we OMBUG(), then call 
-								comm_shutdown(link), returning the error from comm_dorecv. comm_send
-			when should we printk,			uses the address space change, then wraps sock_sendmsg(). in case of 
-			when should we OMBUG()?			short send, it printks and just returns the error. next is a 
+								return. comm_bind is called by comm_setup_listen, to bind our socket to
+								a given address and port. it is a wrapper around sock->ops->bind. in
+			printk!					the event of an -EADDRINUSE error, we log a message using printk. in
+								any event, we return the value sock->ops->bind returned to us. 
+								comm_listen is called by comm_setup_listen to start listening to a
+								passed in socket. its a wrapper around sock->ops->listen, returning the
+								result given to us. comm_connect is called by comm_setup_connect to 
+								connect to a remote kernel at the passed in address, via the passed
+								socket. in it, we start by creating a waitqueue entry for the current
+								process. we then check to see if we were passed a timeout value. if we
+								were, we use that timeout when trying to connect() to a remote machine,
+								with an asychronous request. otherwise, we use MAX_SCHEDULE_TIMEOUT. we
+								then insert our waitqueue entry into the passed in socket's sk_sleep
+								waitqueue. we enter a while loop, waiting for sock->state to be 
+								SS_CONNECTED. in this loop, we mark ourselves TASK_INTERRUPTABLE, then
+								request another asynchronous connect. if we get an error thats not
+								-EALREADY, we break out of our loop, as it means something went wrong
+								with the socket. otherwise, we then schedule_timeout for a maximum of
+								the remainder of our timeo, storing the remainder that schedule_timeout
+								returns in timeo. if timeo runs out, we set error to -EAGAIN, and break
+								out. at the bottom of the loop, the while checks to see if the socket
+								connected, and continues on if it did. after the loop, we first remove
+								ourself from the socket's waitqueue, and set our state to TASK_RUNNING.
+								we then check to see if error is non-zero. if it is, then either we had
+								a problem with the socket, or we ran out of time. we handle this by
+								OMBUGing a message indicating connection failed, and returning the
+								error value in error. we then do another check on the socket, to make
+								sure it dosent have an error on it already. if it does, we OMBUG about
+								it, and return the error. finally, since no errors occured, and the
+								socket is connected, we return 0 indicating success. comm_close is a
+								wrapper around sock_release, called by comm_setup_listen,
+								comm_setup_connect, and hpc/migctrl.c's task_local_send in cases of
+								failure, hpc/migctrl.c's task_remote_expel when we're done expelling a
+								process, task_local_bring when we're done receiving a process back
+								home, and hpc/migrecv.c's openmosix_mig_daemon when we fail to accept
+								an incoming process, or our user_thread() returns. comm_peek is called
+								by hpc/kernel.c's remote_pre_usermode to see if data is waiting on the
+								passed in socket. it returns 1 for data waiting, 0 if not. comm_poll is	
+			sighfile is used here, but earlier we	called by comm_wait and comm_accept to wait on an "event" to occur on a
+			used NULL. which is correct?		passed in socket. in it, the first thing we do is create an empty file
+								pointer, for later use while polling. we then create a waitqueue entry
+								for the current process. we check to see if a timeout value was passed
+								in, and if one was, we use it. otherwise, we use MAX_SCHEDULE_TIMEOUT.
+								we add our wait_queue entry into the passed in socket's waitqueue, and
+								enter a loop, with no termation clause. in this loop, we first set our
+								current state to TASK_INTERRUPTABLE, then get the result of polling our
+								socket, supplying sighfile as a placeholder. we check to see if any of
+								the poll events in our poll mask are true, and if interruptable is set,
+								we check to see if we have a pending signal, or a pending openmosix
+								data request. if any of these things have occured, we exit our loop.
+								otherwise, we use schedule_timeout to give up the CPU until we're
+								interrupted, or our timeout has expired. when schedule_timeout returns,
+								we check to see if our timeout has expired, and if it has, we exit our
+								loop. otherwise, we loop back to the top of our loop. after the loop,
+								we remove ourself from the socket's waitqueue, and set our state to
+								TASK_RUNNING. if the last poll result we received from poll has an
+								event that is in our passed in poll mask, we return 1. otherwise, we
+			comm_wait should be a define?		return 0. comm_wait is called by hpc/deputy.c's deputy_main_loop, to
+								check for communication on a given socket. its a wrapper around 
+								comm_poll, filling in some default parameters. it asks comm_poll to
+								check against POLLIN_SET as a poll mask, look for interruptable events,
+								and use the default timeout value. for a return value, we return what
+								comm_poll returns to us. comm_accept is called by hpc/migrecv.c's
+								openmosix_mig_daemon, to accept an incoming connection on a given
+								socket. in it, we receive a passed in socket thats been connected to,
+								create a new socket, and set its type and ops members the same as the
+			what error are we looking for here?	socket passed in. we then make sure theres no data to be read on the
+								passed in socket with comm_poll. after that, we call sock->ops->accept 
+								to accept the connection attempting to attach to the passed in socket,
+								on the newly created socket. we then use comm_setup_tcp to set the
+								connection options on the new socket. if that succeeds, we set the
+								passed in target socket pointer to our newly created socket, and return
+								0. if comm_poll finds data on our passed in socket, we return -EAGAIN,
+								set our passed in target socket pointer to NULL, and destroy our newly
+								created socket. if either accept() or comm_setup_tcp() fail, we return
+								the error they return to us, set our passed in target socket pointer to
+								NULL, and destroy our newly created socket. comm_dorecv is called by
+			s/lenght/length				comm_recv to do the actual work of reading a given ammount of data from
+								the passed in socket. we start by entering a do...while loop, waiting
+								for the count of bytes left to be received to hit zero. we initialize
+								that count with the passed in length of data to be received. in this 
+								loop, we call sock_recvmsg, to receive a number of bytes from the
+								passed in socket. we check the value returned to see if its an error,
+								or a count of bytes returned. if its an error, first we check to see if
+								the error was -EFAULT. if it is, we update the passed in message
+								structure's msg_iovlen and msg_iov members, indicating how much of the
+								request was filled, and return the number of bytes received. if the
+								error was any other error, we return the error value in question. if
+								sock_recvmsg returns 0, we return -EPIPE. otherwise, sock_recvmsg was
+								successful, and returns a number of bytes received. we update our
+								variable containing the number of bytes still left to be read, and
+								check to see if we have read the entire ammount of bytes we are
+								supposed to read. if we have, we update the passed in message
+			this if inside the loop should be	structure's msg_iov and msg_iovlen members, and return the number of
+			outside! as well, the for and while in	bytes read. comm_recv is called to receive a given ammount of data from
+			the loop should be made similar in	comm_dorecv. we BUG_ON() if the socket pointed to is null, or if the
+			structure.				ammount of data requested is greater than the size of a single page of
+								memory. we create a msghdr structure to use in the request, and set its
+								iov_base member to point to the passed in write buffer pointer, and set
+								the iov_len to the length of data we're requesting. we then use get_fs	http://kerneltrap.org/mailarchive/linux-kernel-newbies/2007/10/25/355049
+								and set_fs to allow us to call a system call from the kernel. we call
+								comm_dorecv to actually talk to the socket in question, then check its
+								result. if comm_dorecv dosent return the right ammount of data read, we
+								OMBUG() about it, then call comm_shutdown(link), returning -EFAULT
+								after restoring our fs. otherwise, we restore our fs, and return the
+								length of the data read. comm_send uses the same fs manipulation trick
+								as above to allow us to call syscalls from kernel space, then wraps
+								sock_sendmsg(), printk'ing a message if we fail to send the proper
+								ammount of data. we return the number of bytes transmitted. next is a 
 								"openmosix specifics start here" marker in the comments.		<hpc/protocol.h>
-								set_our_addr sets up the passed sockaddr structure with its default
-								family, INADDR_ANY, and the passed port. comm_setup_listen uses 
-								comm_socket, comm_bind, and comm_listen to set up a listening socket. 
-								comm_setup_connect opens a connection to a target
-								kernel using comm_socket, then comm_connect. comm_send_hd sends a data
-								segment, with a omp_req header, then the data itself.
-								finally, comm_send_req sends a omp_req structure, containing only the
-								type, no data.
+								set_our_addr is called by hpc/migrecv.c's openmosix_mig_daemon to set
+								the passed in sockaddr structure's sin_family, sin_addr, and sin_port
+								members. for IPV4 sockets, we set family to AF_INET, address to
+			no IPV6 setup?				INADDR_ANY, and port to the passed in port. for IPV6 sockets, we do
+								nothing. comm_setup_listen is called by hpc/migrecv.c's 
+								openmosix_mig_daemon, and hpc/remote.c's remote_do_fork. its purpose
+								is to set up a listening socket, ready for a remote kernel to connect
+								to. in it, we call comm_socket to create a socket of the same type as
+								the socket passed in, then call comm_bind to bind the socket to the
+								requested address and port. finally, we call comm_listen start
+								listening on that socket, and return the socket. if comm_socket fails,
+								we return NULL. otherwise, if comm_bind or comm_listen fail, we destroy
+								our socket, and return the error returned to us by the function that
+								failed. comm_setup_connect is called by hpc/deputy.c's deputy_do_fork,
+								and hpc/migctrl.c's task_local_send. its purpose is to open a socket to
+								a remote kernel. in it, we use comm_socket to create a socket, then use
+								comm_connect to connect to a listening socket on the target machine. 
+								we return the connected socket. if comm_socket fails, we return NULL.
+			return comm_connect's error?		if comm_connect fails, we destroy the socket, and return NULL.
+								comm_send_hd is called to send a data segment with a omp_req header
+								attached. in the header, we set the type and dlen to the passed in type
+								and length, respectively. we then use comm_send to send the header,
+								then the data. we return 0 on success, and if either invocation of
+			return comm_send's errors?		comm_send return an error, we return -1. comm_send_req sends a omp_req
+								structure, containing only the passed in type, no data. it returns the
+								value returned from comm_send.
 030 	rmem		creates hpc/copyuser.c			this file contains routines for moving chunks of memory over an		<linux/sched.h>
 								established connection. its broken into two parts, deputy_* functions,	<hpc/protocol.h>
 								and remote_* functions. deputy_ functions are run on the home node, and	<hpc/debug.h>
@@ -569,7 +667,7 @@ hunk	class		file patched				description								noteworthy references
 								stub, not printking anything of value.
 033	debugfs		creates hpc/debugfs.c			this file contains the debugfs module. it starts with a dentry		<hpc/hpc.h>
 								structure for the om/ debugfs directory itself, then we define four 
-								file entries, pointing the migration, syscall, rinode, and copyuser
+[5~								file entries, pointing the migration, syscall, rinode, and copyuser
 			move om_opts here?			files to entries the om_opts structure (defined in hpc/kernel.c), 
 			we don't seem to be using these		and an array of dentry structures for the four files. om_debugfs_init
 			debug values anywhere else, what is	is called to initialize the module. it calls debugfs_create_dir to 
