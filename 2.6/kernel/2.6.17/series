@@ -117,6 +117,7 @@ linuxpmi/clean/029-hpc_comm_c-kcom.patch
 linuxpmi/clean/030-hpc_copyuser_c-rmem-create.patch
 
 # omctrlfs
+# local, 
 linuxpmi/clean/031-hpc_ctrlfs_c-omctrlfs-create-cleanup.patch
 
 # debug

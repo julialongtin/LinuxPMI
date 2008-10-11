@@ -523,26 +523,35 @@ hunk	class		file patched				description								noteworthy references
 								other than that, its a large select case. we return from it when we 
 								receive a endtype packet, returning 0. if there's an unrecognized
 								packet, we call remote_disappear to die.
-031	omctrlfs	creates hpc/ctrlfs.c			omctrlfs is the future filesystem for performing migration and		http://osdir.com/ml/linux.cluster.openmosix.devel/2006-01/msg00028.html
-								remote process state monitoring. this file is a stub of support for	<linux/config.h>
-								this filesystem type. CTRLFS_MAGIC is the magic string at the beginning	<linux/module.h>
-								of the FS for the filesystem layer to recognize this FS type. 		<linux/fs.h>
-								ctrlfs_fill_super wraps simple_fill_super(), passing it our		<linux/mount.h>
-								CTRLFS_MAGIC, and our empty list of files.  ctrlfs_get_sb wraps
-								get_sb_single(), telling it to use ctrlfs_fill_super to generate our
-								filesystem's superblock. we then have a file_system_type structure, 
-								mapping .get_sb to our ctrlfs_get_sb, and .kill_sb to a generic cleanup
-								function. om_ctrlfs_init is called from the kernel to init the 
-								module. it calls register_filesystem() with the previously defined
-								file_system_type structure. om_ctrlfs_exit is called previous to
-								removing the module. it calls simple_release_fs(), then
-								unregister_filesystem(). we then define the init and exit points for
-								the module, register the license and the author.
-032	debug		creates hpc/debug.c			this file contains debugging assisting code. it starts with debug_mlink	<asm/uaccess.h>
-								which is a wrapper which printks the address of a socket. 		<linux/kallsyms.h>
-								debug_page creates a checksum of a 4096 byte page of memory, and 	<linux/sched.h>
-			check incoming pointers!		printks the results. debug_vmas dumps the starting address and ending	<linux/config.h>
-								address of each vma belonging to a given mm_struct. debug_signals is a	<hpc/debug.h> <hpc/protocol.h> <hpc/comm.h>
+031	omctrlfs, local	creates hpc/ctrlfs.c			omctrlfs is the future filesystem for performing migration and		http://osdir.com/ml/linux.cluster.openmosix.devel/2006-01/msg00028.html
+								remote process state monitoring. this file is a stub, implimenting this
+								filesystem type as simply as possible. we start by defining 
+								CTRLFS_MAGIC, which is the magic string the filesystem layer will use
+			dead code.				to recognize this FS type. we then create a vfsmount structure, which
+								is normally used to track our filesystem state, but is not used in this
+								module. next, we declare our mount count, which is used to track how
+								many times this filesystem has been mounted. this is only used when
+								de-registering the filesystem. ctrlfs_fill_super is called as a 
+								callback function by our invocation of get_sb_single in ctrlfs_get_sb.
+								ctrlfs_fill_super wraps simple_fill_super(), passing it our
+								CTRLFS_MAGIC, and our empty list of files.  ctrlfs_get_sb is called by
+								the kernel's filesystem layer via the ctrlfs_type variable we send to
+								register_filesystem. in it, we wrap get_sb_single(), telling it to use
+								ctrlfs_fill_super to generate our filesystem's superblock. we then
+								declare a file_system_type structure, mapping .get_sb to our 
+								ctrlfs_get_sb above, and .kill_sb to a generic cleanup function.
+								om_ctrlfs_init is called from the kernel to initialize the module. in
+								it, we just call register_filesystem() with the previously defined
+								file_system_type structure. om_ctrlfs_exit is called prior to removing
+								the module. in it, we call simple_release_fs(), then
+								unregister_filesystem(). we then use module_init() and module_exit() to
+								define the init and exit points for this module, then register the
+								license and the author.
+032	debug		creates hpc/debug.c			this file contains debugging assisting code. it starts with debug_mlink
+								which is a wrapper which printks the address of a socket.
+								debug_page creates a checksum of a 4096 byte page of memory, and
+			check incoming pointers!		printks the results. debug_vmas dumps the starting address and ending
+								address of each vma belonging to a given mm_struct. debug_signals is a
 								stub, not printking anything of value.
 033	debugfs		creates hpc/debugfs.c			this file contains the debugfs module. it starts with a dentry		<hpc/hpc.h>
 								structure for the om/ debugfs directory itself, then we define four 
