@@ -111,10 +111,11 @@ linuxpmi/clean/027-hpc_arch_ppc_c-arch_mig-create-breakup-final.patch
 linuxpmi/clean/028-hpc_arch_x86_64_c-arch_mig-create-breakup-broken.patch
 
 # kcom, local, remote
-# kernel-to-kernel communication system.
+# a simple socket layer wrapper for openmosix communications. all tcp/ip communication goes through here.
 linuxpmi/clean/029-hpc_comm_c-kcom-create-broken-cleanup.patch
 
-# rmem
+# rmem, local, remote
+# support infrastructure for remote memory access, during syscalls.
 linuxpmi/clean/030-hpc_copyuser_c-rmem-create.patch
 
 # omctrlfs

@@ -423,8 +423,8 @@ hunk	class		file patched				description								noteworthy references
 			not implimented? #warning.		functions is called by the remote_syscall_table. they are: om_sys_iopl,
 								om_sys_vfork, om_sys_clone, om_sys_rt_sigsuspend, and 
 								om_sys_signalstack. they return -1.
-029	kcom		creates hpc/comm.c			this is the kernel-to-kernel communication system. in it, we use TCP/IP
-								sockets to pass migration related information between kernels.
+029	kcom, local,	creates hpc/comm.c			this is the kernel-to-kernel communication system. in it, we use TCP/IP
+	remote							sockets to pass migration related information between kernels.
 								first we define POLLIN_SET to be the set of events we want poll to tell
 								us about on a given socket, during comm_peek and comm_wait's invocation
 								of comm_poll. we then define three timeout variables 
@@ -560,73 +560,146 @@ hunk	class		file patched				description								noteworthy references
 								as above to allow us to call syscalls from kernel space, then wraps
 								sock_sendmsg(), printk'ing a message if we fail to send the proper
 								ammount of data. we return the number of bytes transmitted. next is a 
-								"openmosix specifics start here" marker in the comments.		<hpc/protocol.h>
-								set_our_addr is called by hpc/migrecv.c's openmosix_mig_daemon to set
-								the passed in sockaddr structure's sin_family, sin_addr, and sin_port
-								members. for IPV4 sockets, we set family to AF_INET, address to
-			no IPV6 setup?				INADDR_ANY, and port to the passed in port. for IPV6 sockets, we do
-								nothing. comm_setup_listen is called by hpc/migrecv.c's 
-								openmosix_mig_daemon, and hpc/remote.c's remote_do_fork. its purpose
-								is to set up a listening socket, ready for a remote kernel to connect
-								to. in it, we call comm_socket to create a socket of the same type as
-								the socket passed in, then call comm_bind to bind the socket to the
-								requested address and port. finally, we call comm_listen start
-								listening on that socket, and return the socket. if comm_socket fails,
-								we return NULL. otherwise, if comm_bind or comm_listen fail, we destroy
-								our socket, and return the error returned to us by the function that
-								failed. comm_setup_connect is called by hpc/deputy.c's deputy_do_fork,
-								and hpc/migctrl.c's task_local_send. its purpose is to open a socket to
-								a remote kernel. in it, we use comm_socket to create a socket, then use
-								comm_connect to connect to a listening socket on the target machine. 
-								we return the connected socket. if comm_socket fails, we return NULL.
-			return comm_connect's error?		if comm_connect fails, we destroy the socket, and return NULL.
-								comm_send_hd is called to send a data segment with a omp_req header
-								attached. in the header, we set the type and dlen to the passed in type
-								and length, respectively. we then use comm_send to send the header,
-								then the data. we return 0 on success, and if either invocation of
-			return comm_send's errors?		comm_send return an error, we return -1. comm_send_req sends a omp_req
-								structure, containing only the passed in type, no data. it returns the
-								value returned from comm_send.
-030 	rmem		creates hpc/copyuser.c			this file contains routines for moving chunks of memory over an		<linux/sched.h>
-								established connection. its broken into two parts, deputy_* functions,	<hpc/protocol.h>
-								and remote_* functions. deputy_ functions are run on the home node, and	<hpc/debug.h>
-								remote_ functions run on the node a process has been migrated to.	<hpc/prototype.h>
-								deputy_copy_from_user requests a given memory segment from the remote	<hpc/hpc.h>
-								node. it uses comm_send_hd to send the address to read and the size to 
-			OMDEBUG_CPYUSER() is being used in the	read to the remote host. it then uses comm_recv to recv the results
-			deputy code to printk with a unique	directly to the passed destination. its symbol is exported via 
-			format?					EXPORT_SYMBOL(). deputy_strncpy_from_user requests a given memory
-								segment from the remote node, and should be merged with the previous
-								function. it uses comm_send_hd to send the address to read and the size
-								to read to the remote host. it then uses comm_recv to recv the results
-								directly to the passed destination. its symbol is not exported.
-								deputy_copy_to_user functions similarly, using comm_send_hd to send the
-								address to write and the size, then comm_send to send the data to be 
-								written to the remote node. its symbol is EXPORT_SYMBOL'd. 
-								deputy_strnlen_user sends the address and length via comm_send_hd, then
-								uses comm_recv to get the result from the remote node. its symbol is 
-								EXPORT_SYMBOL'd. deputy_put_userX writes a value of 64bits or less 
-								using a single call to comm_send_hd. its symbol is not exported. 
-								deputy_put_user puts a long to remote by calling deputy_put_userX. 
-								its symbol is EXPORT_SYMBOL'd. if BITS_PER_LONG < 64, we create a 
-								deputy_put_user64 that uses deputy_put_userX to put a up to 64 bit 
-								value to remote, and EXPORT_SYMBOL it. deputy_get_userX gets a 64 bit 
-								or less value from remote using comm_send_hd, then comm_recv. its 
-								symbol is not exported. deputy_get_user wraps deputy_get_userX, 
-								warning us if its asked for something greater than sizeof(long). its 
-								symbol is EXPORT_SYMBOL'd. if BITS_PER_LONG < 64, we create a 
-								deputy_get_user64 that uses deputy_get_userX to get a 64 bit value 
-								from the remote node. its symbol is EXPORT_SYMBOL'd. at this point, we
-								start into code running on the remote node, responding to the above 
-								sections of code. remote_copy_user handles requests from d
-								eputy_copy_to_user and deputy_copy_from_user. its symbol is not
-								exported.  remote_strncpy_from_user performs strncpy_from_user on 
+								"openmosix specifics start here" marker in the comments. set_our_addr 
+								is called by hpc/migrecv.c's openmosix_mig_daemon to set the passed in
+								sockaddr structure's sin_family, sin_addr, and sin_port members. for
+								IPV4 sockets, we set family to AF_INET, address to INADDR_ANY, and port	
+			no IPV6 setup?				to the passed in port. for IPV6 sockets, we do nothing.
+								comm_setup_listen is called by hpc/migrecv.c's openmosix_mig_daemon,
+								and hpc/remote.c's remote_do_fork. its purpose is to set up a listening
+								socket, ready for a remote kernel to connect to. in it, we call
+								comm_socket to create a socket of the same type as the socket passed
+								in, then call comm_bind to bind the socket to the requested address and
+								port. finally, we call comm_listen start listening on that socket, and
+								return the socket. if comm_socket fails, we return NULL. otherwise, if
+								comm_bind or comm_listen fail, we destroy our socket, and return the
+								error returned to us by the function that failed. comm_setup_connect is
+								called by hpc/deputy.c's deputy_do_fork, and hpc/migctrl.c's
+								task_local_send. its purpose is to open a socket to a remote kernel. in
+								it, we use comm_socket to create a socket, then use comm_connect to
+								connect to a listening socket on the target machine. we return the
+								connected socket. if comm_socket fails, we return NULL. if comm_connect
+			return comm_connect's error?		fails, we destroy the socket, and return NULL. comm_send_hd is called
+								to send a data segment with a omp_req header attached. in the header,
+								we set the type and dlen to the passed in type and length,
+								respectively. we then use comm_send to send the header, then the data.
+								we return 0 on success, and if either invocation of comm_send return an 
+			return comm_send's errors?		error, we return -1. comm_send_req sends a omp_req structure,
+								containing only the passed in type, no data. it returns the value
+								returned by comm_send.
+030 	rmem, local,	creates hpc/copyuser.c			this file contains routines for moving chunks of memory over an
+	remote							established connection. its broken into two parts, deputy_* functions,
+								and remote_* functions. deputy_ functions are run on the home node, and
+								remote_ functions are run on the node a process has been migrated to.
+								deputy_copy_from_user is called by include/asm-i386/uaccess.h's
+								__copy_from_user_inatomic, include/asm-x86_64/uaccess.h's
+								__copy_from_user, and arch/x86_64/lib/copy_user.S's copy_from_user. its
+								purpose is to read a given memory segment from the remote node. in it,
+			BUG! use of in_atomic is flatout wrong!	we use in_atomic to detect if we're in an atomic section of the	kernel,	http://lwn.net/Articles/274695/
+								and if we are, we return the length of the memory area requested as an
+								error. otherwise, we fill in an omp_usercopy_req structure with the
+								passed in from address and passed in length, then we use 
+			OMDEBUG_CPYUSER() is being used in the	OMDEBUG_CPYUSER to log a message about the source, destination, and
+			deputy code to printk with a unique	length. we use comm_send_hd to send said omp_usercopy_req to the remote
+			format?					node, then use comm_recv to receive the results directly to the passed
+								in destination. we return 0 indicating success. if comm_send_hd or
+			seperate OMBUG invocations!		comm_recv return an error, we OMBUG the error value, and return -1. we
+								export a symbol pointing to this function using EXPORT_SYMBOL(). 
+			make this function and the previous	deputy_strncpy_from_user is called by arch/x86_64/lib/usercopy.c's
+			have similar orders of operation.	__strncpy_from_user and strncpy_from user, as well as fs/namei.c's 
+								getname. its function is virtually identical to the previous function,
+								and reads a given memory segment from the remote node. in it, we use
+								OMDEBUG_CPYUSER to log a messae containing the source, destination, and
+								length of the requested segment. we then fill in a omp_usercopy_req
+								structure with the passed in source address, and passed in length. we
+								use comm_send_hd to send the omp_usercopy_req to the remote node, then
+								use comm_recv to receive the results directly into the passed in
+								destination. we return 0 indicating success. if comm_send_hd or
+			seperate OMBUG invocations!		comm_recv return an error, we OMBUG the error value, and return -1.
+			make this function and the previous	deputy_copy_to_user is called by include/asm-i386/uaccess.h's
+			two have similar orders of operation.	__copy_to_user_inatomic, include/asm-x86_64/uaccess.h's __copy_to_user,
+								and arch/x86_64/lib/copy_user.S's copy_to_user. its purpose is to 
+								write a passed in memory segment to the remote node. in this function,
+			use of in_atomic is incorrect!		we first use in_atomic to check if we are in an atomic state, and if we
+								are, we return the number of bytes requested to be written, indicating
+								failure. if we're not in atomic state, we use OMDEBUG_CPYUSER to log a
+								message about the source, destination, and length. then we fill in a 
+								omp_usercopy_req structure with the passed in target address, and
+								passed in length. we use comm_send_hd to send the omp_usercopy_req 
+								structure to the remote node, then use comm_send to send the actual
+								data to be written. we return 0 indicating success. if comm_send_hd or
+			seperate OMBUG invocations!		comm_send return an error, we OMBUG the error value, and return -1.
+								deputy_copy_to_user is exported as a symbol with EXPORT_SYMBOL().
+			make this function and the previous	deputy_strnlen_user is called by arch/i386/lib/usercopy.c's
+			three have similar orders of operation.	strnlen_user, and arch/x86_64/lib/usercopy.c's __strnlen_user and
+								strlen_user. its purpose is to strnlen a string on the remote node. to
+								accomplish this, we first OMDEBUG_CPYUSER a message containing the
+								address and maximum length of the request. we then fill in a
+								omp_usercopy_req structure containing the passed in address and length.
+								we sends this structure to the remote node using comm_send_hd, then
+								uses comm_recv to get the result into a temporary variable, then return
+			seperate OMBUG invocations!		the result. if comm_send_hd or comm_recv return an error, we OMBUG the
+			BUG: 0 is a valid return result!	value returned, and return 0, indicating failure. its symbol is 
+								EXPORT_SYMBOL'd. deputy_put_userX is called by the below 
+								deputy_put_user and deputy_put_user64 functions. its purpose is to
+								write a value of 64bits or less to a given location on the remote node.
+								to accomplish this, we start by OMDEBUG_CPYUSER'ing saying what value
+								we're placing in what position of what length. then, we fill in an
+								omp_usercopy_emb structure with the passed in address, length, and
+								value. we then use comm_send_hd to send the value to the remote node,
+								and return 0 in case of success. if comm_send_hd fails, we return 
+								-EFAULT. deputy_put_user is called by include/asm-i386/uaccess.h's
+								put_user, deputy_put_user64_helper, __put_user_size, and
+								include/asm-x86_64/uaccess.h's put_user_size. its function is to put a
+								value to a remote node. in it, we just check to make sure the size of
+								the value passed in is not greater than sizeof(long). if it is, we 
+								call BUG_ON. otherwise, we call deputy_put_userX with our arguments,
+								returning the value it returns. deput_put_user's symbol is
+								EXPORT_SYMBOL'd. deputy_put_user64 is called by the 
+			bad name in comment.			deputy_put_user64_helper inline assembly function, from 
+								include/asm-i386/uaccess.h. this function is only created if 
+								BITS_PER_LONG < 64, AKA, we're on a 32 bit archetecture. 
+								in deputy_put_user64, we use deputy_put_userX to put a value of type
+								s64 to the remote node, returning the result returned by 
+								deputy_put_userX. if declared, this function is EXPORT_SYMBOL'd.
+								deputy_get_userX is called by the following deputy_get_user and
+								deputy_get_user64 functions. its purpose is to get a value up to 64
+								buts in length from the remote node. in it, we first use
+								OMDEBUG_COPYUSER to log the requested address and size. we then place
+								these values in a omp_usercopy_req structure, and use comm_send_hd to
+								send it to the remote node. we comm_recv() the result, then place the
+								result in the passed in pointer, being careful to use the right size.
+								we return 0 indicating success. if comm_recv or comm_send_hd fail, we
+			seperate OMBUG invocations!		OMBUG the error returned, and return -EFAULT. deputy_get_user is called
+								by include/asm-i386/uaccess.h's get_user and get_user_size macros, and
+								include/asm-x86_64/uaccess.h's get_user macro. its purpose is to get a
+								value up to sizeof(long) from the remote node. in it, we BUG_ON if the
+								value requested is larger than sizeof(long), and call deputy_get_userX
+								to actually do the work. this function is EXPORT_SYMBOL'd. 
+			BUG: shouldnt we be calling this on	deputy_get_user64 is created if BITS_PER_LONG < 64. its not called from
+			i386?					anywhere. its purpose is to get a 64bit value from the remote node. in
+								it, we simply call the above deputy_get_userX function. its symbol is
+								EXPORT_SYMBOL'd. at this point, we start into code intended to run on
+								the remote node, responding to the above functions. remote_copy_user is
+								called from the below remote_handle_user, to handle DEP_COPY_FROM_USER
+								and DEP_COPY_TO_USER packets, sent from deputy_copy_from_user and
+								deputy_copy_to_user on the home node. in it, we first receive an
+								omp_usercopy_req structure from the home node, then allocate the 
+								ammount of space indicated by the omp_usercopy_req's len member, to
+								store the information being copied. we then check the passed in
+								request, to see if we're copying to or from userspace. if
+								we're copying from userspace, we invoke copy_from_user to copy the data
+								requested into our temporary buffer, then use comm_send to send the
+								data to the home node. if we're copying to userspace, we use comm_recv
+								to receive the data into our temporary buffer, then copy_to_user to
+								copy the data into the requested location. 
+								remote_strncpy_from_user performs strncpy_from_user on 
 								behalf of deputy_strncpy_from_user. it uses comm_recv to get its 
 								target, and comm_send to return the results. its symbol is not
 								exported. remote_strnlen_from_user performs strnlen_user or strlen_user
-								on behalf of deputy_strnlen_user. it works similarly to
+								on behalf of deputy_strnlen_user. it functions similarly to
 								remote_strncpy_from_user. its symbol is not exported. remote_put_user
-								will use put_user on behalf of the home node in up to a 64bit size. its
+								will use put_user on behalf of either                               in up to a 64bit size. its
 								missing BITS_PER_LONG logic that should be like the following function.
 								its symbol is not exported. remote_get_user is structured similarly.
 								its got BITS_PER_LONG==64 logic. its symbol is not exported. finally, 	 
@@ -665,8 +738,8 @@ hunk	class		file patched				description								noteworthy references
 			check incoming pointers!		printks the results. debug_vmas dumps the starting address and ending
 								address of each vma belonging to a given mm_struct. debug_signals is a
 								stub, not printking anything of value.
-033	debugfs		creates hpc/debugfs.c			this file contains the debugfs module. we start with a dentry
-								structure defining the om/ debugfs directory, then we define four 
+033	debugfs		creates hpc/debugfs.c			this file contains the debugfs module. it starts with a dentry		<hpc/hpc.h>
+								structure for the om/ debugfs directory itself, then we define four 
 								file entries, pointing the migration, syscall, rinode, and copyuser
 			move om_opts here?			files to entries the om_opts structure (defined in hpc/kernel.c), 
 			we don't seem to be using these		and an array of dentry structures for the four files. om_debugfs_init
