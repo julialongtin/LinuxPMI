@@ -432,7 +432,7 @@ hunk	class		file patched				description								noteworthy references
 								are initialized from values #defined in hpc/comm.h, and are used
 								nowhere. comm_shutdown is called in case of an error on recv()ing data
 								in comm_recv. its a wrapper, which safely calls sock->ops->shutdown,
-								making sure sock and sock->ops are non-null. comm_getname bis a wrapper
+								making sure sock and sock->ops are non-null. comm_getname is a wrapper
 								to safely call sock->ops->getname. we return -1 in case sock->ops is
 								null, sock->ops->getname is null, or if getname returns null.
 								otherwise, we return the size of the passed in sockaddr. 
@@ -665,9 +665,9 @@ hunk	class		file patched				description								noteworthy references
 			check incoming pointers!		printks the results. debug_vmas dumps the starting address and ending
 								address of each vma belonging to a given mm_struct. debug_signals is a
 								stub, not printking anything of value.
-033	debugfs		creates hpc/debugfs.c			this file contains the debugfs module. it starts with a dentry		<hpc/hpc.h>
-								structure for the om/ debugfs directory itself, then we define four 
-[5~								file entries, pointing the migration, syscall, rinode, and copyuser
+033	debugfs		creates hpc/debugfs.c			this file contains the debugfs module. we start with a dentry
+								structure defining the om/ debugfs directory, then we define four 
+								file entries, pointing the migration, syscall, rinode, and copyuser
 			move om_opts here?			files to entries the om_opts structure (defined in hpc/kernel.c), 
 			we don't seem to be using these		and an array of dentry structures for the four files. om_debugfs_init
 			debug values anywhere else, what is	is called to initialize the module. it calls debugfs_create_dir to 
