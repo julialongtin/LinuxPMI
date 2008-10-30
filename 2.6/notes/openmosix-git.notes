@@ -767,14 +767,16 @@ hunk	class		file patched				description								noteworthy references
 								and the processes pid, thread_info pointer, and task pointer. we call
 								show_stack to dump the stack, then we dump the hex values of the 20 
 								instructions before EIP, and the 20 instructions after EIP.
-035	ppc,arch-debug	creates hpc/debug-ppc.c			architecture specific debugging code, ppc version. om_debug_regs dumps	<asm/uaccess.h> <linux/kallsyms.h> <linux/sched.h>
-								the pt_regs structure passed in, or if NULL is passed in, the pt_regs	<hpc/debug.h> <asm/ptrace.h> <asm/uaccess.h>
-			remove one uaccess.h, one ptrace.h	structure of the current process. debug_thread and show_user_registers	<asm/ptrace.h> <asm/processor.h> <hpc/protocol.h>
-								are stubs, doing nothing and returning nothing.				<hpc/arch.h>
-036	x86_64,		creates hpc/debug-x86_64.c		architecture specific debugging code, x86_64 version. om_debug_regs	<asm/uaccess.h> <linux/kallsyms.h> <linux/sched.h>
-	arch-debug						dumps the pt_regs structure passed in, or if NULL, of the current 	<hpc/debug.h> <asm/ptrace.h> <asm/desc.h>
-			remove one uaccess.h, one ptrace.h	process. debug_thread and show_user_registers are stubs, debug_thread	<asm/i387.h> <asm/uaccess.h> <asm/ptrace.h>
-								only printking a line, and both and returning nothing.			<hpc/protocol.h> <hpc/arch.h> <hpc/task.h>
+035	ppc,arch-debug	creates hpc/debug-ppc.c			this file contains architecture specific debugging code for the ppc 
+			remove one uaccess.h, and one ptrace.h.	archetecture. none of the functions in this file should be called in
+			printk!					the normal functions of openmosix. om_debug_regs printks the contents
+								of the passed in pt_regs structure, or if NULL is passed in, the 
+								pt_regs	structure of the current process. debug_thread and 
+								show_user_registers are stubs, doing nothing and returning nothing.
+036	x86_64,		creates hpc/debug-x86_64.c		architecture specific debugging code, x86_64 version. om_debug_regs
+	arch-debug						dumps the pt_regs structure passed in, or if NULL, of the current
+			remove one uaccess.h, one ptrace.h	process. debug_thread and show_user_registers are stubs, debug_thread
+								only printking a single line, and both and returning nothing.
 037	local		creates hpc/deputy.c			deputy.c contains functions for servicing requests from a remote	<linux/sched.h>
 								process, AKA, communication to the home node, from a process that is a	<linux/signal.h>
 								guest on a remote node. first, there's deputy_die_on_communication, 	<linux/file.h>
