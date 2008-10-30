@@ -131,6 +131,7 @@ linuxpmi/clean/032-hpc_debug_c-debug-create-cleanup.patch
 linuxpmi/clean/033-hpc_debugfs_c-debugfs-create.patch
 
 # i386, arch-debug
+# debugging functions, not actually called.
 linuxpmi/clean/034-hpc_debug_i386_c-arch_debug-create.patch
 
 # ppc, arch-debug
