@@ -118,14 +118,16 @@ linuxpmi/clean/029-hpc_comm_c-kcom-create-broken-cleanup.patch
 # support infrastructure for remote memory access, during syscalls.
 linuxpmi/clean/030-hpc_copyuser_c-rmem-create.patch
 
-# omctrlfs
-# local, 
+# omctrlfs, local 
+# future filesystem for performing migration and remote process state monitoring. mostly a stub.
 linuxpmi/clean/031-hpc_ctrlfs_c-omctrlfs-create-cleanup.patch
 
 # debug
+# code to assist in printking debugging messages.
 linuxpmi/clean/032-hpc_debug_c-debug-create-cleanup.patch
 
-# debugfs
+# debugfs, local
+# adds entries to the debugfs filesystem to allow seeing openmosix private debugging values.
 linuxpmi/clean/033-hpc_debugfs_c-debugfs-create.patch
 
 # i386, arch-debug
