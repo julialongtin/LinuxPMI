@@ -722,7 +722,7 @@ hunk	class		file patched				description								noteworthy references
 								CTRLFS_MAGIC, and our empty list of files.  ctrlfs_get_sb is called by
 								the kernel's filesystem layer via the ctrlfs_type variable we send to
 								register_filesystem. in it, we wrap get_sb_single(), telling it to use
-								ctrlfs_fill_super to generate our filesystem's superblock. we then
+1								ctrlfs_fill_super to generate our filesystem's superblock. we then
 								declare a file_system_type structure, mapping .get_sb to our 
 								ctrlfs_get_sb above, and .kill_sb to a generic cleanup function.
 								om_ctrlfs_init is called from the kernel to initialize the module. in
@@ -780,21 +780,34 @@ hunk	class		file patched				description								noteworthy references
 								pt_regs structure of the current process. debug_thread and 
 								show_user_registers are stubs, debug_thread only printking a single 
 								line, and both and returning nothing.
-037	local		creates hpc/deputy.c			deputy.c contains functions for servicing requests from a remote	<linux/sched.h>
-								process, AKA, communication to the home node, from a process that is a	<linux/signal.h>
-								guest on a remote node. first, there's deputy_die_on_communication, 	<linux/file.h>
-			rename deputy_die_on_communication to	which in spite of its name is called by deputy_process_communication to	<linux/mount.h>
-			deputy_die				kill the deputy when communication with the remote node containing the  <linux/acct.h>
-								remote half of the process fails. it printk's a message, then calls	<asm/mmu_context.h>
-								do_exit(SIGKILL). deputy_do_syscall receives a syscall request from the <hpc/comm.h>
-								remote process and executes it, returning the result. deputy_do_fork	<hpc/task.h>
-								processes a fork on behalf of the remote process. it opens up a new	<hpc/mig.h>
-								connection to the remote node, calls do_fork, then uses task_set_comm	<hpc/arch.h>
-								to make the child process communicate over the newly created		<hpc/syscalls.h>
-								connection. deputy_do_readpage uses task_heldfiles_find to find a	<hpc/debug.h>
-								given file owned by the current deputy process,	maps a single page into	<hpc/prototype.h>
-								memory, sends the contents to the remote node, then unmaps the page. 
-								deputy_do_mmap_pgoff is called by do_mmap_pgoff in mm/mmap.c to perform
+037	local		creates hpc/deputy.c			this file contains functions for servicing requests from a remote
+								process, AKA, communication to the home node, from a process that is a
+								guest on a remote node. first, we create deputy_die_on_communication,
+			rename deputy_die_on_communication to	which in spite of its name is called by deputy_process_communication to
+			deputy_die.				kill the deputy when communication with the remote node containing the
+			printk!					remote half of the process fails. it printk's a message, then calls
+								do_exit(SIGKILL). deputy_do_syscall is called by the later defined
+								deputy_process_communication when we receive a syscall request from a
+								process that is remote. in it, we use comm_recv() to receive the
+								syscall number and the address of its arguments, then OMDEBUG_SYS a 
+								debugging message. we execute the syscall requested using 
+								arch_exec_syscall, OMDEBUG_SYS another debugging message, and then 
+								return the result of the syscall. deputy_do_fork is called by the later
+								defined deputy_process_communication to perform a fork on behalf of the
+								remote process. in it, we use comm_recv to receive the fork request,
+								then we use comm_setup_connect to open up a connection to a listening
+								socket on the remote node, call do_fork, then use task_set_comm to
+								associate the new child process with the newly created connection.
+								we then use comm_send_hd to return the results of the fork to both the
+								parent and child on the remote node. deputy_do_readpage is called by
+								the later defined deputy_process_communication when we receive a page
+								read request. in it, we use comm_recv to get the file pointer and 
+								offset of the content requested. we then use task_heldfiles_find get a
+								read handle on the file. we use an empty vma page to hold the results
+								of a page in request from the file, and send the page to the remote
+								end. we unmap the page, then return the result of the comm_send.
+								deputy_do_mmap_pgoff is called by do_mmap_pgoff in mm/mmap.c to
+								perform
 								the same function as do_mmap_pgoff's lower half, with differences for
 								deputy processes. to accomplish this, we allocate memory for a vma 
 								structure from SLAB_KERNEL and zero it. we set up a vma structure in
