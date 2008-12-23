@@ -143,6 +143,7 @@ linuxpmi/clean/035-hpc_debug_ppc_c-arch_debug-create.patch
 linuxpmi/clean/036-hpc_debug_x86_64_c-arch_debug-create.patch
 
 # omremote
+# code to respond to requests received from a remote process.
 linuxpmi/clean/037-hpc_deputy_c-omremote-create-broken-cleanup.patch
 
 

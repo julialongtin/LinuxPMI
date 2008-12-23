@@ -780,25 +780,26 @@ hunk	class		file patched				description								noteworthy references
 								pt_regs structure of the current process. debug_thread and 
 								show_user_registers are stubs, debug_thread only printking a single 
 								line, and both and returning nothing.
-037	local		creates hpc/deputy.c			this file contains functions for servicing requests from a remote
+037	omremote	creates hpc/deputy.c			this file contains functions for servicing requests from a remote
 								process, AKA, communication to the home node, from a process that is a
-								guest on a remote node. first, we create deputy_die_on_communication,
+								guest on a remote node. first, we define deputy_die_on_communication,
 			rename deputy_die_on_communication to	which in spite of its name is called by deputy_process_communication to
 			deputy_die.				kill the deputy when communication with the remote node containing the
 			printk!					remote half of the process fails. it printk's a message, then calls
-								do_exit(SIGKILL). deputy_do_syscall is called by the later defined
-								deputy_process_communication when we receive a syscall request from a
-								process that is remote. in it, we use comm_recv() to receive the
-								syscall number and the address of its arguments, then OMDEBUG_SYS a 
-								debugging message. we execute the syscall requested using 
-								arch_exec_syscall, OMDEBUG_SYS another debugging message, and then 
-								return the result of the syscall. deputy_do_fork is called by the later
-								defined deputy_process_communication to perform a fork on behalf of the
-								remote process. in it, we use comm_recv to receive the fork request,
-								then we use comm_setup_connect to open up a connection to a listening
+								do_exit(SIGKILL). Its defined NORET_TYPE indicating it will not be
+								returning. deputy_do_syscall is called by the later defined
+								deputy_process_communication when a syscall request from a remote
+								process is received. in it, we use comm_recv() to receive the syscall
+								number and address of its arguments, then OMDEBUG_SYS a debugging
+								message. we execute the syscall requested using arch_exec_syscall, 
+								OMDEBUG_SYS another debugging message, then return the result of the
+								syscall. deputy_do_fork is called by the later defined
+								deputy_process_communication to perform a fork on behalf of the
+								remote process. in it, we use comm_recv to receive the fork request.
+								we then use comm_setup_connect to open up a connection to a listening
 								socket on the remote node, call do_fork, then use task_set_comm to
 								associate the new child process with the newly created connection.
-								we then use comm_send_hd to return the results of the fork to both the
+								we call comm_send_hd to return the results of the fork to both the
 								parent and child on the remote node. deputy_do_readpage is called by
 								the later defined deputy_process_communication when we receive a page
 								read request. in it, we use comm_recv to get the file pointer and 
@@ -806,65 +807,72 @@ hunk	class		file patched				description								noteworthy references
 								read handle on the file. we use an empty vma page to hold the results
 								of a page in request from the file, and send the page to the remote
 								end. we unmap the page, then return the result of the comm_send.
-								deputy_do_mmap_pgoff is called by do_mmap_pgoff in mm/mmap.c to
-								perform
-								the same function as do_mmap_pgoff's lower half, with differences for
-								deputy processes. to accomplish this, we allocate memory for a vma 
-								structure from SLAB_KERNEL and zero it. we set up a vma structure in
-								this memory corresponding to the memory area we've been requested to 
-								occupy, and pass it to our passed file *'s mmap f_up handler. we then
-								add this file to our held files for this process by calling
-								task_heldfiles_add. theres a comment here indicating that we're 
-			fill in missing code!			supposed to insert the vma into our current->?? (current->mm->mmap
-								list?), but the code for that isn't written. deputy_do_mmap is 
-								called from deputy_process_communication below. it uses do_mmap_pgoff 
-								in mm/mmap.c to mmap a file into the deputy, and returns the mmapped
-								region's contents to the remote host. bprm_drop is used by the later
-								declared __deputy_do_execve to destroy a linux_binprm structure, which
-								is an executable program and arguments, destroying its pages, its	http://www.kernel-api.org/docs/online/1.0/da/d1e/structlinux__binprm.html
-								security context, mm structure, and calling fput() on all its writable
-								files. __deputy_do_execve uses search_binary_handler to attempt execve
-								on the home node. if it was successful, we have a FIXME indicating we 
-								should be freeing the pages containing our arguments. 
-								we then free bprm our security context, call acct_update_integrals
-								(to tell the accounting system about the new process), free the
-								bprm structure, and "return" to the new process. otherwise, we use the
-								above bprm_drop to clean up the failed execve attempt. 
-								deputy_setup_bprm is used by the below deputy_do_execve to setup a bprm
-								structure suitable for execution by __deputy_do_execve. we allocate
-								space for our bprm structure from GFP_KERNEL. we use open_exec to 
+			merge this into do_mmap_pgoff?		deputy_do_mmap_pgoff is called by do_mmap_pgoff in mm/mmap.c to
+								perform the same function as do_mmap_pgoff's lower half, taking into
+								account the differences required by deputy processes. to do this, we
+								allocate memory for a vma structure from SLAB_KERNEL and zero it. we 
+								set up a vma structure in this space to contain the definition of the 
+								memory area we've been requested to occupy. we pass this vma to our
+								passed file *'s mmap f_up handler. we then add this file to our held 
+								files for this process by calling task_heldfiles_add. theres a comment 
+			fill in missing code!			here indicating that we're supposed to insert the vma into our 
+								current->?? (current->mm->mmap list?), but the code for that isn't 
+								written. deputy_do_mmap is called from the later defined 
+								deputy_process_communication, when a mmap request is received from a
+								remote process. in it, we uses do_mmap_pgoff from mm/mmap.c to mmap a
+								file into the deputy, then return the mmapped region's contents to the 
+								remote host. bprm_drop is used by the later declared __deputy_do_execve
+								to destroy a linux_binprm structure, which is a structure for
+								containing an executable program, its arguments, pages, security	http://www.kernel-api.org/docs/online/1.0/da/d1e/structlinux__binprm.html
+								context, and mm structure. bprm_drop calls the appropriate destructors
+								for the members of our binprm, and calls fput() on all the processes
+								still open writable files, before destroying the binprm structure
+								itsself. __deputy_do_execve is called by deputy_do_execve, to do the
+								work of performing an execve when an execve reques is received from a
+								remote process. we use search_binary_handler to perform the execve on
+			FIXME: free the pages our arguments are	the home node. if it was successful, we have a FIXME indicating we 
+			contained in.				should be freeing the pages containing our arguments. we then free our
+								binprm's security context, call acct_update_integrals (to tell the
+								accounting system about the new process), free the bprm structure, and
+								"return" to the new process. otherwise, we use the previously defined
+								bprm_drop to clean up the failed execve attempt. deputy_setup_bprm is
+								called by the later defined deputy_do_execve to setup a bprm structure
+								suitable for execution by __deputy_do_execve. in it, we allocate
+								space for our bprm structure from GFP_KERNEL. we then call open_exec to
 								attempt to open our executable. if that succeeds, we fill in the bprm's
 								file, filename, interp, and mm members, using mm_alloc to fill in
-								mm. we use init_new_context to accomplish any architecture specific 
-								requirements. on x86, this function copies the local descriptor table 
-								of the current process to the new process, assuming it has been 
-								customized. we copy argc and envc, making sure neither is less than
-								zero. we allocates a security context, then use prepare_binprm to fill
-								in the rest of the bprm structure. we use copy_strings_kernel to copy
-								our filename, our safely copy our filename, argv, and envp array
-								into kernel pages, instead of user space memory. if any of the above
-								fails, we use bprm_drop to clean up in case of error. deputy_do_execve
-								processes an execve request from the remote process to execve a new
-								executable. it calls comm_recv to receive the requested file, argv, and
-								envp, deputy_setup_bprm to get a brpm structure ready to execute, then
-								__deputy_do_execve to perform the work. we then use comm_send_hd to
-								send back an empty reply. if any of the above fails, we call bprm_drop
-								to destroy our bprm structure. deputy_do_sigpending is a wrapper around
-								do_signal. it has code for doing more, but its dead/unused code. 
-								deputy_process_misc checks for pending dreqs, and dispatches them to
-								task_do_request. it then checks for pending signals, and dispatches
-								them to deputy_do_sigpending. its called by deputy_main between
-								communication events. deputy_process_communication contains the switch 
-								case that calls the aforementioned functions. it calls
+								mm. we use the kernel's init_new_context() to perform architecture 
+								specific mm setup. on x86, init_new_context copies the local descriptor
+								table of the current process to the new process. we then copy argc and
+								envc, making sure neither is less than zero. we allocates a security
+								context, then use prepare_binprm to fill in the rest of the bprm
+								structure. we use copy_strings_kernel to copy our filename, argv, and 
+								envp arrays into kernel pages, instead of user space memory. if any of
+								the above fails, we use bprm_drop to clean up. deputy_do_execve is
+								called by the later defined deputy_process_communication when an execve
+								request from a remote node is received. in it, we call comm_recv to
+								receive the requested file, argv, and envp, deputy_setup_bprm to get a
+								brpm structure ready to execute, then __deputy_do_execve to perform the
+			FIXME: empty reply? whats with this?	work. we then use comm_send_hd to send back an empty reply. if any of
+			FIXME: multiple unique error paths!	the above fails, we destroy the space used to store the request, and
+								return the error value in question. deputy_do_sigpending is a wrapper
+								around do_signal, called by deputy_process_misc. it has code for doing
+			FIXME: dead code!			more, but its dead/unused code. deputy_process_misc is called by
+								deputy_main_loop to checks for pending dreqs, and dispatches them to
+								task_do_request. it also checks for pending signals, and dispatches
+								them to deputy_do_sigpending. deputy_process_communication is called by
+								deputy_main_loop if a process has communication. it contains a large
+								switch that dispatches requests the aforementioned callees. it calls
 								deputy_die_on_communication if comm_recv returns an error, if the type
 								member of the req received is zero, or if one of the functions we call
 								returns negative. deputy_main_loop is the userspace loop that is 
-								executed on the home node when a process has gone remote. it calls 
+								executed as the main thread of a deputy process. it calls 
 								deputy_process_communication when comm_wait returns true. it then calls
-								deputy_process_misc to accomplish dispatching of events. deputy_startup
-								uses task_set_dflags to mark this task as deputy, flushes a signal that
-								pops up for unknown reason, according to a fixme, and calls exit_mm,
-								which is a forward declare from kernel/exit.c.
+								deputy_process_misc to dispatch pending dreqs and signals.
+								deputy_startup is called by hpc/migctrl.c's task_local_send to exit the
+								old task, and enter deputy state. in deputy_startup, we use 
+								task_set_dflags to mark this task as deputy, flush a signal that pops
+			FIXME: hunt down the unknown reason.	up for unknown reason, according to a fixme, and calls exit_mm().
 038	omremotefile	creates hpc/files.c			this file contains routines for handling file access on the home node	<linux/fs.h>
 	omremotedentry						for processes that are running on a remote node. it starts by declaring	<linux/list.h>
 			move remote_aops inside of 		two structures. remote_aops is an address_space_operations structure,	<linux/sched.h>
