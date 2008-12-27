@@ -901,9 +901,9 @@ hunk	class		file patched				description								noteworthy references
 			DEAD: Dead code.			printk() an error message, and return NULL. next we have a structure
 								declaration that has been commented out via a #if 0. it was to declare
 			SPACE: break in the file?		a backing_dev_info structure. after that, theres a break in the file.
-			FIXME: why is rfiles in the task 	we define the om_remote_dentry structure, a spinlock, and a list_head
-			structure, while dentries are stored	structure for containing the om_remote_dentrys. rdentry_delete
-			globally?				acquires the remote_dentries spinlock, and removes the first entry in
+							 	we define the om_remote_dentry structure, a spinlock, and a list_head
+								structure for containing the om_remote_dentrys. rdentry_delete
+								acquires the remote_dentries spinlock, and removes the first entry in
 								the remote_dentries list with a dentry member that matches the passed
 								in dentry. If we don't find a matching entry, we call BUG(), and 
 								return -ENOENT. rdentry_iput is called via a pointer stored in the
