@@ -873,98 +873,110 @@ hunk	class		file patched				description								noteworthy references
 								old task, and enter deputy state. in deputy_startup, we use 
 								task_set_dflags to mark this task as deputy, flush a signal that pops
 			FIXME: hunt down the unknown reason.	up for unknown reason, according to a fixme, and calls exit_mm().
-038	omremotefile	creates hpc/files.c			this file contains routines for handling file access on the home node	<linux/fs.h>
-	omremotedentry						for processes that are running on a remote node. it starts by declaring	<linux/list.h>
-			move remote_aops inside of 		two structures. remote_aops is an address_space_operations structure,	<linux/sched.h>
-			rdentry_create_entry			mapping .readpage to remote_readpage, and not touching any other	<linux/file.h>
-								mappings. the second structure is remote_file_operations, mapping .mmap	<linux/pagemap.h>
-								to remote_file_mmap, and not touching any other mappings.		<linux/mm.h>
-								task_heldfiles_add is called by deputy_do_mmap_pgoff in hpc/deputy.c,	<hpc/comm.h>
-								to create and insert a om_held_file structure representing a file into	<hpc/prototype.h>
-								our linked list of held files. it allocates the om_held_file struct	<hpc/debug.h>
-								from GFP_KERNEL, uses get_file to increment the file usage counter, 	http://www.faqs.org/docs/kernel_2_4/lki-3.html
-			remove nb member?			fills in the om_held_file's file and nb entries with our passed file
-								pointer, fills in rfile->nopage with nopage from the
-								vm_operations_struct passed in, and inserts our om_held_file struct
-								into task->om.rfiles with list_add. we then return 0, since get_file
-								and list_add can't return errors. task_heldfiles_clear is called by
-								openmosix_task_exit to destroy the linked list containing all the files
-								held by the process. for each file in the list, it calls fput to
-								decrement the file usage counter, then frees the om_held_file
-								structure. task_heldfiles_find searches the list of heldfiles for a
-								om_held_file whose file member matches the passed in file pointer. it
-								uses list_for_each_entry to iterate over items. if it finds a match,
-								we return the heldfile, otherwise, we printk() an error, and return
-								NULL. next we have a structure declaration that has been commented out
-								with a #if 0 block. it was to declare a backing_dev_info structure.
-								after that, theres a break in the file, indicating the rest of the file
-			why is rfiles in the task structure,	is different from the above. this section starts by defining the
-			and dentries are stored globally?	om_remote_dentry structure, then defining a spinlock, and a list_head 
-								for containing remote dentries. rdentry_delete acquires the 
-			remove dead code.			remote_dentries spinlock, and removes the first entry in the list with
-								a dentry member that matches the passed in dentry. if it does not find a
-								matching entry, it calls BUG(), and returns -ENOENT. rdentry_iput frees
-								a passed inode's generic_ip member (which contains our rfile_inode_data
-								structure), then calls iput to both push an inode's contents to disk, 
-								and decrement its usage counter. the struct remote_dentry_ops maps
-								its .d_delete and .d_put entries to the previous two functions. the
-						 		previous two functions, and this structure are not used anywhere in
-								the code. we declare a super_operations structure, containing no
-								operations, then we use this structure to fill the .s_op member when
-								declaring a super_block structure, also filling the .s_inodes member 
-			move remote_file_vfsmnt inside of 	with a new LIST_HEAD. struct remote_file_vfsmnt is a "empty"
-			rdentry_create_file.			vfsmount structure, contining five list heads, and a mount count. it is
-								declared to be its own parent. rdentry_add_entry creates an to
-								om_remote_dentry structure to contain a passed in dentry. it
-								allocates the om_remote_dentry from GFP_KERNEL, sets the dentry member
-								to the passed dentry, aquires the remote_dentries spinlock, adds the
-								om_remote_entry to the remote_dentries list, and releases the spinlock.
-								if the kmalloc fails, we return -ENOMEM, otherwise we return 0. 
-								rdentry_create_dentry is called by rdentry_create_file to create a new
-								dentry coresponding to the passed in rfile_inode_data. along the way,
-								it also registers the dentry with rdentry_add_entry. first, we create
-								a new inode, backed by our dummy rfiles_dummy_block. we create a
+038	omremotefile	creates hpc/files.c			This file contains routines for handling file and dentry requests on 
+	omremotedentry	BREAKUP: should create hpc/dentry.c	behalf of remote processes. It starts with two structure declarations.
+			OPT: move remote_aops inside of 	remote_aops is an address_space_operations structure, mapping .readpage
+			rdentry_create_entry			to hpc/remote.c's remote_readpage, not touching any other mappings. its
+								used by the later defined rdentry_create_entry(). The second structure
+								defined is remote_file_operations, mapping .mmap to hpc/remote.c's
+								remote_file_mmap, not touching any other mappings. 
+								remote_file_operations is used by rdentry_create_entry() and
+			OPT: return void?			rdentry_create_file(). task_heldfiles_add is called by 
+								deputy_do_mmap_pgoff in hpc/deputy.c to create and insert an 
+								om_held_file structure representing the passed in file into the list of
+								files held by the given process. in it, we allocate an om_held_file
+								struct from GFP_KERNEL, use get_file to	increment the file's usage
+			OPT: remove nb member?			counter, fill in the om_held_file's file and nb entries with the passed	http://www.faqs.org/docs/kernel_2_4/lki-3.html
+								in file pointer, fill in rfile->nopage with nopage from the passed in 
+								vm_operations_struct, and insert our om_held_file struct into 
+								task->om.rfiles with list_add. we then return 0, since no conditions in
+								this function return errors. task_heldfiles_clear is called by
+								openmosix_task_exit to destroy the contents of the passed in held files
+								linked list. for each file in the list, we call fput to decrement the
+								file usage counter, then free the om_held_file structure.
+								task_heldfiles_find searches the list of files held by the passed
+								in task for an om_held_file whose file member matches the passed in
+								file pointer. in it, we use list_for_each_entry to iterate through the
+								list. if we find a match, we return the heldfile, otherwise, we
+			DEAD: Dead code.			printk() an error message, and return NULL. next we have a structure
+								declaration that has been commented out via a #if 0. it was to declare
+			SPACE: break in the file?		a backing_dev_info structure. after that, theres a break in the file.
+			FIXME: why is rfiles in the task 	we define the om_remote_dentry structure, a spinlock, and a list_head
+			structure, while dentries are stored	structure for containing the om_remote_dentrys. rdentry_delete
+			globally?				acquires the remote_dentries spinlock, and removes the first entry in
+								the remote_dentries list with a dentry member that matches the passed
+								in dentry. If we don't find a matching entry, we call BUG(), and 
+								return -ENOENT. rdentry_iput is called via a pointer stored in the
+								later defined remote_dentry_ops structure. Its function is to free a 
+								given inode's generic_ip member (containing our rfile_inode_data 
+								structure), then call iput to both push the inode's unsaved contents 
+								to disk, and decrement its usage counter. the remote_dentry_ops
+								structure maps its .d_delete and .d_put entries to the previous two 
+			DEAD: Dead code.			functions, but is not used anywhere in the code. Next, we declare a
+								super_operations structure, containing only default members. We then	
+								use this structure to fill the .s_op member when declaring a 
+								super_block structure, filling the super_block's .s_inodes member with	
+			OPT: move remote_file_vfsmnt inside of 	a new LIST_HEAD. struct remote_file_vfsmnt is a vfsmount structure,
+			rdentry_create_file.			contining five required list heads, and a mount count. it is declared
+								as its own parent. rdentry_add_entry is called by the later defined
+								rentry_create_dentry to create an om_remote_dentry structure containing
+								the passed in dentry, and insert it into the list of remote dentries.
+								in it, we allocate a new om_remote_dentry from GFP_KERNEL, sets the 
+								dentry member to the passed in dentry, aquire the remote_dentries 
+								spinlock, add the om_remote_entry to the remote_dentries list, then
+								release the spinlock. If the kmalloc fails, we return -ENOMEM, 
+								otherwise we return 0, indicating success. rdentry_create_dentry is
+								called by rdentry_create_file to create a new dentry pointing to the
+								passed in rfile_inode_data, and register it with rdentry_add_entry. 
+								first, we create a new inode, backed by rfiles_dummy_block. we create a
 								duplicate of the passed in rfile_inode_data allocated from GFP_KERNEL,
-								and set inode->u.generic_ip (the inodes private data space) to point to
-								the new copy. the inode's file and address space operations are pointed
-								to our earlier stubs remote_file_operations, and remote_aops. we 
-								allocate a dentry using d_alloc, set its inode to this new inode, set
-								its .name to be "/", and makes it its own parent. we use 
-								rdentry_add_entry to add this to our remote_dentries list, and return
-								the new dentry. the error handling in this function seems VERY broken.
-								if either of our alloc calls fails (kmalloc or d_alloc), we free our
-								passed in data(!), call iput on our allocated inode, and return NULL.
-								rfile_inode_get_data is a wrapper returning inode->u.generic_ip.
-								rfiles_inode_get_file is a wrapper returning 
-								rfile_inode_get_data(inode)->file. rfiles_inode_compare is a wrapper
-								that memcmps the passed inode's private data space against a supplied
-								rfile. returning the result. rdentry_find finds a rdentry whos dentry's
-								inode matches the passed in inode. it grabs the remote_dentries 
-								spinlock, and uses list_for_each_entry to cycle through all of the 
-								rdentries, comparing to rdentry->dentry->d_inode. if it finds a match,
-								it breaks out, unlocks the spinlock and returns the dentry of the
-								rdentry structure that was a match. otherwise, it unlocks the spinlock
-			verify this works.			and returns NULL, due to the last dentry being NULL.
-								rdentry_create_file creates a file pointer matching the supplied
-								rfile_inode_data. it uses get_empty_filp to create an empty file
-								pointer, then uses dget(rdentry_find(data)) to get a dentry pointing to
-								the passed rfile_inode_data. if dget fails, we call
+								and set our new inode's u.generic_ip member(the inodes private data 
+								space) to point to our copied inode. our new inode's file and address
+								space operations are pointed to the earlier defined stubs,
+								remote_file_operations and remote_aops. We allocate a dentry using 
+								d_alloc, set its inode member to our new inode, and make it its own
+								parent. to accomplish this, when we call d_alloc, we temporarily create
+			FIXME: expand gccism?			a qstr structure stating that this entry is for a file named "/",
+			FIXME: real file name and length?	with a length of 1. we pass this qstr as our argument to d_alloc. We 
+								use rdentry_add_entry to add our newly aquired dentry to our 
+			FIXME: error handling?			remote_dentries list, and return the new dentry. the error handling in
+								this function seems VERY broken. If either of our alloc calls fail 
+								(kmalloc or d_alloc), we free our passed in data(!), call iput on our
+								allocated inode, and return NULL. rfile_inode_get_data is a wrapper
+								called by rfiles_inode_get_file. it returnsthe given inode's 
+								u.generic_ip(the private data space set by rdentry_create_dentry)
+								contents. rfiles_inode_get_file is a wrapper called by hpc/remote.c's
+								remote_readpage returning rfile_inode_get_data(inode)->file. 
+								rfiles_inode_compare is a wrapper called by rdentry_find and 
+								task_rfiles_get. it memcmps the passed inode's private data space
+								against the passed in rfile. returning the result. rdentry_find is 
+								called by rdentry_create_file to look up an rdenty coresponding to the
+								passwd in inode. in it, we grab the remote_dentries spinlock, and use
+								list_for_each_entry to cycle through all of the rdentries, comparing 
+								each to rdentry->dentry->d_inode. if we find a match, we breaks out, 
+								unlock the spinlock and return the dentry of the matching rdentry. 
+								otherwise, we unlock the spinlock and return NULL, due to the last
+			FIXME: verify this works.		dentry being NULL. rdentry_create_file is called by the later defined
+								task_rfiles_get to create a file pointer matching the supplied
+								rfile_inode_data. in it, we use get_empty_filp to create an empty file
+								pointer, then call dget(rdentry_find(data)) to get a dentry pointing to
+								the passed rfile_inode_data(if one exists). if dget fails, we call
 								rdentry_create_entry to create a dentry pointing to our passed
 								rfile_inode_data. if our rdentry_create_entry call fails, we call 
-								put_filep to close our file pointer, and return NULL. otherwise, we use 
-								the remote_file_operations and remote_file_vfsmnt structures to set the
-								file pointer's f_op and f_vfsmnt members, set f_dentry to our dentry,
-								and mark the file pointer FMODE_READ. we then return the file pointer.
-								task_rfiles_get is called by mig_do_receive_vma and remote_do_mmap to
-								search through the processes' vma pages, and check to see if any of 
-								them have a paticular file associated with them. first, we construct a 
-								rfile_inode_data containing our passed in origfile, node, and isize.
-								we then compare it against our list of rdentry files, using
-								rfiles_inode_compare. if rfiles_inode_compare returns true, 
-								task_rfiles_get returns the file pointer associated to the inode in
-								question. if not, it calls rdentry_create_file to create a
-								new rdentry containing the passed in file, an returns s the file
-								pointer returned from rdntry_create_file.
+								put_filep to close our file pointer, and return NULL. we use 
+								remote_file_operations and remote_file_vfsmnt structures to set our new
+								file pointer's f_op and f_vfsmnt members, set its f_dentry to our 
+								dentry, and mark its mode FMODE_READ. we then return the file pointer.
+								if get_empty_filep fails, we return NULL. task_rfiles_get is called by
+								mig_do_receive_vma and remote_do_mmap to search through the processes'
+								vma pages, and check to see if any of them have a paticular file
+								associated with them. to do this, we construct an rfile_inode_data 
+								structure containing our passed in origfile, node, and isize. We then
+								compare it against our list of rdentry files, using
+								rfiles_inode_compare. If rfiles_inode_compare returns true, we return
+								the file pointer associated to the inode in question. if not, we call
+								rdentry_create_file to create a new rdentry containing the passed in
+								file, an return the file pointer returned from rdntry_create_file.
 039	kcomd		creates hpc/kcomd.c			kernel-to-kernel socket communication code. this file is set up to	<linux/sched.h>
 								create a kcomd.ko kernel module. it starts with three socket_		<linux/socket.h>
 								functions. socket_listen creates a socket, calls sock_map_fd to		<linux/in.h>

@@ -146,9 +146,10 @@ linuxpmi/clean/036-hpc_debug_x86_64_c-arch_debug-create.patch
 # code to respond to requests received from a remote process.
 linuxpmi/clean/037-hpc_deputy_c-omremote-create-broken-cleanup.patch
 
-
 # omremotefile omremotedentry
-linuxpmi/clean/038-hpc_files_c-omremotefile-create-breakup-broken-cleanup.patch
+# code responsible for assembling the 'fake' dentries and files on a remote node.
+linuxpmi/clean/038-hpc_files_c-omremotefile-create-breakup-broken-cleanup-final.patch
+
 
 # kcomd
 linuxpmi/clean/039-hpc_kcomd_c-kcomd-create-broken-cleanup.patch
