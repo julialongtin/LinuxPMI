@@ -977,102 +977,119 @@ hunk	class		file patched				description								noteworthy references
 								the file pointer associated to the inode in question. if not, we call
 								rdentry_create_file to create a new rdentry containing the passed in
 								file, an return the file pointer returned from rdntry_create_file.
-039	kcomd		creates hpc/kcomd.c			kernel-to-kernel socket communication code. this file is set up to	<linux/sched.h>
-								create a kcomd.ko kernel module. it starts with three socket_		<linux/socket.h>
-								functions. socket_listen creates a socket, calls sock_map_fd to		<linux/in.h>
-								associate an fd to the socket, binds to it using its sock->ops->bind(),	<linux/in6.h>
-								starts listening using its sock->ops->listen(), sets the passed in 	<linux/net.h>
-								pointers res to point to the newly created socket, and returns the file	<linux/syscalls.h>
-								descriptor to the now established stream. if sock_create fails, we	<net/sock.h>
-								return -1. the sock_map_fd fails, we release our sock, assign NULL to	<net/tcp.h>
-								the address passed via res, and return -1. if either our bind or listen
-								fails, we close our fd, release our sock, assign NULL to res, and
-								return -1. socket_listen_ipv4 and socket_listen_ipv6 are called by
+039	kcomd		creates hpc/kcomd.c			This file contains the kernel-to-kernel socket communication code. This
+								file is set up to create a kcomd.ko kernel module. We start by defining
+								three socket related functions. socket_listen is called via the later
+								defined sock_listen_ipv4 and sock_listen_ipv6, by the later defined	
+								kcomd_thread function, to set up the listening IPv4 and IPv6 sockets.	
+								In it, we create a socket, call sock_map_fd to associate an fd to the	
+								socket, bind to the socket using its sock->ops->bind(), start listening	
+								to the socket using its sock->ops->listen(), set the passed in pointers	
+								res to point to the newly created socket, and return the file
+			FIXME: set res to NULL in every fail	descriptor to the newly created listening socket. If sock_create fails,
+			case. unique return values!		we return -1. If sock_map_fd fails, we release our socket, assign NULL
+								to the address passed via res, and return -1. If either our bind or
+								listen fails, we close our fd, release our socket, assign NULL to res,
+								and return -1. socket_listen_ipv4 and socket_listen_ipv6 are called by
 								kcomd_thread to set up the correct type of listening socket. both
-								these functions are wrappers of the above socket_listen function.
-								they set up their appropriate type of sockaddr structure, and call
-			move these structures to a private	socket_listen. struct kcom_pkt is designed to contain a packet destined
-			header.					to a remote kernel. struct kcom_node is a container for a socket, and
-								the information reguarding the node it points to. kcom_task is the
-								structure that contains kcomd's knowlege about a migrated process. it
-								contains the pid of the process in question, a kcom_node structure 
-								defining what node a process is on, a list of processes communicating
-								with this node(?), a list containing outgoing packets, and a space for
-								one incoming packet. we define a spinlock and a list_head for
-								containing kcom_nodes. we then define sockets_fds as a fd_set_bits
-								structure. this structure is a more scalable version of a fd_set, used 
-								by do_select. we then declare sockets_fds_bitmap and maxfds, which are
-								set and used by the next function, alloc_fd_bitmap, to hold a 
-								dynamically grown array of fds. alloc_fd_bitmap takes the passed in fd
-								count, and if its greater than what the current sockets_fds_bitmap was
-								created to hold, frees sockets_fds_bitmap (and its contents), and
-								allocates a new one. if kmalloc fails, we return ENOMEM. otherwise, we
-								set the in, out, ex, res_in, res_out, and res_ex members of the
-								sockets_fds structue to offsets of our sockets_fds_bitmap structure,
-								and return 0. kcom_pkt_create creates a new kcom_pkt structure with the
-								len, type, and data members initialized to the passed in values. if
-								kzalloc fails, we return NULL. __kcom_node_find is called by the later
-								defined kcom_node_find to do the work of finding a node in our
-								kcom_nodes list that uses the passed sockaddr to communicate.  we use
-			doublecheck this return			list_for_each_entry and memcmp to compare the address of our sock with								
-			BUG: note the fixme reguarding memcmp	the address of our node(!). this function will return NULL if it fails.
-								kcom_node_find wraps __kcom_node_find, grabbing the kcom_nodes_lock
-								before entry, and releasing it afterward. kcom_node_add is called by 
-								accept_connection to create a new kcom_node struct, and adds it to the
-								kcom_nodes list. there is code commented out reguarding finding out if
-								the node is already in the list, but its incomplete. kcom_node_del 
-								removes a node from the kcom_nodes list that uses the passed in
-								sockaddr. we aquire the kcom_nodes spinlock, then use __kcom_node_find
-								to find the node structure to be deleted. if we don't find one, we
-								release the kcom_nodes spinlock, and return -ENOENT. otherwise, we call	
-								list_del to remove the node from our node list, release the spinlock,
-								close its fd, release its socket, free the node structure's memory, and
-			pull dead code.				return 0. comm_simple is a stub that returns 0, and is not used
-								elsewhere in the code. we then declare comm_ack, comm_iovec, and 
-								comm_iovec_ack, which also are not used anywhere else. 
-								accept_connection is called by kcomd_thread (declared later), to accept
-								an incoming connection on a passed in socket. it starts by allocating
-								a new socket, and calling the accept() operation of the passed in
-								socket to accept a connection from the passed in socket, on our new 
-								socket. theres a block of commented out code, for checking if a node 
-								is already in our node_list, but its unused/incomplete. we then use
-								sock_map_fd to get a file descriptor to this socket, add the node this
-								socket is communicating to to our node_list, and return our file
-								descriptor. if our socket allocation returns null, we return -1. if our
-								accept or sock_map_fd have problems, we release our socket, and return
-								-1. if our kcom_node_add fails, we close our fd, release our socket,
-								then return -1. data_read, data_write, and dispatch are all stubs that
-								return 0. data_read and data_write are called by kcomd_thread.
-								kcom_task_create creates a kcom_task structure allocated from
-								GFP_KERNEL for a given kcom_node and PID, initializing the pid, node,
-								and list members. if the kzalloc returns NULL, we return NULL. 
-								kcom_task_delete deletes the first entry in the nodes list that matches
-								the given PID. these task list manipulation functions are missing the
-								spinlock code that the above node_list manipulation code has. 
-								__kcom_task_find and kcom_task_find are formed like the above node find
-								code, but without its spinlock code. kcom_task_send uses 
+								these functions are wrappers performing setup, then calling the above
+								socket_listen function, returning the returned result. they each 
+								set up their appropriate type of sockaddr structure, and call 
+			BREAKUP: move these structures to a	socket_listen, returning the result. next we define three kcom related
+			private header.				data structures. struct kcom_pkt is designed to contain a packet
+								destined to a remote kernel. struct kcom_node is designed to contain a
+								socket, and the information reguarding the node it points to. kcom_task
+								is the structure that contains kcomd's knowledge about a migrated
+								process. it contains the pid of the process in question, a kcom_node
+			OPT: is this list used?			structure defining what node a process is on, a list of processes
+								communicating with this node(?), a list for containing outgoing
+								packets, and space for one incoming packet. we then define a spinlock
+								and a list_head for containing these kcom_nodes. next, we define
+								sockets_fds as a fd_set_bits structure. this structure is a more
+								scalable version of a fd_set, used by do_select. We then declare
+								sockets_fds_bitmap and maxfds, which are set and used by the next
+								function, alloc_fd_bitmap, to hold a dynamically grown array of fds.
+								alloc_fd_bitmap checks the passed in fdcount against ammount of fds the
+								current sockets_fds_bitmap was created to hold, and if its greater, 
+								frees sockets_fds_bitmap (and its contents), and allocates a new one. 
+								if kmalloc fails, we return ENOMEM. otherwise, we set the in, out, ex,
+								res_in, res_out, and res_ex members of the sockets_fds structue to
+								offsets of our sockets_fds_bitmap structure, and return 0. 
+								kcom_pkt_create is called by the later defined kcom_task_send to create
+								a new kcom_pkt structure with the len, type, and data members
+								initialized to the passed in values. if kzalloc fails, we return NULL.
+								Otherwise, we return the properly initialized kcom_pkt structure.
+								__kcom_node_find is called by the later defined kcom_node_find to do
+								the work of finding a node in our kcom_nodes list that uses the passed
+								in sockaddr to communicate.  We use list_for_each_entry and memcmp to 
+			FIXME: doublecheck this return		compare the address of our sock with the address of our node(!). this 
+			FIXME: note the fixme reguarding memcmp	function will return NULL if it fails. kcom_node_find is not called by
+			DEAD: dead code.			anything. it wraps __kcom_node_find, grabbing the kcom_nodes_lock
+								before entry, and releasing it afterward. kcom_node_add is called by
+								accept_connection to create a new kcom_node struct, and add it to the
+			DEAD: dead code.			kcom_nodes list. there is code commented out reguarding finding out if
+								the node is already in the list, but its incomplete. kcom_node_del is
+								not called by anything. its called to remove a node from the kcom_nodes
+								list that uses the passed in sockaddr. in it, we aquire the kcom_nodes
+								spinlock, then use __kcom_node_find to find a node structure to be
+								deleted. if we don't find one, we release the kcom_nodes spinlock,
+								and return -ENOENT. otherwise, we call list_del to remove the node from
+								our node list, release the spinlock, close the communicating fd,
+								release the socket, free the node structure's memory, and return 0.
+			DEAD: dead code.			comm_simple is a stub that returns 0, and is not called elsewhere in
+			DEAD: dead code.			the code. we then forward declare comm_ack, comm_iovec, and 
+								comm_iovec_ack functions, which are not defined or called anywhere
+								else. accept_connection is called by the later declared kcomd_thread to
+								accept an incoming connection on a passed in socket. in it, we start by
+								allocating a new socket, and calling the accept() operation of the
+								passed in socket to accept a connection from the passed in socket, on
+			FIXME: this dead code needs to live!	our new socket. theres a block of commented out code, for checking if a
+								node is already in our node_list, but it is unused/incomplete. we then 
+								use sock_map_fd to get a file descriptor to this socket, add the node
+								use socket is communicating with to our node_list, and return our file
+								descriptor. If our socket allocation returns null, we return -1. If our
+			FIXME: unique error paths!		accept or sock_map_fd have problems, we release our socket, and return
+								-1. if kcom_node_add fails, we close our fd, release our socket, then
+								return -1. we then create data_read, data_write, and dispatch stubs
+								that only return 0. data_read and data_write are called by 
+			DEAD: dead code.			kcomd_thread. dispatch is never called. kcom_task_create is not called
+								from anything. its called to create a kcom_task structure for a given
+								kcom_node and PID, initializing the pid, node, and list members. in it,
+								we use kzalloc to allocate the memory from GFP_KERNEL. if the kzalloc
+								returns NULL, we return NULL. otherwise, we initialize the fields of
+			DEAD: dead code.			our new structure, and return it. kcom_task_delete is not currently
+								called from anywhere. its called to delete the first entry in the nodes
+			FIXME: task manipulation functions are	list matching the given PID. __kcom_task_find and kcom_task_find are 
+			missing spinlocks like the node code	constructed like the above node find code, but without spinlocks. 
+			uses. find out why.			__kcom_task_find uses list_for_each_entry to cycle through our list
+								of nodes, using list_for_each_entry on each node's list of tasks to
+								find a task with the same pid as the passed in PID, and return it, or
+								NULL if one is not found. kcom_task_find is a wrapper around
+								__kcom_task_find, passing it the PID passed in, and returning the
+								returned result. kcom_task_send isn't called by anything. it uses
 								kcom_pkt_create to add a packet to the task structure belonging to the
-								pid passed in. it has comments reguarding sleeping and replying, but 
-								instead it returns 0. kcomd_thread is the function executed in kernel
-								space, as a kernel thread. first, we call daemonize to create a "kcomd"
-								process. we then wait for a connection on an ipv4 and an ipv6 socket.
-								when we receive a connection, we enter a large while loop (which we 
-								never exit?). in this loop, we first call alloc_fd_bitmap to make sure
-								our fd bitmap is big enough to hold maxfds number of fds. we then zero
-								the in, out, and ex fd sets, add our two listening sockets to the in
-								set, add the listening fds of each node in our node_list to the in set,
-								add each fd in our node list that we have packets to send on to the out
-								set, zero the res_in, res_out, and res_ex set of fds, and call select.
-								if select returns -1, we return to the top of our loop. otherwise, we
-								test wether our v4 or v6 listening socket received a connection. if so,
-								we call accept_connection. we then test each fd belonging to our list
-								of nodes, and if they have data to read, call data_read (a NOP!), or 
-								if they have data to be written call data_write(also a NOP!). 
-								at this point, we return to the top of our never-ending while loop.
+			FIXME: incomplete code!			pid passed in. it has comments reguarding sleeping and replying, but
+								instead returns 0. kcomd_thread is the function executed in kernel
+								space, as a kernel thread.in it, we first call daemonize to create a
+								"kcomd" process. we then wait for a connection on an ipv4 and an ipv6
+			FIXME: should this while loop exit?	socket. when we receive a connection, we enter a large while loop
+								In this loop, we first call alloc_fd_bitmap to make sure our fd bitmap
+								is big enough to hold maxfds number of fds. we then zero the in, out,
+								and ex fd sets, add our two listening sockets to the in set, add the
+								listening fds of each node in our node_list to the in set, add each fd
+								in our node list that we have packets to send on to the out set, zero
+								the res_in, res_out, and res_ex set of fds, and call select. if select
+								returns -1, we return to the top of our loop. otherwise, we test to see
+								if our v4 or v6 listening socket received a connection. if so, we call
+								accept_connection. if not, we examine each fd belonging to our list
+								of nodes, and if they have data to read, call data_read (a NOP!), or
+								if they have data to be written call data_write(also a NOP!).
+								when done, we return to the top of our never-ending while loop.
 								kcom_init calls kernel_thread to start the aforementioned kcomd_thread
-								function. the rest of the file is just module glue for creating a kcomd
-								module, licensing it GPL, and attributing Vincent Hanquez as the 
-								author.
+								function as a kernel thread. kcomd_exit is an empty function. we
+								register kcomd_init to run when the module is loaded, kcomd_exit to run
+								upon unload, and call two macros, the first licensing this file under
+								the "GPL", and the second attributing Vincent Hanquez as the author.
 040	config		creates hpc/Kconfig			this file defines our openmosix menu options in the kernels
 								configuration system (menuconfig). we declare a top level menu titled 
 								"HPC Options". our configuration options all exist under this entry.

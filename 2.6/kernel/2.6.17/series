@@ -46,7 +46,6 @@ linuxpmi/clean/009-arch_i386_kernel_vm86_c-auto_update_DSTAY86-final.patch
 # redirect strlen_user to deputy_strlen_user when openmosix_memory_away()
 linuxpmi/clean/010-arch_i386_lib_usercopy_c-strnlen_user_redirect-cleanup-final.patch
 
-
 # ppc, config
 # source hpc/Kconfig
 linuxpmi/clean/011-arch_ppc_Kconfig-source_hpc_Kconfig-final.patch
@@ -150,9 +149,10 @@ linuxpmi/clean/037-hpc_deputy_c-omremote-create-broken-cleanup.patch
 # code responsible for assembling the 'fake' dentries and files on a remote node.
 linuxpmi/clean/038-hpc_files_c-omremotefile-create-breakup-broken-cleanup-final.patch
 
-
 # kcomd
+# perform kernel-to-kernel communications.
 linuxpmi/clean/039-hpc_kcomd_c-kcomd-create-broken-cleanup.patch
+
 
 # config
 linuxpmi/clean/040-hpc_Kconfig-config-cleaup.patch
