@@ -1093,24 +1093,24 @@ hunk	class		file patched				description								noteworthy references
 040	config		creates hpc/Kconfig			this file defines our openmosix menu options in the kernels
 								configuration system (menuconfig). we declare a top level menu titled 
 								"HPC Options". our configuration options all exist under this entry.
-								first, we create an entry defining KCOMD as a tristate, or an item that
-								can be either on (in the kernel), off, or a module (loadable and 
-								unloadable while the kernel is running). next we create an entry
-								defining OPENMOSIX as bool (in kernel, or not). this turns on or off 
-								the parts of openmosix that have to be in-kernel for openmosix to 
-								function. bool OPENMOSIX_VERBOSE is supposed to make openmosix more
+			FIXME: seperate this into PMIGUEST	first, we create an entry defining KCOMD as a tristate, or an item that
+			support, and PMIREMOTE support.		can be either on (in the kernel), off, or a module (loadable and 
+			BUG: shouldnt KCOMD depend on		unloadable while the kernel is running). next we create an entry
+			OPENMOSIX, not the other way round?	defining OPENMOSIX as bool (in kernel, or not). this turns on or off 
+								the parts of openmosix that must be in-kernel for openmosix to
+			DEAD: dead code.			function. bool OPENMOSIX_VERBOSE is supposed to make openmosix more
 								verbose, but just serves to make OPENMOSIX_MIGRATION_VERBOSE and 
 								OPENMOSIX_DEBUG_FS visible. bool OPENMOSIX_MIGRATION_VERBOSE enables 
 								debugging messages of the form OM_VERBOSE_MIG(...) in
 								include/hpc/prototype.h. bool OPENMOSIX_DEBUG accomplishes many things.
-								first, it enables compilation and inclusion of hpc/debug.c, and an
+								first, it enables compilation and inclusion of hpc/debug.c and an
 								archetecture specific hpc/debug-$(ARCH).c, both of which contain
 								functions for printing the state of various structures, processor
 								registers, and other associated values. then, it enables debugging
 								messages of the form OMDEBUG(...) in include/hpc/debug.h. it enables
 								the tracking of the contents of the structure openmosix_options in
 								include/hpc/hpc.h, and makes OPENMOSIX_MIGRATION_DEBUG and
-			remove dead code.			OPENMOSIX_DEBUG_FS visible. bool OPENMOSIX_MIGRATION_DEBUG 
+			DEAD: dead code.			OPENMOSIX_DEBUG_FS visible. bool OPENMOSIX_MIGRATION_DEBUG 
 								does not do anything, and can be safely removed. bool OPENMOSIX_DEBUG_FS
 								enables the compilation and inclusion of the contents of hpc/debugfs.c,
 								creating the om/ directory and its contents under the debugfs. bool

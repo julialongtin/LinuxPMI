@@ -141,11 +141,11 @@ linuxpmi/clean/035-hpc_debug_ppc_c-arch_debug-create.patch
 # debugging functions, not actually called.
 linuxpmi/clean/036-hpc_debug_x86_64_c-arch_debug-create.patch
 
-# omremote
+# omremote, local
 # code to respond to requests received from a remote process.
 linuxpmi/clean/037-hpc_deputy_c-omremote-create-broken-cleanup.patch
 
-# omremotefile omremotedentry
+# omremotefile, omremotedentry, remote
 # code responsible for assembling the 'fake' dentries and files on a remote node.
 linuxpmi/clean/038-hpc_files_c-omremotefile-create-breakup-broken-cleanup-final.patch
 
@@ -153,8 +153,8 @@ linuxpmi/clean/038-hpc_files_c-omremotefile-create-breakup-broken-cleanup-final.
 # perform kernel-to-kernel communications.
 linuxpmi/clean/039-hpc_kcomd_c-kcomd-create-broken-cleanup.patch
 
-
 # config
+# configuration options visible in the kernel's CONFIG system.
 linuxpmi/clean/040-hpc_Kconfig-config-cleaup.patch
 
 # omcore
