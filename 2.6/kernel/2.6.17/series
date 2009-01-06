@@ -155,9 +155,10 @@ linuxpmi/clean/039-hpc_kcomd_c-kcomd-create-broken-cleanup.patch
 
 # config
 # configuration options visible in the kernel's CONFIG system.
-linuxpmi/clean/040-hpc_Kconfig-config-cleaup.patch
+linuxpmi/clean/040-hpc_Kconfig-config-create-cleanup-final.patch
 
-# omcore
+# pmicore
+# functions called from 
 linuxpmi/clean/041-hpc_kernel_c-omcore-create-broken.patch
 
 # config
