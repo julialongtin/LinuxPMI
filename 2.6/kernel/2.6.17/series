@@ -158,8 +158,9 @@ linuxpmi/clean/039-hpc_kcomd_c-kcomd-create-broken-cleanup.patch
 linuxpmi/clean/040-hpc_Kconfig-config-create-cleanup-final.patch
 
 # pmicore
-# functions called from 
+# functions called from code inserted into kernel/fork.c, mm/mlock.c, and mm/mmap.c, plus hpc/migrecv.c, hpc/migctrl.c  arch/$ARCH/kernel/entry
 linuxpmi/clean/041-hpc_kernel_c-omcore-create-broken.patch
+
 
 # config
 linuxpmi/clean/042-hpc_Makefile-config-create-cleanup.patch

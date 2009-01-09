@@ -722,7 +722,7 @@ hunk	class		file patched				description								noteworthy references
 								CTRLFS_MAGIC, and our empty list of files.  ctrlfs_get_sb is called by
 								the kernel's filesystem layer via the ctrlfs_type variable we send to
 								register_filesystem. in it, we wrap get_sb_single(), telling it to use
-1								ctrlfs_fill_super to generate our filesystem's superblock. we then
+								ctrlfs_fill_super to generate our filesystem's superblock. we then
 								declare a file_system_type structure, mapping .get_sb to our 
 								ctrlfs_get_sb above, and .kill_sb to a generic cleanup function.
 								om_ctrlfs_init is called from the kernel to initialize the module. in
@@ -866,9 +866,11 @@ hunk	class		file patched				description								noteworthy references
 								deputy_die_on_communication if comm_recv returns an error, if the type
 								member of the req received is zero, or if one of the functions we call
 								returns negative. deputy_main_loop is the userspace loop that is 
-								executed as the main thread of a deputy process. it calls 
-								deputy_process_communication when comm_wait returns true. it then calls
-								deputy_process_misc to dispatch pending dreqs and signals.
+								executed as the main thread of a deputy process. in it, we immediately
+								enter a large while loop, waiting for the process to not be DDEPUTY.
+								in the while loop, we call deputy_process_communication when comm_wait
+								returns true, then call deputy_process_misc to dispatch pending dreqs 
+								and signals. its my beleif that this function never returns naturally.
 								deputy_startup is called by hpc/migctrl.c's task_local_send to exit the
 								old task, and enter deputy state. in deputy_startup, we use 
 								task_set_dflags to mark this task as deputy, flush a signal that pops
@@ -1110,90 +1112,103 @@ hunk	class		file patched				description								noteworthy references
 								messages of the form OMDEBUG(...) in include/hpc/debug.h. it enables
 								the tracking of the contents of the structure openmosix_options in
 								include/hpc/hpc.h, and makes OPENMOSIX_MIGRATION_DEBUG and
-			DEAD: dead code.			OPENMOSIX_DEBUG_FS visible. bool OPENMOSIX_MIGRATION_DEBUG 
-								does not do anything, and can be safely removed. bool OPENMOSIX_DEBUG_FS
-								enables the compilation and inclusion of the contents of hpc/debugfs.c,
+			DEAD: dead code.			OPENMOSIX_DEBUG_FS visible. bool OPENMOSIX_MIGRATION_DEBUG does not do 
+								anything, and can be safely removed. bool OPENMOSIX_DEBUG_FS enables
+								the compilation and inclusion of the contents of hpc/debugfs.c,
 								creating the om/ directory and its contents under the debugfs. bool
 								OPENMOSIX_CTRL_FS enables the compilation and inclusion of 
-								hpc/ctrlfs.c, which is the control filesystem used to tell the kernel
-								to migrate processes, as well as where to tell what node a process is
-								running on.
-041	ominterface	creates hpc/kernel.c			this file is the kernel's interface to the openmosix system. it	
-								contains only functions that are meant to be called by the kernel.
-								first, we export our openmosix_options datastructure, which contains
-								four constants that are used as "ceilings" for the OMDEBUG_* debugging
-								macros, settable through the debugfs. openmosix_pre_clone is called 
-								when a process requests the clone syscall, before the kernel starts 
-								processing it. in this function, we check wether the current process 
-								has requested a shared memory space between the two clones, and if it 
-								has, we mark the process as un-migratable for that reason, and increase
-								the usage count on its mm structure. note that as a result, both	
-								processes will be marked DSTAY_CLONE, and both will have a usage count 
-								+1 on the mm structure. processes are started with a usage count of 1.
-								openmosix_post_clone is called by the clone syscall, on the thread of
-								the parent, not the child, after the clone is completed. it checks the
-			magic!					mm_realusers counter. if its just 1, then somehow the process magically
-			is this supposed to happen when a	decresed its usage flag, and we clear the DSTAY_CLONE flag given to it
-			child dies, or otherwise drops the	by openmosix_pre_clone. task_maps_inode is supposed to check wether a 
-			shared mm? stub!			given task maps a given inode, but is just a stub. 
-			monkey?					openmosix_no_longer_monkey is called from __remove_shared_vm_struct
+								hpc/ctrlfs.c, which is a filesystem stub, intended to be the next
+								migration control filesystem.
+041	ominterface	creates hpc/kernel.c			This file is the primary interface for the kernel to the process
+								migration system. It contains mostly functions meant to be called by
+								hooks we place in the kernel. First, we export the openmosix_options
+			OPT: shouldnt the existance of this	structure, which contains four constants used as "ceilings" for the
+			structure depend on debugfs?		OMDEBUG_* debugging macros. The values in this datastructure are
+								settable through debugfs entries, created by hpc/debugfs.c.
+								openmosix_pre_clone is called by code added to kernel/fork.c's do_fork
+								before the kernel starts processing the fork request. In this function,
+								we check wether the current process has requested a shared memory space
+								between the two clones, and if it has, we mark the process as
+								un-migratable for the DSTAY_CLONE reason, and increase the usage count
+								on its mm structure. Note that both processes resulting from the fork 
+								will be marked DSTAY_CLONE, and both will inherit mm usage counts
+								increased by +1 on their mm structures. openmosix_post_clone is called
+								by code inserted at the end of do_fork in kernel/fork.c. It is called
+								on the thread of both the parent and the child process after the work 
+								in do_fork has completed. In it, we first check to see if the process
+								is marked VM_CLONE. if it is, we immediately return. otherwise, we
+								check the mm_realusers counter. if its just 1, then the processes mm 
+			is this supposed to happen when a	structure is only being used once, so we clear the DSTAY_CLONE flag
+			child dies, or otherwise drops the	previously assigned by openmosix_pre_clone. task_maps_inode is called
+			shared mm?				by the next function, openmosix_no_longer_monkey, to check wether a
+			FIXME: stub!				given task maps a given inode, but is just a stub, returning 0. 
+								openmosix_no_longer_monkey is called from __remove_shared_vm_struct
 								to check every process on the machine and see wether its using the
-								passed in inode. if it is, we set the DREQ_CHECKSTAY flag, as this
-								inode is about to be removed from service, and doing such may make this
-								process migratable. we aquire the tasklist_lock around our invocation
-								of for_each_process(). since the previous function is a stub, this 
-								function does nothing. stay_me_and_my_clones is called by sys_mlock and
-								sys_mlockall in mm/mlock.c, as well as do_mmap_pgoff in mm/mmap.c. it 
-								applies a given bitmask of reasons to the current task, and all tasks
-								that share its mm structure. first, it uses task_lock to lock the
-								current process, sets its stay reason, and task_unlocks. if the number
-								of mm_realusers is greater than one (some other process uses this
-								processes mm structure), we grab the tasklist_lock, use 
-								for_each_process to search for processes with the same mm pointer, that
-								aren't the current process, and use task_lock/task_set_stay/task_unlock
-								to add our stay reasons to the found processes. obtain_mm is called by
-								mig_handle_migration() in hpc/migrecv.c and task_local_bring() in 
-								hpc/migctrl.c to allocate a new mm structure, initialize it, an make
-								it the context of the current process. we start by checking to see if 
-								there is currently a mm structure associated with the passed in task.
-								if there is, we call panic() to print a debugging message. we then
-								mm_alloc() a new mm, initialize it to hold our given task with
-								init_new_context(), aquire the mmlist_lock, initialize our new mm's 
-								mmlist member with the mmlist of process zero, and release the 
-								mlist_lock. we then assign this mm to our process by first aquiring the	
-								task_lock(), saving our curent active mm, setting the task's active mm
-								and mm to our newly created mm, and task_unlock()ing. we call
-								activate_mm with our origional and new mm, then mmdrop the old
-								active_mm. if our mm_alloc() fails, we return -ENOMEM. if 
-								init_new_context() fails, we destory our allocated mm, and return the
-								error init_new_context() failed with. otherwise, we return 0 for
-								success. unstay_mm is called by sys_munlock and sys_munlockall in
-								mm/mlock.c to request a re-evaluation of the stayability of the
-								current process, and all processes that share its mm structure. for the
+								passed in inode. if it is, we set the processes DREQ_CHECKSTAY flag,
+								as this inode is about to be removed from service by
+								__remove_shared_vma_struct, and doing such may make this process
+								migratable. setting this flag indicates to hpc/task.c's task_do_request
+								that this process needs reexamined during the reexamine sweep. to
+								accomplish the former function, we first aquire the tasklist_lock, then
+								invoke for_each_process() against the list of all processes. We use the
+								previous function task_maps_inode to check if each process is using
+								the passed in inode. Since the previous function is a stub, this
+								function does nothing. At the end of the function, we release the
+								tasklist_lock. stay_me_and_my_clones is called by code added to
+								sys_mlock and sys_mlockall in mm/mlock.c, as well as do_mmap_pgoff in
+								mm/mmap.c. it applies a given bitmask of reasons not to migrate to the
+								current task, and all tasks that share its mm structure. in it, we
+								first use task_lock to lock the current process. we then set its stay
+								reason, then task_unlock. if the number of mm_realusers is greater than
+								one (indicating that some other process uses this processes mm
+								structure), we grab the tasklist_lock, use for_each_process to search
+								for a process with the same mm pointer (that aren't the current
+								process), and use task_lock, task_set_stay, and task_unlock to add our
+			OPT: void, not int?			stay reasons to the process. we always return 0. obtain_mm is called by
+								mig_handle_migration() in hpc/migrecv.c and task_local_bring() in
+								hpc/migctrl.c to allocate a new mm structure, initialize it, and make
+			FIXME: should there be a mm, should we	it the context of the current process. We start by checking to see if 
+			be DDEPUTY?				theres a mm structure already associated with the passed in task. If
+								there is, we check to make sure the process is not marked DDEPUTY. If  
+			FIXME: what was the logic of the	it is, we call panic() to print a debugging message. at this point is
+			commented out code?			some commented out code that responds to there being an mm on a deputy
+								process by calling exit_mm on it. Either way, we then mm_alloc() a new
+			FIXME: mm leak?				mm, initialize it to hold our given task with init_new_context(), 
+								aquire the mmlist_lock, initialize our new mm's mmlist member with the
+								mmlist of process zero, and release the mlist_lock. We then assign this
+								mm to our process by first aquiring the	task_lock(), saving our curent
+								active mm, setting the task's active mm and mm to our newly created mm,
+								and task_unlock()ing. we call activate_mm with our origional and new
+								mm, then mmdrop the old active_mm. if our mm_alloc() fails, we return
+								-ENOMEM. if init_new_context() fails, we destory our allocated mm, and
+								return the error init_new_context() failed with. otherwise, we return 0
+			 					for success. unstay_mm is called by code added to sys_munlock and 
+								sys_munlockall in mm/mlock.c to set the DREQ_CHECKSTAY flag on the
+								current process, and all processes that share its mmstructure. for the
 			premature optimization?	looks good tho.	common case of just one task using a given mm structure, we just call
-								task_set_dreqs(current, DREQ_CHECKSTAY). otherwise, we use 
+			BUG: no locking!			task_set_dreqs(current, DREQ_CHECKSTAY). otherwise, we use 
 								for_each_process() with a read_lock held on the tasklist_lock to
 								iterate through each process on the machine, checking if its using our
 								passed mm, and if so, we call task_set_dreqs(p, DREQ_CHECKSTAY) on it.
-								remote_pre_usermode is called by the later defined 
-								openmosix_pre_usermode to check for communication events before 
-								entering userspace. it calls comm_peek() to see if theres pending 
-								input, and if there is, it calls remote_do_comm() to process the
-								communication in question.  remote_pre_usermode always returns 0 for
+								remote_pre_usermode is called by the later defined
+								openmosix_pre_usermode to check for communication events before
+								entering userspace. in it, we call comm_peek() to see if theres pending 
+								input, and if there is, call remote_do_comm() to process the
+			OPT: void, not int?			communication in question. remote_pre_usermode always returns 0 for
 								success. deputy_pre_usermode is also called by openmosix_pre_usermode,
 								before jumping to userspace while handling a process in deputy state.
 								in this function, we just jump into deputy_main_loop, instead of going
-								to any real usermode code. when deputy_main_loop() returns, we return 
-								0. openmosix_pre_usermode is called by assembly code in 
-								arch/$ARCH/kernel/entry, when switching from kernel space to user 
-								space. we first check for pending dreqs, and if we finds one, we save
+								to any real usermode code. if deputy_main_loop() returns, this function
+								returns 0. openmosix_pre_usermode is called by assembly code inserted 
+								into arch/$ARCH/kernel/entry, when switching from kernel space to user 
+								space. we first check for pending dreqs, and if we find one, we save
 								our current irq mask, call task_do_request, and restore our irq mask
-								once task_do_request returns. after dispatching dreqs, we call one of
-								the previous two functions depending on wether the process is in 
+								once task_do_request returns. after dispatching possible dreqs, we call
+								one of the previous two functions depending on wether the process is in 
 								DDEPUTY or DREMOTE state. like before, we save our irq mask before
 								calling remote_pre_usermode or deputy_pre_usermode, then restore them
-								once we return from userspace. this function always returns 0 for
-								success. openmosix_init is called on subsystem load. it starts the 
+			OPT: return void?			once we return from userspace. this function always returns 0 for
+								success. openmosix_init is called upon subsystem load. it starts the 
 								openmosix_mig_daemon kernel thread to receive incoming processes, and 
 								returns 0. the last line in this file tells the subsystem system to 
 								call openmosix_init upon initializing this kernel component.
