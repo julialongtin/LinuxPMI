@@ -165,8 +165,10 @@ linuxpmi/clean/041-hpc_kernel_c-omcore-create-broken-cleanup.patch
 # directions for building the contents of the hpc/ directory.
 linuxpmi/clean/042-hpc_Makefile-config-create-cleanup.patch
 
-# ominterface
-linuxpmi/clean/043-hpc_migctrl_c-ominterface-create-broken-cleanup.patch
+# pmicore
+# wrapper functions called to perform process migration
+linuxpmi/clean/043-hpc_migctrl_c-pmicore-create-broken-cleanup.patch
+
 
 # omrecv
 linuxpmi/clean/044-hpc_migrecv_c-omrecv-create-breakup-broken-cleanup.patch
