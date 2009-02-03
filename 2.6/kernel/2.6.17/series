@@ -158,7 +158,7 @@ linuxpmi/clean/039-hpc_kcomd_c-kcomd-create-broken-cleanup.patch
 linuxpmi/clean/040-hpc_Kconfig-config-create-cleanup-final.patch
 
 # pmicore
-# functions called from code inserted into kernel/fork.c, mm/mlock.c, and mm/mmap.c, plus hpc/migrecv.c, hpc/migctrl.c  arch/$ARCH/kernel/entry
+# functions called from code inserted into kernel/fork.c, mm/mlock.c, and mm/mmap.c, plus hpc/migrecv.c, hpc/migctrl.c, and arch/$ARCH/kernel/entry
 linuxpmi/clean/041-hpc_kernel_c-omcore-create-broken-cleanup.patch
 
 # config
@@ -166,14 +166,15 @@ linuxpmi/clean/041-hpc_kernel_c-omcore-create-broken-cleanup.patch
 linuxpmi/clean/042-hpc_Makefile-config-create-cleanup.patch
 
 # pmicore
-# wrapper functions called to perform process migration
+# wrapper functions called to perform process migration.
 linuxpmi/clean/043-hpc_migctrl_c-pmicore-create-broken-cleanup.patch
 
-
-# omrecv
+# pmilocal
+# functions for assembling a received process, and the daemon for receiving a process.
 linuxpmi/clean/044-hpc_migrecv_c-omrecv-create-breakup-broken-cleanup.patch
 
-# omsend
+# pmiremote
+# functions for disassembling a process, and transmitting it to a remote node.
 linuxpmi/clean/045-hpc_migsend_c-omsend-create-broken-cleanup.patch
 
 # prochpc
