@@ -1543,144 +1543,186 @@ hunk	class		file patched				description								noteworthy references
 								mig_send function calls or arch_mig_send_specific fail, we OMBUG about
 			FIXME: call arch_mig_send_post!		it, and send a MIG_ABORT req to the remote end. we then return -1 for
 								failure.
-046	prochpc		creates hpc/proc.c			this file contains the code that adds a hpc directory to every process
-			this file is way out of order. reorg.	on the machine's proc/$PID/ directory (for controling process
-			seperate into 'hpc' and 'admin'		migration), as well as the code adding the /proc/hpc/admin directory 
-								to control global aspects of openmosix. proc_pid_set_where is called
-								by openmosix_proc_pid_setattr when a user writes a destination to 
-								/proc/$PID/hpc/where. first we check for the string "home", and if so,
-			printk, and bad formatting.		we printk that we found the "HOME" string, and call
-			check return of task_register_migration	task_register_migration to migrate the process to its home node.
-								otherwise, we see if we can decode an ipaddress by calling
-			check return of task_register_migration string_to_sockaddr. if we find one, we call task_register_migration to
-								migrate the process to the ip we found. if we don't find "home" or an
-			doing nothing is wrong.			ip, we do nothing. either way, we return the size of the string passed
-								in. proc_pid_get_where is called by openmosix_proc_pid_getattr when a
-								user requests the node a given process is running on, by reading
-								/proc/$PID/hpc/where. it writes to a supplied char * the address of the
-								node the process is running on, or "home" for the home node. first we 
-								check to see if the process is DREMOTE. if it is, we use comm_getname 
-								to get the address of the node a process is running on, use
-								sockaddr_to_string to write it to the passed in char *, then add a
-								'\n'. if the process is not DREMOTE, we place the string "home\n" in 
-								the passed in char *. either way, we return the length of the location,
-			stayreason_string belongs either in a	including the \n at the end. the array stayreason_string contains the
-			header, or in the function that uses it	short strings matching the reasons a process might be confined to its
-								home node, defined in hpc/task.h. "monkey" means a process is using a
-								writeable memory mapped file. "mmap_dev" means a process has a 
-								character device mmapped. "VM86_mode" means a process is running in
-								VM86 mode. "priv_inst" is supposed to mean a process is using the 
-								IN/OUT assembly instructions, but is not yet implimented. "mem_lock"
-								means one of the VMAs or the MM structure belonging to this process are
-								 marked VM_LOCKED. "clone_vm" means either this task does not have a mm
-								structure, or its mm structure is in use by more than one process.
-								"rt_sched" means the process has a realtime scheduling priority set.
-								"direct_io" is meant to mean a process has permissions to access I/O 
-								space, but it is not yet implimented. "system" means the process is
-								either the init process (pid 1), or one of our openmosix daemons
-								created with om_daemonize. "extern_1" "extern_2" "extern_3" and 
-								"extern_4" are reasons that are meant to be setable by a userspace 
-								program, along with "user_lock", which indicates that the user has
-								requested for this process not to be migrated. this array is used
-								exclusively by proc_pid_get_stay. proc_pid_get_stay is called
-								by openmosix_proc_pid_getattr. it writes to a passed in char * a string
-								(taken from staystring) describing each stay reason set in the stay
-								reason mask, seperated by \n, terminated by \n, and returns the length.
-								we acomplish this by looping through the 32 possibilities, and testing
-								for each of them with task_test_stay(). proc_pid_get_debug is called by
-								openmosix_proc_pid_getattr. it writes to the passed in char * the hex
-								value of the passed in task's om.dflags member. we return the length of
-			clean up this string.			the string we wrote, including its trailing \n. proc_admin_set_bring 
-			these two functions are STUBs!		and proc_admin_set_expel are called by openmosix_proc_admin_setattr 
-								when the user wites to /proc/admin/bring and /proc/admin/expel,
-			printk()! clean the messages.		respectively. they just printk a message, and return the size value
-			clean up this string.			passed in. proc_admin_get_version is called by 
-								openmosix_proc_admin_getattr. it prints into the passed in char * a 
-								string reading "openMosix version: " and then the 
-								OPENMOSIX_VERSION_TUPPLE. to create the entries in our 
-								proc_om_entry_admin structure (of type om_proc_entry) we create a 
-								temporary #define. proc_om_entry_admin contains entries that define the
-								'files' found in the /proc/hpc/admin/ directory, along with what
-								function should be called to dispatch data being read/written to that
-								file. we create an entry for "bring", mapping writes to 
-								proc_admin_set_bring, and reads to proc_admin_get_0. we create an
-								"expel" entry, mapping writes to proc_admin_set_expel, reads to 
-								proc_admin_get_0. we also add a "version" entry, mapping writes to 
-								proc_admin_set_0, and reads to proc_admin_get_version. in effect, this 
-								makes it where bring and expel can only be written to, and version can
-								only be read. anything else will be routed to proc_admin_set_0 or 
-			should return -EACCES!			proc_admin_get_0, which are later defined to return -EINVAL. 
-								proc_om_entry_pid holds the entries that define the 'files' found in
-								the /proc/$PID/om/ directories, along with what function should be 
-								called to dispatch data being read/written to that file. we create a
-								"where" entry, mapping its write to proc_pid_set_where, and its read to
-								proc_pid_get_where. we create a "stay" entry, mapping write to 
-								proc_pid_set_0, and read to proc_pid_get_stay. finally, we create a 
-								"debug" entry, mapping write to proc_pid_set_0, and read to
-								proc_pid_get_debug. this makes it where "where" can be read and
-								written to, whereas "stay" and "debug" can only be read. anything else
-								will be routed to proc_pid_set_0 or proc_pid_get_0, which return
-			where is this called from?		-EINVAL. openmosix_proc_pid_getattr is called by 
-								proc_pid_openmosix_read in fs/proc/base.c to dispatch a request to one
-								of the above functions. it uses proc_om_entry_pid, which contains
-								function pointers
-								to the appropriate dispatching function. to accomplish this, we iterate
-								over the members of proc_om_entry_pid, checking if the name of the file
-								passed in matches the name on this specific entry. if it does, we call
-								the function for 'get' in the entry. we return the length returned by
-								the 'get' function, or -EINVAL if we don't find a matching entry.
-			where is this called from?		openmosix_proc_pid_setattr works in much the same way, calling the set
-								member of the appropriate entry in the array proc_om_entry_pid to
-								dispatch. it also returns the number of characters successfully
-								written, or -EINVAL if we don't have an entry for the file in question.
+046	prochpc,local	creates hpc/proc.c			This file contains the code that adds a hpc directory to every process
+			FIXME: this file is way out of order.	on the machine's proc/$PID/ directory (for controling process
+			FIXME: seperate this file into 'hpc'	migration), as well as the code adding the /proc/hpc/admin directory 
+			and 'admin' sections			to control global aspects of process migration functionality.
+								proc_pid_set_where is called by openmosix_proc_pid_setattr when a user
+								writes a destination to /proc/$PID/hpc/where. First we check the given
+			FIXME: printk, bad formatting.		string for the string "home", and if we find it, we printk 
+			FIXME: check return of			"HOME detected", and call task_register_migration to migrate the given
+			task_register_migration.		process to its home node. If we don't find the string "home", we see if
+								we can find an ipaddress by calling string_to_sockaddr. If we find one,
+			FIXME: check return of			we call task_register_migration to migrate the process to the ip we
+			task_register_migration.		found. If we don't find "home" or an ip in the given string, we do
+			FIXME: doing nothing is wrong!		nothing. Regardless of what we do, we return the size of the string
+								written to us, indicating success. proc_pid_get_where is called by
+								openmosix_proc_pid_getattr when a user requests the node a given
+								process is running on, by reading /proc/$PID/hpc/where. It writes to a
+								given char * the address of the node the process is running on, or
+								"home" for the home node. First we check to see if the process has a
+								connection associated with it, and if it does, we check to see if it is
+								DMIGRATED. If it is DMIGRATED, we use comm_getname to get the address 
+								of the remote node the process is running on, use sockaddr_to_string to
+								write the address to the passed in char *, then add a '\n' on the end
+			FIXME: connection but no DMIGRATED?	of the string. If the process is not DMIGRATED or has no connection
+			FIXME: DMIGRATED but no connection?	associated with it, we place the string "home\n" in the passed in
+								char *. regardless of DMIGRATED status, we return the length of the 
+								string placed in the given char *, including the \n at the end. The
+			FIXME: stayreason_string belongs either	array stayreason_string is used by proc_pid_get_stay. It contains a
+			in a header, or inside of the function	series of short strings listing the possible reasons a process might be
+			that uses it.				confined to its home node, matching the values defined in hpc/task.h.
+								"monkey" means that a process is using a writeable memory mapped file.
+								"mmap_dev" means that a process has a character device mmapped. 
+								VM86_mode" means a process is running in VM86 mode, rather than
+			FIXME: code for backing up priv_inst?	protected mode. "priv_inst" is supposed to mean that a process is using
+								the IN/OUT assembly instructions, but the code to monitor for this is
+								not yet implimented. "mem_lock" means that one of the VMAs or the MM
+								structure belonging to this process are marked VM_LOCKED. "clone_vm"
+								means that either this task does not have an mm structure of its own,
+								or its mm structure is in use by more than one process. "rt_sched"
+								means that the process has a realtime scheduling priority set.
+			FIXME: code for backing up direct_io?	"direct_io" is supposed to mean that a process has permissions to
+								access I/O  space, but it is not yet implimented. "system" means that
+								the process is either the init process (pid 1), or an openmosix daemon
+			FIXME: document a usage of 'externs'.	created via om_daemonize. "extern_1" "extern_2" "extern_3" and
+								"extern_4" are reasons meant to be setable by a userspace program,
+								along with "user_lock", which indicates that the user has requested
+			FIXME: should we be using size?		this process not to be migrated. proc_pid_get_stay is called by
+								openmosix_proc_pid_getattr when the user tries to read data from
+								/proc/$PID/hpc/stay. It writes to a passed in char * a string
+								describing each reason the process cannot migrate, seperated by '\n'
+								and terminated by '\n'. These reasons are taken from the previously
+								defined stayreason_string array. We acomplish this by looping
+								through the 32 possibile stay reasons, testing for each of them with
+								task_test_stay(). If one is set, we sprintf into the passed in char *
+								the reason taken from stayreason_string, followed by a '\n'. If no stay
+								reasons are set, we store '\0' into the passed in char *. We return the
+								length of the string stored into the passed in char *, or 0 if we only
+			FIXME: should we be using size?		stored '\0' into the passed in char *. proc_pid_get_debug is called by
+			OPT: reduce length out of function.	openmosix_proc_pid_getattr when the user tries to read data from
+								/proc/$PID/hpc/debug. It writes to the passed in char *	the hexidecimal
+								value of the passed in task's debug flag, taken from its om.dflags
+								member. We use sprintf to place the value into the passed in char *,
+								formatting it as '0x' and eight hexidecimal characters (followed by a
+			FIXME: these two functions are STUBs!	'\n'), and return the result of the sprintf call. proc_admin_set_bring
+								and proc_admin_set_expel are called when the user writes to
+								/proc/hpc/admin/bring and  /proc/hpc/admin/expel, respectively. Each of
+			FIXME: printk()!			these functions are stubs, which only printk a message, and return the
+								passed in count of bytes written, indicating success.
+			FIXME: should we be using size?		proc_admin_get_version is called when a user reads data from
+								/proc/hpc/admin/version. It writes into the passed in char * a string
+			FIXME: formatting?			reading "openMosix version: " and then the three digit version number
+								defined in include/hpc/version.h. We use sprintf to store the string
+								into the passed in char *, returning the ammount of characters written.
+								To create the entries in our proc_om_entry_admin structure (of type
+								om_proc_entry_t), we create a temporary macro, to shorten the ammount
+								of characters used during the definition. The proc_om_entry_admin array
+								contains structure defining the 'files' found in the /proc/hpc/admin/
+								directory, along with what functions should be called to dispatch data
+								being read from or written to each file. We first create an entry for
+								"bring", mapping writes to proc_admin_set_bring, and reads to
+								proc_admin_get_0, which is a handler for reads to files we have deemed
+								unreadable. Next, we create an "expel" entry, mapping writes to
+								proc_admin_set_expel, and reads to proc_admin_get_0. Finally, we create
+								a "version" entry, mapping reads to proc_admin_get_version, and writes
+								to proc_admin_set_0, which is a handler for writes to files we have
+								deemed unwritable. In effect, these declarations make it where the
+								bring and expel 'files' can only be written to, and the version file
+								can only be read from. Anything else will be routed to proc_admin_set_0	 
+			FIXME: should return -EACCES!		or proc_admin_get_0, which are later defined to return -EINVAL. 
+								To create the entries in our proc_om_entry_pid array (of type
+								om_proc_pid_entry_t), we create another temporary macro, to shorten the
+								ammount of characters used during the definition. The proc_om_entry_pid
+								array holds the structures that define the 'files' found in each
+								processes /proc/$PID/hpc/ directory, along with what function should be
+								called to dispatch data being read from and written to each of these
+								files. First, we create a "where" entry, mapping writes to
+								proc_pid_set_where, and reads to proc_pid_get_where. Next, we create a
+								"stay" entry, mapping reads to proc_pid_get_stay, and writes to 
+								proc_pid_set_0, which is a handler for writes to files we have deemed
+								unwritable. Finally, we create a "debug" entry, mapping reads to 
+								proc_pid_get_debug, and writes to proc_pid_set_0. In effect, this makes
+								it where "where" can be read and written to, whereas "stay" and "debug"
+								can only be read. Writes to files we don't want written to will be 
+			FIXME: should return -EACCES!		routed to proc_pid_set_0, which is lated defined return -EINVAL. 
+								openmosix_proc_pid_getattr is called by the proc_pid_openmosix_read
+								function added to fs/proc/base.c. Its purpose is to dispatch a read
+								request to one of the above functions. We start by iterating over
+								the members of the previously defined proc_om_entry_pid array, checking
+								if the name of the file being accessed matches an entry in the array.
+								If it does, we call the function stored in the 'get' entry of the
+								array, passing along the task we've been asked to manipulate, a char *
+								to contain data read from the 'file' and the number of bytes requested
+								to be read. We return the number of bytes successfully read, which is
+								returned by the function we call. If we find no entry in the
+								proc_om_entry_pid array matching the filename requested to be read
+								from, we return -EINVAL. openmosix_proc_pid_setattr works in much the
+								same way as the previous function, calling the function stored in the
+								'set' member of the entry in the array proc_om_entry_pid to write data
+								to a 'file'. It returns the number of characters successfully written,
+								or -EINVAL if we don't find an entry for the file in question.
 								proc_callback_read is called by the later defined proc_om_read_admin.
-								it calls the appropriate handler for the file its passed (placing its
-								results in a kernel page), and copies the results from the page passed
-								to the handler, into the passed in userspace buffer. we start by
-								using __get_free_page to get a GFP_KERNEL page. if this fails, we
-								return -ENOMEM. otherwise, we check what filename we were requested to
-			does not this iteration method require	give results for. we find the handler by iterating through the passed
-			a NULL entry to be last in the array?	in "entry" array, looking for a handler based on the name of the file
-								passed in, and if we find one, we call the pointer to the handler
-								stored in the entry. if we don't find an entry matching the file in
-								question, or if the handler returns an error, we free the page in
-								question, and return either the error returned, or -EINVAL. next we
-								check to see if the user requested a segment that was beyond the length
-								of the data being returned (with fseek?). if they requested an offset
-								greater than or equal to the length, we free our kernel page, and
-								return 0. finally, we copy the contents of our kernel page into the
-								passed in buf, taking into account the offset requested, using
-								copy_to_user. if our copy_to_user returns an error, we free our kernel
-								page, and return -EFAULT. otherwise, we free our kernel page, and
-								return the number of bytes copied to the passed in buf. 
-								proc_callback_write is the counterpart to the previous function. its 
-								called by the later defined proc_om_write_admin, to dispatch writes to
-			shouldnt we return an error while	the /proc/hpc/admin/ directory. first, we trunicate the count of data
-			trunicating? reject first!		being written in to PAGE_SIZE. then, we reject writes which have
-								an offset, indicating they are partial writes. we use __get_free_page 
-								to get a GFP_USER page. if this fails, we return -ENOMEM.  we copy the
-								data to be written using copy_from_user. if this fails, we free our
-			again, isnt this iteration method	kernel page, and return -EFAULT. we iterate through the passed in
-			broken?					om_proc_entry_t structure, looking for an entry matching the file we
-								have been requested to write to. we use the same pointer tricks as
-								above to dispatch the call to the right function. if we don't find an
-								entry matching the given file, we free our page, and return -EFAULT.
-								otherwise, we free the page we requested, and return the length of 
-								data written. we define an admin subsystem's read and write calls with
-								some #defines, creating wrapper functions proc_om_read_admin and 
-								proc_om_write_admin, wrapping the previous two functions.
-								proc_om_admin_operations  is a structure mapping .read and .write to 
-								proc_om_read_admin and proc_om_write_admin. 
-								openmosix_proc_create_entry is called by openmosix_proc_init to 
-								register the files in /proc/hpc/admin with the /proc filesystem.
-								we accomplish this by iterating through the passed in om_proc_entry_t
-								structure, passing each name and mode to create_proc_entry, along with
-								the passed in proc_dir_entry pointer. in cases where create_proc_entry
-			where is this called from?		fails, we OMBUG() about it. openmosix_proc_init creates /proc/hpc/,
-								then creates /proc/hpc/admin (using proc_mkdir).
-								finally, it calls openmosix_proc_create_entry to create the 'files' in
-								/proc/hpc/admin/. if either proc_mkdir call fails, we OMBUG about it,
-								and return.
+								Its function is to dispatch a read request for a given 'file' in
+								/proc/hpc/admin to the appropriate handler defined above, copying the
+								data read from a kernel page, into the passed in userspace buffer. We
+								first check to see if the user requested more than PAGE_SIZE data, and
+								if they did, we trunicate the size requested to PAGE_SIZE. We then
+								request a page to write our results into using __get_free_page to get a
+								GFP_KERNEL page. If this fails, we return -ENOMEM. We find the 
+			FIXME: doesn't this iteration method	appropriate read handler by iterating through the passed in "entry"
+			require a NULL entry to be last in the	array, looking for a handler matching the name of the 'file' passed in.
+			array?					If we find one, we call the pointer to the read handler stored in the
+								entry array. If we don't find an entry matching the file in question,
+								or if the handler returns an error, we free the page allocated earlier,
+								and return either the error returned by the handler, or -EINVAL. Next,
+								we check to see if the user requested us to return the data seeked to
+								or past the end of the data we're returning. If the seek position is
+								at or past the end, we free our kernel page, and return 0. Otherwise,
+								we copy the contents of our kernel page into the passed in user page,
+								taking into account the offset requested, using copy_to_user. If
+								copy_to_user returns an error, we free our kernel page, and return
+								-EFAULT. Otherwise, we free our kernel page, and return the number of
+								bytes copied to the passed in user page. proc_callback_write is the
+								counterpart to the previous function. Its called by the later defined
+								proc_om_write_admin, to dispatch writes to 'files' in /proc/hpc/admin/.
+			FIXME: shouldnt we return an error	First, we trunicate the count of data being written in to PAGE_SIZE.
+			while trunicating? OPT: reject first!	Then, we reject writes which have an offset, indicating they are
+								partial writes. We use __get_free_page to get a GFP_USER page. If this
+								fails, we return -ENOMEM. Otherwise, we copy the data to be written
+								from the passed in userspace buffer into our kernel page using
+								copy_from_user. If this fails, we free our kernel page, and return
+			FIXME: isnt this iteration method	-EFAULT. We iterate through the passed in om_proc_entry_t structure,
+			broken?					looking for an entry matching the name of the 'file' we have been
+								requested to write to. We use the same pointer tricks as above to
+								dispatch the call to the appropriate handler. If we don't find an
+								entry matching the given file, we free our kernel page, and return
+								-EFAULT. Otherwise, we free the kernel page we requested, and return
+								the length of data written, as returned by the function we dispatched
+								to. proc_om_read_admin is called by the kernel, as part of our file
+			FIXME: this macro stuff is useless if	operations structure. We create it using a macro. In it, we only call
+			not used twice.				proc_callback_read, passing the values that were passed to this
+								function, as well as a pointer to the proc_om_entry_admin array,
+								returning what proc_callback_read returns. proc_om_write_admin is also
+								called by the kernel, through the file operations structure. It is also
+								created by a macro. In it, we only call proc_callback_write, passing
+								the values we were passed, along with a pointer to the
+								proc_om_entry_admin array. We return the value returned by
+								proc_callback_write. proc_om_admin_operations is our file_operations
+								structure, used by openmosix_proc_init when registering our
+								filesystem with the kernel. In it, we map .read and .write to the
+								previously defined proc_om_read_admin and proc_om_write_admin,
+								respectively. openmosix_proc_create_entry is called by
+								openmosix_proc_init to register the files in /proc/hpc/admin with the
+								/proc filesystem. We accomplish this by iterating through the passed in
+								om_proc_entry_t structure, passing each name and mode to
+								create_proc_entry, along with the passed in proc_dir_entry pointer. In
+								cases where create_proc_entry fails, we OMBUG() about it.
+			where is this called from?		openmosix_proc_init is called by code we add to fs/proc/root.c's 
+								proc_root_init, to create the /proc/hpc/ directory and its contents. We
+								use proc_mkdir to create the /proc/hpc/admin directory. We then call
+								openmosix_proc_create_entry to create the 'files' in /proc/hpc/admin/.
+								If either of the proc_mkdir calls fail, we OMBUG about it, and return.
 047	omremote	creates linux/hpc/remote.c		this file is routines for the remote node to request work done on the 
 								home node. remote_disappear is called by both remote_do_syscall in
 								this file, and remote_handle_user in hpc/copyuser.c when a syscall 

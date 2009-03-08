@@ -177,7 +177,8 @@ linuxpmi/clean/044-hpc_migrecv_c-omrecv-create-breakup-broken-cleanup.patch
 # functions for disassembling a process, and transmitting it to a remote node.
 linuxpmi/clean/045-hpc_migsend_c-omsend-create-broken-cleanup.patch
 
-# prochpc
+# prochpc, local
+# functions for handling reads and writes to /proc/$PID/hpc/* and /proc/hpc/admin/*
 linuxpmi/clean/046-hpc_proc_c-prochpc-create-broken-cleanup.patch
 
 # omremote
