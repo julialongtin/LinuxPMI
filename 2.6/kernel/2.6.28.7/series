@@ -2,5 +2,9 @@
 # New 2.6.28.7 branch #
 #######################
 
-# large patch from g_remlin
+# tmig_local
+# 
+linuxpmi/clean/arch_x86_include_asm_tmig_32_h-create-cleanup-final.patch
+
+# monolythic patch from g_remlin
 g_remlin/linux-2.6.28.7-pms-200903062029.pat
