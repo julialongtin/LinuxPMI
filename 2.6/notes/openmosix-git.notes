@@ -30,8 +30,9 @@ hunk	class		file patched				description								noteworthy references
 								point/sse/sse2/etc state to a 512 byte block. its a new feature,
 								not present in earlier i387 style floating point processors. this patch
 								changes from declaring the conversion functions for fxsr<->387 from
-								static to OM_NSTATIC, and adds a function for finding out whether
-								support exists during run time.
+								static to OM_NSTATIC, and adds cpu_has_feature_fxsr, which is a
+								function for finding out if fxsr support exists on this CPU during
+								runtime.
 005	i386,remote	creates arch/i386/kernel/omasm.h	this file contains the syscall table called by processes which are
 			whats the rule for whether to process	DREMOTE. it contains a mapping of whether a syscall is to be passed to
 			locally or back home?			the home node, or handled locally.
@@ -1723,9 +1724,10 @@ hunk	class		file patched				description								noteworthy references
 								use proc_mkdir to create the /proc/hpc/admin directory. We then call
 								openmosix_proc_create_entry to create the 'files' in /proc/hpc/admin/.
 								If either of the proc_mkdir calls fail, we OMBUG about it, and return.
-047	omremote	creates linux/hpc/remote.c		this file is routines for the remote node to request work done on the 
-								home node. remote_disappear is called by both remote_do_syscall in
-								this file, and remote_handle_user in hpc/copyuser.c when a syscall 
+047	omremote	creates linux/hpc/remote.c		This file contains functions to allow a remote node to request work
+								to be done on the home node. remote_disappear is called by both
+								remote_do_syscall in this file, and remote_handle_user in
+								hpc/copyuser.c when a syscall 
 								fails. its purpose is to kill the process on the remote end. it just
 								calls do_exit(SIGKILL), and never returns. remote_inode_map is a
 								vm_operations_struct mapping just the .nopage member to the normal
@@ -1899,16 +1901,30 @@ hunk	class		file patched				description								noteworthy references
 								call wake_up_process(), mark the process as in need of rescheduling,
 								and return 0. task_do_request checks for DREQ_MOVE, or DREQ_CHECKSTAY,
 								and dispatches them to task_request_(move|checkstay).
-51	i386		creates 				this file defines ia32 specific cpu feature detection functions, a
-			linux/include/asm-i386/om.h		function returning argument N passed to a syscall, a function returning	
-								the numbe of arguments passed to a syscall, the NR_MAX_SYSCALL_ARG,
-								and a define for getting the user registers from the task struct.
-								cpu_has_feature_fxsr was declared earlier, and tells us which i387
-								register format to use. arch_get_sys_arg is simple, since our arguments
-								are stored in order in our pt_regs structure. arch_get_sys_nb just
-								returns regs->eax. NR_MAX_SYSCALL_ARG is set to 6. 
-								ARCH_TASK_GET_USER_REGS uses offsets to get the registers out of the
-								task->thread_info structure.
+51	i386		creates 				This file forward declares ia32 specific cpu feature detection
+			linux/include/asm-i386/om.h		functions, declares a function returning argument N passed to a syscall
+								and a function returning the number of arguments passed to a syscall,
+								and defines the NR_MAX_SYSCALL_ARG, and a define for getting the user
+								registers of the current thread. cpu_has_feature_fxsr is implimented by
+								code we add to arch/i386/kernel/i387.c, and tells us whether FXSR
+								format floating point state save functionality is available or not.
+								arch_get_sys_arg is called directly by hpc/remote.c's
+								remote_do_syscall, as well as being wrapped as the SYSARG macro by
+								hpc/syscalls.h. its function is to return the N'th argument passed into
+								the syscall we're currently handling. Since arguments to syscalls are
+								stored in order in our pt_regs structure, arch_get_sys_arg simply
+								returns (as a long) the N'th long-sized value stored in the passed in
+								pt_regs. If we are asked for an argument index greater than or equal to
+								6 (our maximum system call argument index), we BUG_ON() about it.
+								arch_get_sys_nb just returns regs->eax. NR_MAX_SYSCALL_ARG is the
+								maximum number of arguments a system call on this archetecture can
+								receive. On i386, is set to 6. ARCH_TASK_GET_USER_REGS is a macro, used
+								to get the user space registers from the current running thread. In it,
+								we use current_thread to get the current running thread's thread
+								structure, add THREAD_SIZE to point to the next page in memory past it,
+								deduct 8 so that we skip over the space on the stack that is
+								*sometimes* updated with the SS/ESP registers, and deduct 1, returning
+								what we've calculated as a pt_regs pointer.
 52	i386		creates					this file contains definitions for the architecture specific structures	
 			linux/include/asm-i386/om-protocol.h	used when transferring a process between ia32 machines. we define
 								MIG_ARCH_I386_LDT, which is a flag for arch-i386 telling it to transfer
