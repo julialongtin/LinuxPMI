@@ -2,9 +2,9 @@
 # New 2.6.28.7 branch #
 #######################
 
-# tmig_local
-# 
-linuxpmi/clean/arch_x86_include_asm_tmig_32_h-create-cleanup-final.patch
+# tmig_syscall
+# inline functions and macros included by pms.h, used by system call handling routines.
+linuxpmi/silver/arch_x86_include_asm_tmig32_h-create-final.patch
 
 # monolythic patch from g_remlin
 g_remlin/linux-2.6.28.7-pms-200903062029.pat
