@@ -3,7 +3,7 @@ hunk	class		file patched				description								noteworthy references
 002	i386,remote	arch/i386/kernel/asm-offsets.c		this patch defines offsets to members inside of structures, and defines
 	syscall		insert a BLANK(); before our code	used by the assembly code in arch/i386/kernel/entry.S. first, we
 								generate the offset to the om member of the task structure, from the
-								begining of the structure. we then generate an offset to the dflags 
+								begining of the structure. we then generate an offset to the dflags
 			DDEPUTY and DREMOTE should have a	member, inside of task.om, which is of type openmosix_task. finally,
 			following _asm, indicating they're	we define DDEPUTY and DREMOTE constants, setting them to the DDEPUTY
 			the versions used by assembly code.	and DREMOTE values defined in hpc/task.h.
@@ -13,12 +13,12 @@ hunk	class		file patched				description								noteworthy references
 	syscall							syscall exit points store a pointer to the thread_info of this process,
 								and insert a call to openmosix_pre_usermode in the userspace return
 								path. ret_from_deputy_fork is entered by a process, when its eip is set
-								to this function by the code we add in the function copy_thread in 
+								to this function by the code we add in the function copy_thread in
 			if this is identical, why use it?	arch/i386/kernel/processes.c. ret_from_deputy_fork is an identical copy
 								of ret_from_fork. ret_from_kickstart is called from arch_kickstart in
-			isnt this GET_THREAD_INFO redundant?	hpc/arch-i386.c. it calls GET_THREAD_INFO(%bsp), and jmps to 
+			isnt this GET_THREAD_INFO redundant?	hpc/arch-i386.c. it calls GET_THREAD_INFO(%bsp), and jmps to
 								syscall_exit, returning to userspace for the 'first' time on a remote
-								node. we then modify the resume_userspace entry point, to call 
+								node. we then modify the resume_userspace entry point, to call
 								openmosix_pre_usermode between doing work_pending, and restor_all'ing.
 								in the next two hunks, we add code to select which syscall table to use
 								based on whether the current task is marked DREMOTE or not. this is
@@ -26,7 +26,7 @@ hunk	class		file patched				description								noteworthy references
 								we also modify syscall_exit and sysenter_exit to store the result of
 								GET_THREAD_INFO into %ebp, cleaning up after our own code clobbers the
 								register.
-004	i386,i387	arch/i386/kernel/i387.c			fxsr support is support for fast saving of the i387's floating 
+004	i386,i387	arch/i386/kernel/i387.c			fxsr support is support for fast saving of the i387's floating
 								point/sse/sse2/etc state to a 512 byte block. its a new feature,
 								not present in earlier i387 style floating point processors. this patch
 								changes from declaring the conversion functions for fxsr<->387 from
@@ -37,8 +37,8 @@ hunk	class		file patched				description								noteworthy references
 			whats the rule for whether to process	DREMOTE. it contains a mapping of whether a syscall is to be passed to
 			locally or back home?			the home node, or handled locally.
 			#define self out if !CONFIG_OPENMOSIX
-006	userthread	arch/i386/kernel/process.c		in this patch, we add an entry for user_thread_helper in the 
-	remotefork						kernel_thread_helper execution path, add a function for creating an 
+006	userthread	arch/i386/kernel/process.c		in this patch, we add an entry for user_thread_helper in the
+	remotefork						kernel_thread_helper execution path, add a function for creating an
 								in-kernel user thread, and re-direct the entry point ret_from_fork to
 								ret_from_deputy_fork for processes that are DDEPUTY in copythread().
 								our user_thread_helper entry point meerly subtracts 60h from the stack
@@ -46,12 +46,12 @@ hunk	class		file patched				description								noteworthy references
 								stack, allowing execution to continue into the kernel thread helper.
 								user_thread is called by openmosix_mig_daemon, in hpc/migrecv.c, to
 								start a 'kernel thread', in the user segment, to handle an incoming
-								migration request. to do this, we set up the user registers in a 
+								migration request. to do this, we set up the user registers in a
 								pt_regs structure, so that we can call do_fork, and have it create the
 								thread for us. first we zero the structure. then we assign the
-								function pointer to the function we want to start in to ebx, set edx to	
-								the function's argument, set xds and eds to allow the process access to 
-								__USER_DS (the usermode dataspace), and set xcs to allow the process 
+								function pointer to the function we want to start in to ebx, set edx to
+								the function's argument, set xds and eds to allow the process access to
+								__USER_DS (the usermode dataspace), and set xcs to allow the process
 								to execute code in __KERNEL_CS (the kernels codespace). we set the
 								orig_eax 'register' to -1, and set the eip to point to our 
 								user_thread_helper above, so that execution starts there, and set our
@@ -69,9 +69,9 @@ hunk	class		file patched				description								noteworthy references
 009	i386,local	arch/i386/kernel/vm86.c			this patch changes the save_v86_state and return_to_32bit functions
 	remote							so that they clear the DSTAY_86 flag before they exit. it also changes
 								both sys_vm86 and sys_vm86old so that they return a process to its
-								home node if it attempts to enter vm86 mode. the code we add to 
-								save_v86_state and return_to_32bit simply task_lock()s the current 
-								task, uses task_clear_stay() to clear the DSTAY_86 flag, and 
+								home node if it attempts to enter vm86 mode. the code we add to
+								save_v86_state and return_to_32bit simply task_lock()s the current
+								task, uses task_clear_stay() to clear the DSTAY_86 flag, and
 								task_unlock()s the current task. the code we add to sys_vm86 and
 								sys_vm86old simply calls task_go_home_for_reason(), specifying
 								DSTAY_86. if task_go_home_for_reason returns non-zero, we force the
@@ -83,7 +83,7 @@ hunk	class		file patched				description								noteworthy references
 012	ppc,remote	arch/ppc/kernel/asm-offsets.c		this patch defines offsets to members inside of structures, and defines
 	syscall		insert a BLANK(); before our code.	used by the assembly code in arch/ppc/kernel/entry.S. first, we
 								generate the offset to the om member of the task structure, from the
-								begining of the structure. we then generate an offset to the dflags 
+								begining of the structure. we then generate an offset to the dflags
 			DDEPUTY and DREMOTE should have a	member, inside of task.om, which is of type openmosix_task. finally,
 			following _asm, indicating they're	we define DDEPUTY and DREMOTE constants, setting them to the DDEPUTY
 			the versions used by assembly code.	and DREMOTE values defined in hpc/task.h.
@@ -92,7 +92,7 @@ hunk	class		file patched				description								noteworthy references
 								openmosix_pre_usermode in our userspace return path. first we modify
 								syscall_dotrace_cont, selecting which syscall table to use based on
 								whether the current task is marked DREMOTE or not. ret_from_kickstart
-								is called from arch_kickstart. ret_from_kickstart branches directly to 
+								is called from arch_kickstart. ret_from_kickstart branches directly to
 								ret_from_syscall, returning to userspace for the 'first' time on a
 								remote enode. our last hunk branches directly to openmosix_pre_usermode
 								in the restore_user path.
@@ -112,7 +112,7 @@ hunk	class		file patched				description								noteworthy references
 			DDEPUTY and DREMOTE should have a	task.om. we then define DDEPUTY and DREMOTE, setting them to the
 			following asm!				DDEPUTY and DREMOTE values defined in hpc/task.h.
 017	x86_64,remote	arch/x86_64/kernel/entry.S		we modify this file to add a new entry point for returning from
-	syscall		dont define out omasm.h			kickstart, utilize the syscall mapping table in 
+	syscall		dont define out omasm.h			kickstart, utilize the syscall mapping table in
 								arch/x86_64/kernel/omasm.h, modify the PTREGSCALL macro to create om_
 								entries for each of the 6 functions that take a PTREGS argument, insert
 								an om_ptregscall_common entry point, insert a om_stub_execve entry
@@ -122,14 +122,14 @@ hunk	class		file patched				description								noteworthy references
 								returns to userspace for the first time, on a remote node. in the
 								system_call entry point, we check for DREMOTE in task.om.dflags.
 			why the fake frame? CFI_ADJUST!		if we find it, we jump over a stack frame, call into our
-			UNFAKE_STACK_FRAME?			remote_sys_call_table, step back under the stack frame, and jmp to 
+			UNFAKE_STACK_FRAME?			remote_sys_call_table, step back under the stack frame, and jmp to
 								ret_from_syscall. otherwise, we pass through to the normal syscall
 								handler. next, we re-define the PTREGSCALL macro so that when its used,
 								it creates two entries instead of one. one 'normal' entry, and one
-								entry prepended with om_, that loads the address of an om_ version of 
+								entry prepended with om_, that loads the address of an om_ version of
 								the function being declared, and calls our om_ptregscall_common
 								entry to dispatch. om_ptregscall_common is our version of
-			non-functional differences?		ptregscall_common. the only functional difference is ours begins by 
+			non-functional differences?		ptregscall_common. the only functional difference is ours begins by
 								jumping over a stack frame, does the same work as ptregscall_common to
 								call the C function pointed to in %rax, and peel back to before the
 								stack frame we jumped over. entry om_stub_execve is similar to
@@ -140,7 +140,7 @@ hunk	class		file patched				description								noteworthy references
 								finally, we create our user_thread entry, which is responsible for
 								creating our 'user thread', similar to the two previous user_thread
 								functions.
-018	x86_64,remote	creates arch/x86_64/kernel/omasm.h	this is a table containing mappings that are used to dispatch syscall 
+018	x86_64,remote	creates arch/x86_64/kernel/omasm.h	this is a table containing mappings that are used to dispatch syscall
 			#define self out if !CONFIG_OPENMOSIX	requests made by processes that are guests. it contains mappings of
 								whether a syscall is to be passed to the home node, or processed
 			what about sys_ni_syscall?		locally. the entries are referenced by code generated by the
@@ -154,8 +154,8 @@ hunk	class		file patched				description								noteworthy references
 020	x86_64,local	arch/x86_64/lib/copy_user.S		this patch redirects copy_to_user and copy_from_user so when the kernel
 	rmem							on the home node is accessing memory in the processes userspace, it
 								gets redirected to functions accessing memory on the remote node. our
-								first hunk modifies copy_to_user, checking to see if the process is 
-								marked DDEPUTY, and if so re-directing to deputy_copy_to_user. the 
+								first hunk modifies copy_to_user, checking to see if the process is
+								marked DDEPUTY, and if so re-directing to deputy_copy_to_user. the
 								second hunk accomplishes the same task, re-directing copy_from_user to
 			better label than 2901!			deputy_copy_from_user if the task is marked DDEPUTY.
 021	x86_64,local	arch/x86_64/lib/usercopy.c		this patch forwards __strncpy_from_user and strncpy_from_user so when
@@ -172,7 +172,7 @@ hunk	class		file patched				description								noteworthy references
 								named "hpc" in the /proc/$PID/ directory of each process on the
 			take out #ifdef around header include.	local node. this makes it the 'root' of our procfs handling code. it
 								actually passes off the work involved to hpc/proc.c. first, we include
-								the hpc/hpc.h header. in the next two hunks we add entries for 
+								the hpc/hpc.h header. in the next two hunks we add entries for
 								PROC_TGID_OPENMOSIX, PROC_TGID_OPENMOSIX_WHERE,
 								PROC_TGID_OPENMOSIX_STAY, PROC_TGID_OPENMOSIX_DEBUG,
 								PROC_TID_OPENMOSIX, PROC_TID_OPENMOSIX_WHERE, PROC_TID_OPENMOSIX_STAY,
@@ -183,14 +183,14 @@ hunk	class		file patched				description								noteworthy references
 								same thing again, creating a "om" entry with inode number
 								PROC_TID_OPENMOSIX in tid_base_stuff. next we create a pair of
 								structures (tgid_openmosix_stuff and tid_openmosix_stuff), containing
-								entries for PROC_TGID_OPENMOSIX_WHERE/"where", 
+								entries for PROC_TGID_OPENMOSIX_WHERE/"where",
 								PROC_TID_OPENMOSIX_WHERE/"where", PROC_TGID_OPENMOSIX_STAY/"stay",
-								PROC_TID_OPENMOSIX_STAY/"stay", PROC_TGID_OPENMOSIX_DEBUG/"debug", and 
+								PROC_TID_OPENMOSIX_STAY/"stay", PROC_TGID_OPENMOSIX_DEBUG/"debug", and
 								PROC_TID_OPENMOSIX_DEBUG/"debug". these entries declare the contents of
 								our /proc/$PID/om/ directory. in our next hunk, we add
 								proc_pid_openmosix_read and proc_pid_openmosix_write functions, and a
 								file_operations structure named proc_pid_openmosix_operations
-								mapping .read and .write functions to the proc_pid_openmosix_read and 
+								mapping .read and .write functions to the proc_pid_openmosix_read and
 								proc_pid_openmosix_write we just declared. in proc_pid_openmosix_read,
 								we first trunicate a read request to PAGE_SIZE, and request a free page
 								in GFP_KERNEL. if __get_free_page fails, we return -ENOMEM. otherwise,
@@ -203,7 +203,7 @@ hunk	class		file patched				description								noteworthy references
 								data beyond the end of what we 'read'. if they did, we free our
 								requested page, and return 0. otherwise, we take the seek value (ppos),
 								and apply it to our page. we then copy_to_user the contents of our page
-								(past the seek) to the passed in userspace buf, free our page, and 
+								(past the seek) to the passed in userspace buf, free our page, and
 								return the number of bytes copy_to_user'd. in proc_pid_openmosix_write,
 			reverse the order of these. fail first!	we first trunicate our write request to PAGE_SIZE, then check to see if
 								the user requested a 'partial write'. if they did, we return -EINVAL.
@@ -230,7 +230,7 @@ hunk	class		file patched				description								noteworthy references
 								tgid_openmosix_stuff and tid_openmosix_stuff structures.
 								we then define the proc_tgid_openmosix_operations and
 								proc_tid_openmosix_operations structures, mapping .read to
-								generic_read_dir and .readdir to our proc_tgid_openmosix_readdir or	
+								generic_read_dir and .readdir to our proc_tgid_openmosix_readdir or
 								proc_tid_openmosix_readdir declared above. we then define the functions
 								proc_tgid_openmosix_lookup and proc_tid_openmosix_lookup, which return
 								the result of calling proc_pident_lookup with our tgid_openmosix_stuff
@@ -245,7 +245,7 @@ hunk	class		file patched				description								noteworthy references
 	remote							it to check for data on our pile of incoming sockets. this function is
 								is only exported if CONFIG_KCOMD is selected.
 026	i386, local,	creates hpc/arch-i386.c			this file contains functions converting between two different but	 http://arch.ece.uic.edu/~yxshi/param/web/homepage/research/doc/reference/vc130.htm
-	remote, 	this file should be broken up.		compatible x87 floating point state formats, for sending and receiving
+	remote,	this file should be broken up.		compatible x87 floating point state formats, for sending and receiving
 	archmig,						archetecture specific sections of a given task's state, a function for
 	syscall							starting a new guest process, and support functions for handling
 								syscall requests from entry.S. first, we forward declare the functions
@@ -309,7 +309,7 @@ hunk	class		file patched				description								noteworthy references
 								the debugreg registers to the passed in struct omp_mig_task. in
 								addition, if this task is marked DDEPUTY (meaning we're on the home
 								node), we also send the features of the boot CPU. arch_kickstart is the
-								function called to start up a newly "created" task. in it, we set up 
+								function called to start up a newly "created" task. in it, we set up
 								debug registers 0-3, 6, and 7 with set_debugreg(). we intentionally
 								omit registers 4 and 5 due to them being just aliases for 6 and 7. we
 								use load_TLS, sets up the thread local spaces, and use loadsegment to
@@ -324,7 +324,7 @@ hunk	class		file patched				description								noteworthy references
 								requested syscall in the sys_call_table, and return the result of
 								calling it (through a function pointer) with the passed in arguments.
 			these functions belong in the same	the next two functions are called via the remote_sys_call_table in
-			place as user_thread!			/arch/i386/kernelomasm.h, by guest processes. om_sys_fork is called by 
+			place as user_thread!			/arch/i386/kernelomasm.h, by guest processes. om_sys_fork is called by
 								a guest process, trying to fork. we wrap remote_do_fork, passing it a
 								clone_flag of SIGCHLD, and null arguments for parent and child thread
 								pointers. om_sys_clone performs similarly, first checking for a new
@@ -335,9 +335,9 @@ hunk	class		file patched				description								noteworthy references
 027	ppc, local,	creates hpc/arch-ppc.c			this patch is very similar to the previous patch, but cleaner.
 	remote,							arch_mig_receive_specific just returns 0. its called by mig_do_receive
 	arch_mig,						from hpc/migrecv.c. its purpose is to receive the archetecture specific
-	syscall							part of a process, which aparently the PPC dosent have. 
+	syscall							part of a process, which aparently the PPC dosent have.
 								arch_mig_receive_proc_context is called at the top of
-								mig_do_receive_proc_context, from hpc/migrecv.c. its purpose is to set 
+								mig_do_receive_proc_context, from hpc/migrecv.c. its purpose is to set
 								the user registers of the current task to the contents of the passed in
 								omp_mig_task structure. in it, we simply use ARCH_TASK_GET_USER_REGS to
 			check return of memcpy!			retreive the registers in question, then memcpy over them from our
@@ -362,7 +362,7 @@ hunk	class		file patched				description								noteworthy references
 			check this memcpy!			structure, and just memcpy it into our omp_mig_task structure. we
 								return 0. arch_kickstart is called by mig_handle_migration to start a
 								guest process for the first time. to accomplish this, we get the user
-			what are we doing with mr 1, or the 	registers, and branch to ret_from_kickstart, passing our user registers
+			what are we doing with mr 1, or the	registers, and branch to ret_from_kickstart, passing our user registers
 			user registers?				as input. arch_exec_syscall is called by deputy_do_syscall to call a
 								requested syscall on behalf of a remote process, returning its result.
 								we look up the requested syscall in the sys_call_table, and return the
@@ -390,22 +390,22 @@ hunk	class		file patched				description								noteworthy references
 								mig_do_send, after migration of a process is complete. it restores the
 								LDT, if we cleared it earlier. arch_mig_send_specific is called by
 								hpc/migsend.c's mig_do_send, to send the architecture specific section
-			FIXME: send the LDT			of a process. it should be sending the LDT, but instead is a stub, 
+			FIXME: send the LDT			of a process. it should be sending the LDT, but instead is a stub,
 			FIXME: ordering. CPU, FPU, all else.	returning 0. arch_mig_send_fp is called by hpc/migsend.c's mig_do_send
 								to store the passed in task's FPU state in the passed in omp_mig_fp
 								structure. in this function, we unlazy_fpu, then memcopy the task's
 			check this memcpy.			thread.i387 structure into the omp_mig_fp. we return 0.
 								arch_mig_send_proc_context is called by hpc/migsend.c's mig_do_send to
 								store the passed in task's CPU state in the passed in omp_mig_task.
-								we aquire a pointer to the user registers using 
+								we aquire a pointer to the user registers using
 			check this memcpy.			ARCH_TASK_GET_USER_REGS, and memcopy them in to the regs member of the
-			no thread locals in recv function!	passsed in omp_mig_fp structure. we then copy all the thread local 
+			no thread locals in recv function!	passsed in omp_mig_fp structure. we then copy all the thread local
 								spaces to the omp_mig_task's arch.tls_array. we copy the segmentation
 								and index registers (ds, es, fs, gs, fsindex, and gsindex), then
 								retreive our stack pointer using read_pda(oldrsp), copying it as well.
 								this function returns return 0, indicating success.
 								arch_kickstart is called by mig_handle_migration, in hpc/migrecv.c.
-								its function is to jump from our kernel code to the user space code of 
+								its function is to jump from our kernel code to the user space code of
 								a guest process for the first time. to accomplish this, first we use
 			load_TLS is commented out! bug!		set_debugreg to load the debugging registers (0-3, 6, and 7). then,
 								we load the segmentation registers, using loadsegment for ds, es, and
@@ -445,7 +445,7 @@ hunk	class		file patched				description								noteworthy references
 								selector, and set ourselves to use the kernel address space. then, we	http://mail.nl.linux.org/kernelnewbies/2001-11/msg00204.html
 								use sock_setsockopt to set SO_KEEPALIVE on the passed in socket, then
 			FIXME? old code.			use sock->ops->setsockopt to set TCP_KEEPINTVL TCP_KEEPCNT, 
-								TCP_KEEPIDLE, and TCP_NODELAY. finally, we restore our origional 	http://www-128.ibm.com/developerworks/linux/library/l-hisock.html
+								TCP_KEEPIDLE, and TCP_NODELAY. finally, we restore our origional	http://www-128.ibm.com/developerworks/linux/library/l-hisock.html
 								address space limit, and exit with 0 if everything was successful. if
 								any of our setsockopt functions return non-zero, we restore our
 								origional address space limit, and return the error value in question.
@@ -588,7 +588,7 @@ hunk	class		file patched				description								noteworthy references
 			return comm_send's errors?		error, we return -1. comm_send_req sends a omp_req structure,
 								containing only the passed in type, no data. it returns the value
 								returned by comm_send.
-030 	rmem, local,	creates hpc/copyuser.c			this file contains routines for moving chunks of memory over an
+030	rmem, local,	creates hpc/copyuser.c			this file contains routines for moving chunks of memory over an
 	remote							established connection. its broken into two parts, deputy_* functions,
 								and remote_* functions. deputy_ functions are run on the home node, and
 								remote_ functions are run on the node a process has been migrated to.
@@ -700,10 +700,10 @@ hunk	class		file patched				description								noteworthy references
 								exported. remote_strnlen_from_user performs strnlen_user or strlen_user
 								on behalf of deputy_strnlen_user. it functions similarly to
 								remote_strncpy_from_user. its symbol is not exported. remote_put_user
-								will use put_user on behalf of either                               in up to a 64bit size. its
+								will use put_user on behalf of either  in up to a 64bit size. its
 								missing BITS_PER_LONG logic that should be like the following function.
 								its symbol is not exported. remote_get_user is structured similarly.
-								its got BITS_PER_LONG==64 logic. its symbol is not exported. finally, 	 
+								its got BITS_PER_LONG==64 logic. its symbol is not exported. finally, 
 								we have remote_handle_user, which is the function that dispatches up to
 								above remote_ functions. it calls comm_recv looking for a req structure.
 								other than that, its a large select case. we return from it when we 
@@ -878,7 +878,7 @@ hunk	class		file patched				description								noteworthy references
 			FIXME: hunt down the unknown reason.	up for unknown reason, according to a fixme, and calls exit_mm().
 038	omremotefile	creates hpc/files.c			This file contains routines for handling file and dentry requests on 
 	omremotedentry	BREAKUP: should create hpc/dentry.c	behalf of remote processes. It starts with two structure declarations.
-			OPT: move remote_aops inside of 	remote_aops is an address_space_operations structure, mapping .readpage
+			OPT: move remote_aops inside of	remote_aops is an address_space_operations structure, mapping .readpage
 			rdentry_create_entry			to hpc/remote.c's remote_readpage, not touching any other mappings. its
 								used by the later defined rdentry_create_entry(). The second structure
 								defined is remote_file_operations, mapping .mmap to hpc/remote.c's
@@ -904,7 +904,7 @@ hunk	class		file patched				description								noteworthy references
 			DEAD: Dead code.			printk() an error message, and return NULL. next we have a structure
 								declaration that has been commented out via a #if 0. it was to declare
 			SPACE: break in the file?		a backing_dev_info structure. after that, theres a break in the file.
-							 	we define the om_remote_dentry structure, a spinlock, and a list_head
+								we define the om_remote_dentry structure, a spinlock, and a list_head
 								structure for containing the om_remote_dentrys. rdentry_delete
 								acquires the remote_dentries spinlock, and removes the first entry in
 								the remote_dentries list with a dentry member that matches the passed
@@ -919,7 +919,7 @@ hunk	class		file patched				description								noteworthy references
 								super_operations structure, containing only default members. We then	
 								use this structure to fill the .s_op member when declaring a 
 								super_block structure, filling the super_block's .s_inodes member with	
-			OPT: move remote_file_vfsmnt inside of 	a new LIST_HEAD. struct remote_file_vfsmnt is a vfsmount structure,
+			OPT: move remote_file_vfsmnt inside of	a new LIST_HEAD. struct remote_file_vfsmnt is a vfsmount structure,
 			rdentry_create_file.			contining five required list heads, and a mount count. it is declared
 								as its own parent. rdentry_add_entry is called by the later defined
 								rentry_create_dentry to create an om_remote_dentry structure containing
@@ -1183,7 +1183,7 @@ hunk	class		file patched				description								noteworthy references
 								mm, then mmdrop the old active_mm. if our mm_alloc() fails, we return
 								-ENOMEM. if init_new_context() fails, we destory our allocated mm, and
 								return the error init_new_context() failed with. otherwise, we return 0
-			 					for success. unstay_mm is called by code added to sys_munlock and 
+								for success. unstay_mm is called by code added to sys_munlock and 
 								sys_munlockall in mm/mlock.c to set the DREQ_CHECKSTAY flag on the
 								current process, and all processes that share its mmstructure. for the
 			premature optimization?	looks good tho.	common case of just one task using a given mm structure, we just call
@@ -1273,7 +1273,7 @@ hunk	class		file patched				description								noteworthy references
 								use mig_recv_hshake to receive our reply. Assuming success, we
 								call hpc/migrecv.c's mig_do_receive to receive the process back,
 								clear our DDEPUTY flag, and use task_set_comm/comm_close to destroy our
-			FIXME: unique ombug message for each	link. If obtain_mm, mig_recv_hshake, or mig_do_receive return failure, 			
+			FIXME: unique ombug message for each	link. If obtain_mm, mig_recv_hshake, or mig_do_receive return failure,			
 			failure! and unique return codes!	we OMBUG("failed\n"), and return -1. task_move_remove2remote is called
 								by the later defined __task_move_to_node to handle moving a task
 								between two remote hosts as in moving it from one machine, to another
@@ -1350,7 +1350,7 @@ hunk	class		file patched				description								noteworthy references
 			FIXME: why the FIXED and PRIVATE?	omp_mig_vma's vm_flags in, adding MAP_FIXED and MAP_PRIVATE. We check
 								the result of do_mmap_pgoff with IS_ERR(result), and if we have an
 								error, we return PTR_ERR(result). Otherwise, we check vm_flags for the
-			FIXME: Are there any special rules for 	VM_READHINTMASK flag, and if its present, we call the sys_memadvise 
+			FIXME: Are there any special rules for	VM_READHINTMASK flag, and if its present, we call the sys_memadvise 
 			calling a syscall directly?		syscall directly to give the kernel either MADV_SEQUENTIAL or
 								MADV_RANDOM memory access hints for this page, depending on whether
 								vm_flags is marked VM_SEQ_READ or not. Assuming the earlier IS_ERR
@@ -1394,7 +1394,7 @@ hunk	class		file patched				description								noteworthy references
 								various signal related members (blocked, real_blocked, sas_ss_sp, and 
 								sas_ss_sp_size). We also copy the signal handler's action member. We
 			FIXME: Incomplete!			have a note about copying an rlimit here, but no code to go with it. We
-			FIXME: Translate the personality when 	copy the task's comm and personality members, then call 
+			FIXME: Translate the personality when	copy the task's comm and personality members, then call 
 			running x86 on x86_64?			arch_pick_mmap_layout to setup the task's mm structure. mig_do_receive
 								is called by hpc/migctrl.c's task_local_bring to migrate a process back
 								home, by merging the remote process with the local deputy. First, we
@@ -1724,111 +1724,152 @@ hunk	class		file patched				description								noteworthy references
 								use proc_mkdir to create the /proc/hpc/admin directory. We then call
 								openmosix_proc_create_entry to create the 'files' in /proc/hpc/admin/.
 								If either of the proc_mkdir calls fail, we OMBUG about it, and return.
-047	omremote	creates linux/hpc/remote.c		This file contains functions to allow a remote node to request work
-								to be done on the home node. remote_disappear is called by both
-								remote_do_syscall in this file, and remote_handle_user in
-								hpc/copyuser.c when a syscall 
-								fails. its purpose is to kill the process on the remote end. it just
-								calls do_exit(SIGKILL), and never returns. remote_inode_map is a
-								vm_operations_struct mapping just the .nopage member to the normal
-								filemap_nopage function. remote_file_mmap is used by the rdentry code
-								in hpc/files.c, as a member of the remote_file_operations structure
-								contained in a dentry on the remote node. it points the provided
-								vma's vm_ops structure to use the previously defined remote_inode_map.
-								remote_readpage is also used by the rdentry code in hpc/files.c, as a
-								member of the remote_aops structure also contained in a dentry on the
-								remote node. its called to read a page from the home node, on behalf
-								of the remote process. first, we map the passed page into kernel space	
-								(so we can write to it). we then get the file * origionally associated
-								with this page on the home node using rfiles_inode_get_file, and 
-								calculate the offset, placing both these in a omp_page_req structure.
-								we send this structure to the home node with comm_send_hd, get a reply,
-								and write the reply directly into the page passed in. we set the page
+047	tmig_remote	creates linux/hpc/remote.c		This file contains functions that allow a remote node to request work
+			FIXME: spacing.				to be done on the home node, as well as functions for handling system
+			FIXME: break this into two files	calls that require coordination between the home and remote nodes.
+								remote_disappear is called by both hpc/copyuser.c's remote_handle_user
+								and the later defined remote_do_syscall when a remote syscall request
+								fails. Its purpose is to kill the process on the remote node. In it, we
+								we just call do_exit(SIGKILL), and thus never return. Next, we declare
+			FIXME: we probably need to implement	remote_inode_map, which is a vm_operations_struct mapping the .nopage
+			this ourselves.				member to the kernel's filemap_nopage function. This structure is used
+			     					by the following remote_file_mmap. remote_file_mmap is called from the
+								kernel via a pointer to it stored in the file_operations structure
+								registered by hpc/files.c's remote_create_file and
+								remote_create_dentry, when these two functions are creating 'stub'
+								dentry and file structures on the remote node. In it, we first check
+			FIXME: printk!				to see if the passed in vma has a shared mapping. If it does, we printk
+								a message indicating such, and return -1. Otherwise, we point the
+								passed in vma's vm_ops structure to use the previously defined
+								remote_inode_map, and return 0 indicating success. remote_readpage is
+								also called from the kernel via a pointer to it stored in the
+								remote_aops structure, registered by hpc/files.c's remote_create_dentry
+								when creating a 'stub' dentry on the remote node. Its called to read a
+								page from the home node, on behalf of the remote process. First, we map
+								the passed in userspace page into kernel space, so that we can write to
+								it. We then get the file pointer origionally associated with this page
+								on the home node using rfiles_inode_get_file, then the offset we need
+								into the file, placing both these in an omp_page_req structure. We send
+								this structure to the home node with comm_send_hd, get a reply, and
+								write the reply directly into the passed in page. We set the page
 								as being up to date, unmap the page, and return 0 indicating success.
-								if our comm_recv or comm_send_hd return an error, we OMBUG() about it,
+			FIXME: unique error messages.		if our comm_recv or comm_send_hd return an error, we OMBUG() about it,
 								mark the page as NOT up to date, as well as marking it as having an
 								error, and return the error comm_recv or comm_send_hd gave us. 
-			ppc needs to do this as well!		remote_do_mmap is called by both arch/i386/kernel/sys_i386.c's 
-								sys_mmap2, and arch/x86_64/kernel/sys_x86_64's sys_mmap2. its purpose
-								is to perform a mmap on the home node, on behalf of the remote process.
-								we place all our arguments into a omp_mmap_req structure, and send them
-								to the home node with comm_send_hd. we receive a omp_mmap_ret structure
-								containing file and isize members. we pass these members to
-			check the result of task_rfiles_get?	task_rfiles_get(), and receive back a file pointer. we down_write the
-								mmap_sem semaphore belonging to the mm structure of this process, and
-								do our own do_mmap_pgoff() call. in this way, the mmap is done on	
-								both the remote and home nodes. we up_write the earlier semaphore, 
-								and return the result from do_mmap_pgoff. if either our comm_recv or
-								comm_send_hd fail, we return the error. remote_wait is called by
-								remote_do_fork, as well as remote_do_execve. it waits for a req struct
-								from the home node, and checks its type against the passed in value. it
-								also checks against the passed in len, to make sure the expected amount
-								of data was sent. if either of these checks fail, we OMBUG about it,
-								and return -1. remote_do_signal is called by remote_do_comm when the 
-								deputy stub on the home node sends a signal. we comm_recv a omp_signal
-			printk!					structure, printk a trace message, grab the lock for the current 
-			check __group_send_sig_info's error!	process' signal handler, and call __group_send_sig_info() to call the 
-								signal handler. we then drop the signal handler lock, and return 0. 
-								remote_do_comm handles incoming communication from the home node, on
-								behalf of the remote node. its set up to comm_recv a req packet, then
-			check error returned by			dispatch DEP_SIGNAL and DEP_COMING_HOME by calling remote_do_signal or
-			remote_do_signal and task_remote_expel!	task_remote_expel, appropriately. we return 0 after dispatching. if
-								comm_recv fails, or if we get a req that isn't DEP_SIGNAL or
-			be specific on type of error!		DEP_COMING_HOME, we OMBUG() "failed", call do_exit(-1), and return -1.
-			shouldnt do_exit kill the process?	remote_do_syscall is called by om_sys_remote in hpc/syscalls.c to send
-			why are we returning even?		a syscall request from the remote to the home node. we start by
-			why arent we using the earlier		OMDEBUG_SYS()ing a trace message. then we pack the syscall requested,
-			remote_disappear function?		along with its arguments into a omp_syscall_req structure. we 
-								comm_send_hd this structure, and OMDEBUG_SYS() a trace message. we
-								call remote_handle_user to handle memory requests from the home node,
-								on behalf of the syscall handler on the home node. once the home node
-								tells remote_handle_user its done issuing requests, remote_handle_user
-								returns. we then comm_recv a omp_syscall_ret structure. after that, we
-								OMDEBUG_SYS() another trace message, and return the return value packed
-								into the omp_syscall_ret structure. if comm_send_hd, 
+			FIXME: all arches need to do this.	remote_do_mmap is called by code we add to both
+								arch/i386/kernel/sys_i386.c's sys_mmap2, and
+								arch/x86_64/kernel/sys_x86_64.c's sys_mmap2. Its purpose is to mmap a
+								section of the given file on the home node, on behalf of the given
+								remote process. In it, we place all of our arguments into an
+								omp_mmap_req structure, and send them to the home node with
+								comm_send_hd. We receive an omp_mmap_ret structure containing file and
+								isize members from the home node. We pass the file
+			FIXME: check the result of		and isize received to task_rfiles_get(), and receive back a 'stub' file
+			task_rfiles_get?			pointer. We lock the MM structure of the current task, by using
+								down_lock on our mmap_sem semaphore and perform our own do_mmap_pgoff()
+								call against the 'stub' file pointer. In this way, the mmap is done on
+								both the remote and home nodes. We up_write the earlier locking
+								semaphore, and return the result from do_mmap_pgoff if everything
+			FIXME: unique errors!			succeeded. If either our comm_recv or comm_send_hd fail, we return the
+			       	      				error returned to us. remote_wait is called by remote_do_fork, as well
+								as remote_do_execve. It purpose is to wait for an expected packet from
+								the home node, and store the data in the following packet into the
+								passed in pointer. In it, we first wait for a omp_req struct from the
+								home node. We then check its type against the passed in type. If the
+								type doesn't match, we OMBUG about it, and return -1. If the type
+								matches, we continue by checking the packet's reported length against
+								the passed in length. If the length in the packet does not match the
+			FIXME: unique errors!			passed in length, we OMBUG about it, and return -1. Assuming both of
+			       	      				the previous checks succeeded, we then receive a second packet using
+								comm_recv, storing the data received into the passed in buffer. If
+								comm_recv fails, we OMBUG the error, and return -1. remote_do_signal is
+								called by remote_do_comm when the deputy stub on the home node sends us
+								a signal. In it, we comm_recv a omp_signal structure from the home 
+			FIXME: printk!				node, printk a trace message, grab the current process' signal handler
+			FIXME: check __group_send_sig_info and	lock, and call __group_send_sig_info() to call the signal handler. We
+			comm_recv's return values!		then release the signal handler lock, and return 0. remote_do_comm is
+				    	   			called by hpc/kernel.c's remote_pre_usermode when there is
+								communication from the home node waiting. In it, we comm_recv a omp_req
+			FIXME: check error returned by		packet, then dispatch the communication to remote_do_signal, or 
+			remote_do_signal and task_remote_expel!	task_remote_expel, depending on the type field given in the omp_req
+					     			packet. If the type is DEP_SIGNAL, we call remote_do_signal. If the
+			FIXME: printk!				type is DEP_COMING_HOME, we printk a trace message, and call
+								task_remote_expel. after dispatch, we return 0, indicating success.
+								If the type in the omp_req packet received was not DEP_SIGNAL or
+			FIXME: unique errors!			DEP_COMING_HOME, or if our call to comm_recv fails, we OMBUG() about
+			FIXME: if do_exit kills the process,	it, call do_exit(-1) killing the current remote process, and return
+			why are we returning even?		-1. remote_do_syscall is called by hpc/syscall.c's om_sys_remote to
+			FIXME: why arent we using the earlier	send a syscall request from the remote node to the home node. We start
+			remote_disappear function?		by OMDEBUG_SYS()ing a trace message, then we pack the syscall
+					 			requested, along with its arguments into an omp_syscall_req
+								structure. We comm_send_hd this structure, then OMDEBUG_SYS() another
+								trace message. We then call remote_handle_user to take over communication
+								with the home node, and handle memory requests on behalf of the syscall
+								handler on the home node. Once the home node tells remote_handle_user
+								its done issuing requests, remote_handle_user returns. We then
+								comm_recv a omp_syscall_ret structure. After that, we OMDEBUG_SYS()
+								a final trace message, and return the return value packed into the
+			FIXME: unique errors!			omp_syscall_ret structure by the home node. If comm_send_hd, 
 								remote_handle_user, or comm_recv return an error, we immediately call
-			never returns! why do we return after	remote_disappear, which kills the process, and never returns. after
-			remote_disappear?			calling remote_disappear, we return -1. remote_do_fork performs a fork
-								call on both the home node and the remote node, connecting the new
-			printk!					processes together. first, we printk() a trace message, and use
-								sockaddr_inherit to make the sockaddr for our child have the same type
-								(ipv4 vs ipv6) and address as our parent's sockaddr. we stuff our 
-								passed in clone_flags, stack_start, stack_size, and pt_regs into a
-								omp_fork_req structure, then open a listening socket using our child's
-								sockaddr. when comm_setup_listen returns, we use comm_getname to get	http://www.linuxjournal.com/article/7660
-								the address of the node on the other end of our child socket (in a 
-								sockaddr structure), then add our sockaddr structure to our 
-								omp_fork_req structure. we use comm_send_hd to send our omp_fork_req
-								to the home node (over our parent's connection). we use remote_wait to
-								wait for a reply, saving the reply in a omp_fork_ret structure. we then
-								call do_fork ourselves, and use find_task_by_pid() to locate the child.
-								we set the child's socket to our newly created socket with 
-								task_set_comm, and return the child's PID. if comm_setup_listen,
-			specific error messages!		comm_getname, comm_send_hd, or remote_wait fails, we OMBUG() about it,
-			printk!					and return -1. if find_task_by_pid fails, we printk() about it, and
-								return -1. count_len is just a cut-and-paste from fs/exec.c. it appears
-								to count the length of argv members, but abort if there are more argv
-								members than requested. we return a count of argv members found, and
-								set a pointer passed in to the length of the argv entries in total.
-								remote_do_execve performs an execve system call while on the remote
-								node. first we get the length of the name of the file we're execve'ing 
-			check strlen_user's return!		from userspace with strlen_user(), and place it in a omp_execve_req
-								structure. then, we add argc to our omp_execve_req, by calling
-								count_len. we tell count_len not to abort if the number of arguments is
-								greater than the ammount of void * that can fit in (PAGE_SIZE * 
-								MAX_ARG_PAGES - sizeof(void *))/sizeof(void *). we then do the same 
-								thing to fill in the envc member. we copy the passed in pt_regs
-								structure into our omp_execve_req, then allocate enough space from 
-								GFP_KERNEL to hold our filename, argv, and envp, including newlines
-								we fill this space by using copy_user to grab the filename, argv, and
-								envp, terminating each with a newline. we use comm_send_hd to send our
-								omp_execve_req structure, and comm_send to send the space containing
-								our filename, argv, and envp. we then free this space. we call
-								remote_wait to get our response from the home node, and return 0. if
-								either of our count_len invocations, comm_send_hd, comm_send, or
-			what about freeing data?		remote_wait return an error, we immediately return with that error.
-								if our kmalloc fails, we return -ENOMEM. if our copy_from_user
-								invocations fail, we return -EFAULT. 
+			FIXME: remote_disappear never returns!	remote_disappear, which kills the process, and never returns. After
+			why do we return a value afterwards?	calling remote_disappear, we return -1. remote_do_fork is called by
+			FIXME: do this in all arches.		an asmlinkage in both hpc/arch-i386.c and hpc/arch-x86_64.c when the
+								fork syscall is called by a process that is DREMOTE. Its purpose is to
+								perform forks on both the home node and the remote node, connecting
+			FIXME: printk!				the two new processes together. First, we printk() a trace message. We
+								then use sockaddr_inherit to make the sockaddr for our child have the
+								same type (ipv4 vs ipv6) and address as our parent processes sockaddr.
+								We stuff our passed in clone_flags, stack_start, stack_size, and
+								pt_regs into a omp_fork_req structure, then use comm_setup_listen to
+								set up listening socket on our child's sockaddr. when comm_setup_listen
+								returns, we use comm_getname to get the address of our new listening	http://www.linuxjournal.com/article/7660
+								socket (in a sockaddr structure), then add our sockaddr structure to
+								our omp_fork_req structure. We use comm_send_hd to send our 
+								omp_fork_req to the home node (over the parent processes connection).
+								We then use remote_wait to wait for a reply from the home
+								node, saving the reply in a omp_fork_ret structure. After receiving
+								the reply from the home node, we call do_fork on the remote node,
+								and use find_task_by_pid() to locate the child we create. We set the
+								child's communications socket to our newly created socket using 
+								task_set_comm, and return the child's PID to the parent process. If
+			FIXME: unique error messages!		comm_setup_listen, comm_getname, comm_send_hd, or remote_wait fails,
+			FIXME: printk!				we OMBUG() about it, and return -1. If find_task_by_pid fails, we
+			  					printk() about it, and return -1. count_len is a function directly
+								copied from fs/exec.c. Its called by the following remote_do_execve
+								function to count the length of argv and envc members stored in
+								an array in userspace, but abort if there are more members than
+								requested. In it, we first check to see if the first entry in the
+								passed in array is NULL, and if it is, we return 0. Next, we enter a
+								loop. In this loop, we start by using get_user to get the first
+								pointer stored in the passed in array. If the pointer value is NULL,
+								its the last pointer in the array, and we return the total length of
+								the values seen thus far. If the pointer value is not NULL, we call
+								strlen_user against it, and add the returned length to our length
+								accumulator. We then increment the passed array pointer, in effect
+								taking the pointer we just checked off the stack of pointers. We
+								increase the number of array entries we've checked, then see if its
+								larger than the maximum entry count. If it is, we return -E2BIG.
+								Otherwise, we return to the top of the loop. remote_do_execve is called
+								by the om_stub_execve entry we add to arch/x86_64/kernel/entry.S. Its
+								purpose is to perform an execve system call on both the remote node and
+								the home node. First we get the length of the name of the file we're
+			FIXME: check strlen_user's return!	execve'ing from userspace with strlen_user(). We then use the
+								previously defined count_len to count the length of all the members of
+								the passed in argv, and envp, ensuring the totals are not larger than
+								the number of bytes that can fit in (PAGE_SIZE * MAX_ARG_PAGES -
+								sizeof(void *))/sizeof(void *). We place the lengths returned in the
+								omp_execve_req structure, along with the pt_regs structure passed in.
+								Next, we allocate enough space from GFP_KERNEL to hold our filename,
+								argv values, and envp entries, including following newlines. We fill
+								this space using copy_from_user to copy the filename, argv values, and
+								envp entries, terminating each value with a newline. We use
+								comm_send_hd to send our omp_execve_req structure, and comm_send to
+								send the kernel page with our filename, argv, and envp. We then free
+								our kernel page. We call remote_wait to get our response from the home
+								node, and return 0. If either of our count_len invocations,
+								comm_send_hd, comm_send, or remote_wait return an error, we immediately
+			FIXME: what about freeing data?		return with that error. If our kmalloc fails, we return -ENOMEM. If any
+			FIXME: unique error messages!		of our copy_from_user invocations fail, we return -EFAULT. 
 048			creates hpc/service.c			this file contains the om_daemonize function, and four sockaddr related
 								conversion functions. om_daemonize is called by
 								creates a kernel thread, and optionally sets a high priority mode.
@@ -1901,7 +1942,7 @@ hunk	class		file patched				description								noteworthy references
 								call wake_up_process(), mark the process as in need of rescheduling,
 								and return 0. task_do_request checks for DREQ_MOVE, or DREQ_CHECKSTAY,
 								and dispatches them to task_request_(move|checkstay).
-51	i386		creates 				This file forward declares ia32 specific cpu feature detection
+51	i386		creates				This file forward declares ia32 specific cpu feature detection
 			linux/include/asm-i386/om.h		functions, declares a function returning argument N passed to a syscall
 								and a function returning the number of arguments passed to a syscall,
 								and defines the NR_MAX_SYSCALL_ARG, and a define for getting the user
@@ -1983,7 +2024,7 @@ hunk	class		file patched				description								noteworthy references
 								half of register rax (32 bits). we define NR_MAX_SYSCALL_ARG to 6, and	
 								use an index based method to get struct pt_regs, which is the last item	
 								in the thread_info struct. 
-57	x86-64		creates 				this file contains structures for process state that are architecture
+57	x86-64		creates				this file contains structures for process state that are architecture
 			include/asm-x86_64/om-protocol.h	specific. omp_mig_fp holds the floating point context. omp_mig_arch is
 								a stub as usual, and omp_mig_arch_task holds the segmentation
 								registers, and the TLS entries associated with this task.
@@ -1998,7 +2039,7 @@ hunk	class		file patched				description								noteworthy references
 								as the last hunk.
 59	om-core		creates include/hpc/arch.h		this file prototypes the architecture specific functions for sending	hpc/protocol.h
 								and receiving process pieces, dispatching a local syscall (after we've	asm/om.h
-								intercepted it), and starting a recently assembled process. worth 	hpc/syscalls.h
+								intercepted it), and starting a recently assembled process. worth	hpc/syscalls.h
 								is that we include protocol.h, define almost everything, include om.h
 								and syscalls.h, THEN define arch_exec_syscall, so we have the
 								syscall_parameter_t * to pass in.
@@ -2038,7 +2079,7 @@ hunk	class		file patched				description								noteworthy references
 								files. mig_send_hshake and mig_recv_hshake are for establishing a
 								connection. task_move_to_node and task_expel perform the actual task
 								of migration.
-66			creates include/hpc/omtask.h		this file contains the openmosix_task structure. so far as i can tell, 	
+66			creates include/hpc/omtask.h		this file contains the openmosix_task structure. so far as i can tell,
 								the features[] declared at the and, and thus the first define is 
 								unused. the rest of this file seems to be well commented.
 67			creates include/hpc/proc.h		header exclusively used by proc.c. the first four functions are not
