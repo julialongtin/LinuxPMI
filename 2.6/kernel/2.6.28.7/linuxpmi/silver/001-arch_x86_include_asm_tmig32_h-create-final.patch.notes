@@ -1,7 +1,7 @@
 index	class		spacer	        			X#########X#########X#########X#########X#########X#########X#########
 001	tmig_syscall	creates arch/x86/include/asm/tmig32.h	This file contains archetecture specific helper functions used by the
-			       	       	     	 		system call redirection subsystem. It is included by
-								arch/x86/include/asm/pms.h. First, we define the maximum number of
+			FIXME: find out where the code for	system call redirection subsystem. It is included by
+			converting floating point formats went.	arch/x86/include/asm/pms.h. First, we define the maximum number of
 								arguments a system call can be passed on this archetecture as 6.
 								arch_get_sys_arg is defined as an inline function. It is called by
 								hpc/remote.c's remote_do_syscall directly, and wrapped by
