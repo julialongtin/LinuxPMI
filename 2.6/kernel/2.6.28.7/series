@@ -2,8 +2,8 @@
 # New 2.6.28.7 branch #
 #######################
 
-# tmig_syscall
-# inline functions and macros included by pms.h, used by system call handling routines.
+# arch_i386_32, tmig_syscall, tmig_task
+# inline functions and macros included by pms.h, used by system call handling routines, and task migration routines.
 linuxpmi/silver/arch_x86_include_asm_tmig32_h-create-final.patch
 
 # monolythic patch from g_remlin
