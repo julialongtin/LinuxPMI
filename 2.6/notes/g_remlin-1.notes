@@ -18,11 +18,15 @@ index	class		spacer	        			X#########X#########X#########X#########X########
 								system call request we're currently handling. On i386, this is
 								stored in the 'ax' register, so we simply return the 'ax' member of
 			FIXME: whitespace			the passed in pt_regs structure. Finally, we create
-								ARCH_TASK_GET_USER_REGS, which is a macro to get the user registers
-								of the current task. It functions similarly to
-								include/asm-i386/processor.h's task_pt_regs. In it, we use
-								current_thread to get the current task's thread structure address,
-								add THREAD_SIZE to point to the next page in memory past it, deduct
-								8 so that we skip over the space on the stack that is *sometimes*
-								updated with the SS/ESP registers, and deduct 1, returning what we've
-								calculated as a pt_regs pointer.
+			FIXME: unused argument!			ARCH_TASK_GET_USER_REGS, which is a macro to get the user registers
+			FIXME: replacing code using this with a	of the current task, called by hpc/arch-i386.c's
+			task * with processor.h's task_pt_regs.	arch_mig_receive_proc_context, arch_mig_send_proc_context,
+			       	    		  		arch_kickstart, and arch_do_signal, along with hpc/debug-i386.c's
+								pms_debug_regs, and show_user_registers. It functions similarly to
+			       	    		     		include/asm-i386/processor.h's task_pt_regs, returning the current
+								processes registers, instead of the one of the task passed in. In it,
+								we use current_thread to get the current task's thread structure
+								address, add THREAD_SIZE to point to the next page in memory past it,
+								deduct 8 so that we skip over the space on the stack that is
+								*sometimes* updated with the SS/ESP registers, and deduct 1,
+								returning what we've calculated as a pt_regs pointer.
