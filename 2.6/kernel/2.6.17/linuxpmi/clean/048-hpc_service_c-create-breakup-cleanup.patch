@@ -1,0 +1,158 @@
+Index: linux/hpc/service.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/service.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,153 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/socket.h>
++#include <linux/in.h>
++#include <linux/in6.h>
++#include <linux/ctype.h>
++#include <linux/errno.h>
++#include <hpc/comm.h>
++#include <hpc/comm-ipv4.h>
++#include <hpc/comm-ipv6.h>
++#include <hpc/service.h>
++#include <hpc/task.h>
++#include <hpc/arch.h>
++
++/**
++ * om_daemonize - create an oM daemon
++ * @name:	kernel thread name
++ * @highpri:	is this kernel thread high priority
++ *
++ * Description:
++ *	Create a kernel thread, and set priority.
++ *	SCHED_FIFO for high priority, hence stay for realtime
++ **/
++void om_daemonize(char *name, int highpri)
++{
++	task_t *p = current;
++
++	daemonize(name);
++
++	p->euid = 0;
++	p->suid = 0;
++	p->gid = 0;
++	p->group_info = groups_alloc(0);
++
++	/* clean blocked signal set */
++	spin_lock_irq(&p->sighand->siglock);
++	sigemptyset(&p->blocked);
++	recalc_sigpending_tsk(p);
++	spin_unlock_irq(&p->sighand->siglock);
++
++	/* set priority and stay reason of the task */
++	task_lock(p);
++	if (highpri)
++	{
++		p->policy = SCHED_FIFO;
++		task_set_stay(p, DSTAY_RT);
++		p->rt_priority = 0;
++	}
++	else
++	{
++		p->policy = SCHED_NORMAL;
++		task_clear_stay(p, DSTAY_RT);
++		set_user_nice(p, 0);
++	}
++	task_set_stay(p, DSTAY_SYSTEM);
++	task_unlock(p);
++}
++
++/**
++ * sockaddr_to_string - write an net address to a buffer returning length
++ **/
++int sockaddr_to_string(struct sockaddr *address, char *buf)
++{
++	switch (address->sa_family) {
++	case AF_INET:
++		return inet_to_string((struct sockaddr_in *) address, buf);
++	case AF_INET6:
++		return inet6_to_string((struct sockaddr_in6 *) address, buf);
++	}
++	printk(KERN_ERR "oM: network type not supported\n");
++	return 0;
++}
++
++
++/**
++ * string_to_sockaddr - convert a buffer, to a sockaddr
++ **/
++int string_to_sockaddr(char *buf, struct sockaddr *address)
++{
++	int l;
++
++	address->sa_family = 0;
++	/* try to parse an ipv4 */
++	l = string_to_inet(buf, (struct sockaddr_in *) address);
++	if (l > 0)
++		return l;
++	/* try to parse an ipv6 */
++	l = string_to_inet6(buf, (struct sockaddr_in6 *) address);
++	if (l > 0)
++		return l;
++	return 0;
++}
++
++/**
++ * sockaddr_setup - configure a socket address
++ **/
++void sockaddr_setup_port(struct sockaddr *sa, int port)
++{
++	switch (sa->sa_family) {
++	case AF_INET:
++		inet_setup_port((struct sockaddr_in *) sa, port);
++		break;
++	case AF_INET6:
++		inet6_setup_port((struct sockaddr_in6 *) sa, port);
++		break;
++	}
++}
++
++/**
++ * sockaddr_inherit - fullfill sa with the same type of mlink
++ **/
++int sockaddr_inherit(struct socket *mlink, struct sockaddr *sa)
++{
++	struct sockaddr tmp;
++
++	if (comm_getname(mlink, &tmp, 0) < 0)
++		return -1;
++
++	memset(sa, 0, sizeof(struct sockaddr));
++	sa->sa_family = tmp.sa_family;
++
++	switch (tmp.sa_family) {
++		case AF_INET: {
++			struct sockaddr_in *in = (struct sockaddr_in *) sa;
++			in->sin_addr.s_addr = INADDR_ANY;
++			break;
++		}
++		case AF_INET6: {
++			struct sockaddr_in6 *in6 = (struct sockaddr_in6 *) sa;
++			memset(&in6->sin6_addr, 0, sizeof(struct in6_addr));
++			break;
++		}
++	}
++	return 0;
++}
