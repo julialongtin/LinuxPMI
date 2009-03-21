@@ -1,32 +1,18 @@
-index	class		spacer	        			X#########X#########X#########X#########X#########X#########X#########
-001	tmig_syscall	FIXME: rename, tmig, not pms.		This file contains archetecture specific helper functions used by the
-			FIXME: wrapper define is wrong.		system call redirection subsystem. It is included by
-			creates arch/x86/include/asm/pms_32.h	arch/x86/include/asm/pms.h. First, we define the maximum number of
-								arguments a system call can be passed on this archetecture as 6.
-								arch_get_sys_arg is defined as an inline function. It is called by
-								hpc/remote.c's remote_do_syscall directly, and wrapped by
-								include/hpc/syscalls.h's SYSARG macro, which is used by
-								hpc/syscalls.c's pms_sys_execve. Its purpose is to return the N'th
-								argument passed into the syscall that inlines us. Since our arguments
-								are stored in order in the pt_regs structure passed into syscalls,
-								arch_get_sys_arg simply returns (as a long) the N'th long-sized value
-								in the passed in pt_regs. If we are asked for an argument index 
-								greater than or equal to the maximum system call argument defined
-								earlier, we BUG_ON() about it. arch_get_sys_nb is defined as an
-								inline function. It is wrapped by include/hpc/syscall.h's SYSNB macro,
-								and called by pms_sys_remote to return the system call number of the
-								system call request we're currently handling. On i386, this is
-								stored in the 'ax' register, so we simply return the 'ax' member of
-			FIXME: whitespace			the passed in pt_regs structure. Finally, we create
-			FIXME: unused argument!			ARCH_TASK_GET_USER_REGS, which is a macro to get the user registers
-			FIXME: replacing code using this with a	of the current task, called by hpc/arch-i386.c's
-			task * with processor.h's task_pt_regs.	arch_mig_receive_proc_context, arch_mig_send_proc_context,
-			       	    		  		arch_kickstart, and arch_do_signal, along with hpc/debug-i386.c's
-								pms_debug_regs, and show_user_registers. It functions similarly to
-			       	    		     		include/asm-i386/processor.h's task_pt_regs, returning the current
-								processes registers, instead of the one of the task passed in. In it,
-								we use current_thread to get the current task's thread structure
-								address, add THREAD_SIZE to point to the next page in memory past it,
-								deduct 8 so that we skip over the space on the stack that is
-								*sometimes* updated with the SS/ESP registers, and deduct 1,
-								returning what we've calculated as a pt_regs pointer.
+= patch 001 - arch/x86/include/asm/pms_32.h =
+== This file contains archetecture specific helper functions used by the system call redirection subsystem. It is included by arch/x86/include/asm/pms.h. ==
+First, we define the maximum number of arguments a system call can be passed on this archetecture, which is 6.
+arch_get_sys_arg is defined as an inline function. It is called by hpc/remote.c's remote_do_syscall directly, and wrapped by include/hpc/syscalls.h's SYSARG macro, which is used by hpc/syscalls.c's pms_sys_execve. Its purpose is to return the N'th argument passed into the syscall that inlines us. Since our arguments are stored in order in the pt_regs structure passed into syscalls, arch_get_sys_arg simply returns (as a long) the N'th long-sized value in the passed in pt_regs. If we are asked for an argument index greater than or equal to the maximum system call argument defined earlier, we BUG_ON() about it.
+
+arch_get_sys_nb is defined as an inline function. It is wrapped by include/hpc/syscall.h's SYSNB macro, and called by pms_sys_remote to return the system call number of the system call request we're currently handling. On i386, this is stored in the 'ax' register, so we simply return the 'ax' member of the passed in pt_regs structure. 
+
+[fixme1] Finally, we create ARCH_TASK_GET_USER_REGS[fixme2][fixme3], which is a macro to get the user registers of the current task, called by hpc/arch-i386.c's arch_mig_receive_proc_context, arch_mig_send_proc_context, arch_kickstart, and arch_do_signal, along with hpc/debug-i386.c's pms_debug_regs, and show_user_registers. It functions similarly to include/asm-i386/processor.h's task_pt_regs, returning the current processes registers, instead of the one of the task passed in. In it, we use current_thread to get the current task's thread structure address, add THREAD_SIZE to point to the next page in memory past it, deduct 8 so that we skip over the space on the stack that is *sometimes* updated with the SS/ESP registers, and deduct 1, returning what we've calculated as a pt_regs pointer.
+
+= patch 002 - arch/x86/include/asm/pms_64.h =
+== This file contains archetecture specific helper functions used by the system call redirection subsystem. It is included by arch/x86/include/asm/pms.h. ==
+
+
+footnote[FIXME: wrapper define is wrong.]
+footnote[FIXME: rename tmig, not pms.]
+footnoteref[fixme1,FIXME: extra whitespace here.]
+footnoteref[fixme2,FIXME: unused argument!]
+footnoteref[fixme3,FIXME: replace code using this with a task* with processor.h's task_pt_regs.]
