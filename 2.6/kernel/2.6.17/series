@@ -183,7 +183,7 @@ linuxpmi/clean/046-hpc_proc_c-prochpc-create-broken-cleanup.patch
 
 # tmig_remote, tmig_syscall
 # functions for handling requests from the home node, sent over a socket, and handling syscalls on the remote node that require communication with the home node. 
-linuxpmi/clean/047-hpc_remote_c-omremote-create-broken-cleanup.patch
+linuxpmi/clean/047-hpc_remote_c-omremote-create-broken-breakup-cleanup.patch
 
 # tmig_socket, tmig_process
 # functions for creating PMI specific processes (kernel threads), and socket operation wrappers.

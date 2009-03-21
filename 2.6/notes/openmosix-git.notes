@@ -1870,26 +1870,67 @@ hunk	class		file patched				description								noteworthy references
 								comm_send_hd, comm_send, or remote_wait return an error, we immediately
 			FIXME: what about freeing data?		return with that error. If our kmalloc fails, we return -ENOMEM. If any
 			FIXME: unique error messages!		of our copy_from_user invocations fail, we return -EFAULT. 
-048			creates hpc/service.c			this file contains the om_daemonize function, and four sockaddr related
-								conversion functions. om_daemonize is called by
-								creates a kernel thread, and optionally sets a high priority mode.
-								first we call daemonize(). then, we zero the euid, suid, and gid of 
-								current. we alloc a new group_info with groups_alloc(0). we grab 
-								current->sighand->siglock while emptying the blocked signal set with 
-								sigemptyset(). we lock our task structure, then set a priority. if we
-								were requested to use a high priority, we use SCHED_FIFO, and set a 
-								rt->priority of 0. we set task_set_stay(DSTAY_RT). otherwise, we set
-								SCHED_NORMAL, task_clear_stay(DSTAY_RT), and set_user_nice(0).
-								either way, we set task_set_stay(DSTAY_SYSTEM), then unlock our task
-								structure. sockaddr_to_string and string_to_sockaddr perform as they
-								sound, ipv4 or ipv6. sockaddr_setup_port is a wrapper arround the
-								proper inet_setup_port for ipv4 or ipv6. sockaddr_inherit we saw used
-								not long ago, to set a sockaddr structure up the same as the sockaddr
-			does IPV6 not have INADDR_ANY?		used to create our current link. 
+048	tmig_socket, 	creates hpc/service.c			This file contains the om_daemonize function, and four sockaddr related
+	tmig_task_int	FIXME: split this into task, and	conversion functions. om_daemonize is called by hpc/migrecv's 
+			socket wrapper components.		openmosix_mig_daemon to initialize our kernel thread, optionally using
+								a high priority mode. First we call the kernel's daemonize function,    http://docs.blackfin.uclinux.org/doku.php?id=linux-kernel:threads
+								passing it the passed in process name. The kernel should then promote
+								the current task to being a kernel thread, removing its userspace
+								memory mappings and signal handlers. We zero the euid, suid, and gid
+								of our task struct, adding ourself to a new process group we allocate
+								with groups_alloc(0). We grab our signal lock, and empty the blocked
+								signal set with sigemptyset(). We call recalc_sigpending_tsk to notify 
+								he kernel that we've modified our signal queue, then unlock our signal
+			FIXME: remove the high priority code,	lock. We lock our task structure, then set a priority, depending on
+			we don't use it!       			whether a high priority level was requested or not. If we were
+			   	     				requested to use a high priority, we set our scheduling policy to be
+								SCHED_FIFO, mark ourselves to stay for reason of DSTAY_RT using
+								task_set_stay, and set a realtime scheduling priority of 0. If a high
+								priority was not requested, we set our scheduling policy to
+								SCHED_NORMAL, clear a DSTAY_RT flag (if its set), and set our niceness
+								to 0. When we're done setting our priority, we set ourselves to stay
+								with task_set_stay(DSTAY_SYSTEM), marking this process as something
+								that should never migrate because its a LinuxPMI specific process.
+								Finally, we unlock our task structure. sockaddr_to_string is a wrapper
+								function called by hpc/proc.c's proc_pid_get_where to convert a passed
+								in sockaddr to a string, suitable for printing. In it, we check the
+								family of the sockaddr, and if its IPv4, we call inet_to_string,
+								passing it the buffer we received to put our results in, and returning
+								its return value. If the sockaddr's family is IPv6, we call
+								inet6_to_string, passing it the buffer we received to put our results
+								in, and returning its return value. If the sockaddr was neither IPv4 or
+			FIXME: printk!				IPv6, we printk a warning message, and return 0. string_to_sockaddr is
+								called by hpc/proc.c's proc_pid_set_where to try and convert a passed
+								in string to and address, and return it in a sockaddr. In it, we first
+			FIXME: why zero the sockaddr?		set the passed in sockaddr's family to 0. We then call string_to_inet,
+			       	   	    			to see if it can read an address from the passed in string. If it
+								returns positive, it was successful, and we return the value it
+								returned to us. If not, we call string_to_inet6. If it returns
+								positive, we return the value it returned to us. If neither
+								string_to_inet or string_to_inet6 return positive, we return 0
+								indicating that we were not able to convert any of the string to an
+								address. sockaddr_setup_port is a wrapper called by hpc/migctrl.c's
+								task_local_send to set the port on a passed in sockaddr. In it, we
+								check the family of the sockaddr, and if its marked AF_INET, we call
+								inet_setup_port with the values passed to us (sockaddr and port). If
+								the sockaddr's family is AF_INET6, we call inet6_setup_port. If its 
+			FIXME: OMBUG about doing nothing.	neither of those families, we do nothing. sockaddr_inherit is called by
+			       	     	   	 		hpc/remote.c's remote_do_fork to initialize a passed in sockaddr
+								structure to an empty sockaddr with the same family type as the
+								sockaddr belonging to the socket passed in. First, we use comm_getname
+								to get a copy of the sockaddr being used by the passed in socket. If 
+			FIXME: OMBUG about this failure.	this fails, we return -1. We zero the current contents of the passed in
+			       	     	   			target sockaddr, and set its family equal to the family of the socket's
+								sockaddr family. Next, we set the address on the target sockaddr. If
+								the socket's sockaddr's family is AF_INET, we cast the target sockaddr
+								as a sockaddr_in, then set its sin_addr.addr to INADDR_ANY. If the
+								socket's sockaddr's family is AF_INET6, we cast the target sockaddr as
+			FIXME: does IPV6 not have INADDR_ANY?	a sockaddr_in6, and clear the sin6_addr member. Afterward, we return 0
+			       	    	     	  		for success.
 49			creates linux/hpc/syscalls.c		this file is callback points from where the current running process
 								calls a syscall, it gets directed here. om_sys_local dispatches a
 								syscall request to the local kernel (on the remote node). 
-								om_sys_remote calls remote_do_syscall to dispatch a syscall back to the	
+								om_sys_remote calls remote_do_syscall to dispatch a syscall back to the
 								home node. om_sys_gettid and om_sys_getpid are broken, but should 
 								return the relevant values from curent->om.tgid and pid, respectively.
 								finally, om_sys_execve dispatches a request for the execve syscall to	
@@ -1942,7 +1983,7 @@ hunk	class		file patched				description								noteworthy references
 								call wake_up_process(), mark the process as in need of rescheduling,
 								and return 0. task_do_request checks for DREQ_MOVE, or DREQ_CHECKSTAY,
 								and dispatches them to task_request_(move|checkstay).
-51	i386		creates				This file forward declares ia32 specific cpu feature detection
+51	i386		creates					This file forward declares ia32 specific cpu feature detection
 			linux/include/asm-i386/om.h		functions, declares a function returning argument N passed to a syscall
 								and a function returning the number of arguments passed to a syscall,
 								and defines the NR_MAX_SYSCALL_ARG, and a define for getting the user
