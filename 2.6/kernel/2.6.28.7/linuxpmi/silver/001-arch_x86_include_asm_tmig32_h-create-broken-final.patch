@@ -1,7 +1,7 @@
 diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/tmig32.h linux-2.6.28.7-lpmi/arch/x86/include/asm/tmig32.h
 --- linux-2.6.28.7/arch/x86/include/asm/tmig32.h	1970-01-01 01:00:00.000000000 +0100
 +++ linux-2.6.28.7-pms/arch/x86/include/asm/tmig32.h	2009-03-06 19:59:09.000000000 +0000
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,66 @@
 +/*
 + *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
 + *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
@@ -33,9 +33,13 @@ diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/tmig32.h linux-2.6.
 +#define NR_MAX_SYSCALL_ARG	6
 +
 +/**
-+ * arch_get_sys_arg() (return the Nth argument passed to the current syscall)
++ * arch_get_sys_arg - return the Nth argument passed to the current syscall
 + * @n: the argument number to return
 + * @regs: our current pt_regs structure
++ *
++ * called in syscall context
++ *
++ * calls BUG_ON if n>NR_MAX_SYSCALL_ARG, the argument requested otherwise
 + **/
 +static inline long arch_get_sys_arg(unsigned int n, struct pt_regs *regs)
 +{
@@ -44,8 +48,12 @@ diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/tmig32.h linux-2.6.
 +}
 +
 +/**
-+ * arch_get_sys_nb() (return the number of the current syscall)
++ * arch_get_sys_nb - return the number of the current syscall
 + * @regs: the our current pt_regs structure
++ *
++ * called in syscall context
++ *
++ * returns the system call number we're currently handling
 + **/
 +static inline unsigned long arch_get_sys_nb(struct pt_regs *regs)
 +{
