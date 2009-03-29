@@ -1,6 +1,6 @@
 = arch/x86/include/asm/tmig32.h =
-== This file contains archetecture specific helper functions used by the system call redirection subsystem. It is included by arch/x86/include/asm/pms.h. ==
-First, we define the maximum number of arguments a system call can be passed on this archetecture, which is 6.
+== This file contains architecture specific helper functions used by the system call redirection subsystem. It is included by arch/x86/include/asm/pms.h. ==
+First, we define the maximum number of arguments a system call can be passed on this architecture, which is 6.
 
 arch_get_sys_arg is defined as an inline function. It is called by hpc/remote.c's remote_do_syscall directly, and wrapped by include/hpc/syscalls.h's SYSARG macro, which is used by hpc/syscalls.c's pms_sys_execve. Its purpose is to return the N'th argument passed into the syscall that inlines us. Since our arguments are stored in order in the pt_regs structure passed into syscalls, arch_get_sys_arg simply returns (as a long) the N'th long-sized value in the passed in pt_regs. If we are asked for an argument index greater than or equal to the maximum system call argument defined earlier, we BUG_ON() about it.
 
