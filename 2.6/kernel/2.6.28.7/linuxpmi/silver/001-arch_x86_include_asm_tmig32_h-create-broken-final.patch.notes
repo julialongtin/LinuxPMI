@@ -11,9 +11,8 @@ arch_get_sys_arg is defined as an inline function. It is called by hpc/remote.c'
 
 arch_get_sys_nb is defined as an inline function. It is wrapped by include/hpc/syscall.h's SYSNB macro, and called by pms_sys_remote to return the system call number of the system call request we're currently handling. On i386, this is stored in the 'ax' register, so we simply return the 'ax' member of the passed in pt_regs structure.
 
-Finally, we create ARCH_TASK_GET_USER_REGS footnote:[FIXME: unused argument]
-footnote:[FIXME: replacing code using this with a task \* with processor.h's
-task_pt_regs.], which is a macro to get the user registers of the current task,
+Finally, we create ARCH_TASK_GET_USER_REGS,^<<fixme1>><<fixme2>>^
+which is a macro to get the user registers of the current task,
 called by hpc/arch-i386.c's arch_mig_receive_proc_context,
 arch_mig_send_proc_context, arch_kickstart, and arch_do_signal, along with
 hpc/debug-i386.c's pms_debug_regs, and show_user_registers. It functions
@@ -26,3 +25,10 @@ registers, and deduct 1, returning what we've calculated as a pt_regs pointer.
 
 == Notes and Comments ==
 FIXME: find out where the code for converting floating point formats went.
+
+[[fixme1]]
+^[fixme1]^FIXME: unused argument
+
+[[fixme2]]
+^[fixme2]^FIXME: replacing code using this with a task \* with processor.h's
+task_pt_regs.
