@@ -1,3 +1,5 @@
+= arch/x86/include/asm/tmig64.h =
+
 == This file contains archetecture specific helper functions used by the system call redirection subsystem, as well as a helper for the process teardown/buildup code. It is included by arch/x86/include/asm/pms.h. ==
 First, we define the maximum number of arguments a system call can be passed on this archetecture, which is 6, per entry.S.
 
