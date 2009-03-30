@@ -20,4 +20,5 @@ THREAD_SIZE to point to the next page in memory past it, deduct 8 so that we
 skip over the space on the stack that is *sometimes* updated with the SS/ESP
 registers, and deduct 1, returning what we've calculated as a pt_regs pointer.
 
-footnote[FIXME: find out where the code for converting floating point formats went.]
+== Notes and Comments ==
+FIXME: find out where the code for converting floating point formats went.
