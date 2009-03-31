@@ -1,0 +1,69 @@
+Index: linux/hpc/syscalls.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/syscalls.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,64 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/syscalls.h>
++#include <linux/types.h>
++#include <asm/ptrace.h>
++#include <asm/unistd.h>
++#include <hpc/prototype.h>
++#include <hpc/arch.h>
++#include <hpc/syscalls.h>
++#include <hpc/debug.h>
++#include <hpc/hpc.h>
++
++/* generic multiplexer */
++asmlinkage long om_sys_local(struct pt_regs regs)
++{
++	long ret;
++
++	OMDEBUG_SYS(1, "[remote] local syscall %d\n", SYSNB());
++
++	ret = arch_exec_syscall(SYSNB(), (syscall_parameter_t *) &regs);
++	return ret;
++}
++
++asmlinkage long om_sys_remote(struct pt_regs regs)
++{
++	return remote_do_syscall(SYSNB(), &regs);
++}
++
++/* specific remote syscalls */
++asmlinkage int om_sys_gettid(struct pt_regs regs)
++{
++	return current->om.pid;
++}
++
++asmlinkage int om_sys_getpid(struct pt_regs regs)
++{
++	return current->om.tgid;
++}
++
++asmlinkage int om_sys_execve(struct pt_regs regs)
++{
++	return remote_do_execve((char __user *) SYSARG(0),
++	                        (char __user *__user *) SYSARG(1),
++	                        (char __user *__user *) SYSARG(2),
++	                        &regs);
++}
