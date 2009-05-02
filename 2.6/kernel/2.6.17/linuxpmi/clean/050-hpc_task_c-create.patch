@@ -1,0 +1,228 @@
+Index: linux/hpc/task.c
+===================================================================
+--- /dev/null	1970-01-01 00:00:00.000000000 +0000
++++ linux/hpc/task.c	2006-09-28 15:02:18.000000000 +0200
+@@ -0,0 +1,223 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#include <linux/sched.h>
++#include <linux/socket.h>
++#include <net/sock.h>
++#include <hpc/task.h>
++#include <hpc/comm.h>
++#include <hpc/mig.h>
++#include <hpc/prototype.h>
++#include <hpc/hpc.h>
++
++/**
++ * task_set_comm - swap openMosix link for a process (return old one)
++ * @p:		task to swap link
++ * @mlink:	new openMosix link
++ *
++ * Description:
++ *	Remove old link from task @p
++ *	Set @p socket to the new one @mlink
++ **/
++struct socket * task_set_comm(task_t *p, struct socket *mlink)
++{
++	struct socket *oldmlink;
++
++	oldmlink = p->om.contact;
++	p->om.contact = mlink;
++
++	if (mlink && test_bit(SOCK_OOB_IN, &mlink->flags))
++		task_set_dreqs(p, DREQ_URGENT);
++	return oldmlink;
++}
++
++/**
++ * task_file_check_stay - check if task should stay because of file mapping
++ **/
++static int task_file_check_stay(struct vm_area_struct *vma)
++{
++	struct inode *inode;
++	mode_t mode;
++	int stay = 0;
++
++	inode = vma->vm_file->f_dentry->d_inode;
++	if (!inode)
++		return 0;
++
++	mode = inode->i_mode;
++
++	/* FIXME Tab: maybe wrong */
++	if (!(vma->vm_flags & VM_NONLINEAR)) {
++		if (!prio_tree_empty(&inode->i_mapping->i_mmap))
++			stay |= DSTAY_MONKEY;
++	} else {
++		if (!list_empty(&vma->shared.vm_set.list))
++			stay |= DSTAY_MONKEY;
++	}
++	if (S_ISCHR(mode) || S_ISFIFO(mode) || S_ISSOCK(mode))
++		stay |= DSTAY_DEV;
++
++	return stay;
++}
++
++/**
++ * task_request_checkstay - adjust stay reason of a task (considering mm)
++ **/
++void task_request_checkstay(task_t *p)
++{
++	struct mm_struct *mm;
++	int stay;
++	struct vm_area_struct *vma;
++
++	task_clear_dreqs(p, DREQ_CHECKSTAY);
++
++	printk(KERN_ERR "oM: [%d] do_request: DREQ_CHECKSTAY\n", p->pid);
++
++	/* check if there's a stay reason we can clean, else pass */
++	if (!task_test_stay(p, DSTAY_PER_MM | DSTAY_CLONE))
++		return;
++
++	task_lock(p);
++	mm = p->mm;
++	stay = p->om.stay & ~(DSTAY_PER_MM | DSTAY_CLONE);
++	if (!mm)
++		stay |= DSTAY_CLONE;
++	else {
++		/* FIXME: need verifying KIOBUF */
++		if (atomic_read(&mm->mm_realusers) > 1)
++			stay |= DSTAY_CLONE;
++		if (mm->def_flags & VM_LOCKED)
++			stay |= DSTAY_MLOCK;
++
++		for (vma = mm->mmap; vma; vma = vma->vm_next)
++		{
++			if (vma->vm_file)
++				stay |= task_file_check_stay(vma);
++			if (vma->vm_flags & VM_LOCKED)
++				stay |= DSTAY_MLOCK;
++		}
++	}
++	if (p->om.stay != stay)
++		p->om.stay = stay;
++	task_unlock(p);
++	return;
++}
++
++/**
++ * task_request_move - move a task
++ **/
++void task_request_move(task_t *p)
++{
++	struct sockaddr *addr;
++
++	task_clear_dreqs(p, DREQ_MOVE);
++	addr = p->om.whereto;
++	p->om.whereto = NULL;
++
++	task_move_to_node(p, addr, 0);
++	kfree(addr);
++}
++
++/**
++ * openmosix_task_init - Init all openMosix structure of a task @p
++ **/
++int openmosix_task_init(task_t *p)
++{
++	task_t *parent = current;
++
++	memset(&p->om, 0, sizeof(om_task_t));
++	
++	if (p->pid == 1)
++		task_set_stay(p, DSTAY_SYSTEM);
++
++	/* if father of task is a DREMOTEDAEMON, then the task is DREMOTE */
++	if (task_test_dflags(parent, DREMOTEDAEMON))
++		task_set_dflags(p, DREMOTE);
++	/* child of a DDEPUTY is a DDEPUTY */
++	if (task_test_dflags(parent, DDEPUTY))
++		task_set_dflags(p, DDEPUTY);
++
++	INIT_LIST_HEAD(&p->om.rfiles);
++	
++	return 0;
++}
++
++/**
++ * openmosix_task_exit - Exit current task
++ **/
++int openmosix_task_exit(void)
++{
++	task_t *p = current;
++	
++	if (!task_test_dflags(p, DDEPUTY | DREMOTE))
++		return 0;
++
++	task_heldfiles_clear(p);
++	
++	if (p->om.contact)
++		comm_close(p->om.contact);
++	return 0;
++}
++
++/**
++ * task_wait_contact - wait until the process got a contact with deputy
++ **/
++static inline void task_wait_contact(task_t *p)
++{
++	DECLARE_WAITQUEUE(wait, p);
++
++	add_wait_queue(&p->om.wait_dist, &wait);
++	while (!p->om.contact)
++	{
++		set_current_state(TASK_UNINTERRUPTIBLE);
++		schedule();
++	}
++	remove_wait_queue(&p->om.wait_dist, &wait);
++	set_current_state(TASK_RUNNING);
++}
++
++/**
++ * task_register_migration - register a migration for this process
++ * @p:		task to migrate
++ * @dest:	destination of the migration (NULL == home)
++ **/
++int task_register_migration(task_t *p, struct sockaddr *dest)
++{
++	if (dest) {
++		p->om.whereto = kmalloc(sizeof(struct sockaddr), GFP_KERNEL);
++		if (!p->om.whereto)
++			return -1;
++		memcpy(p->om.whereto, dest, sizeof(struct sockaddr));
++	}
++	task_set_dreqs(p, DREQ_MOVE);
++	wake_up_process(p);
++	set_ti_thread_flag(p->thread_info, TIF_NEED_RESCHED);
++	return 0;
++}
++
++/**
++ * task_do_request - current task processes requests coming from other tasks
++ **/
++void task_do_request(void)
++{
++	if (task_test_dreqs(current, DREQ_MOVE))
++		task_request_move(current);
++	if (task_test_dreqs(current, DREQ_CHECKSTAY))
++		task_request_checkstay(current);
++}
