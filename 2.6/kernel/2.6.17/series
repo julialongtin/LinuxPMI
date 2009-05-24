@@ -193,6 +193,10 @@ linuxpmi/clean/048-hpc_service_c-create-breakup-cleanup.patch
 # functions called by the syscall layer on a remote node to dispatch syscall requests made by guest processes, in C.
 linuxpmi/clean/049-hpc_syscall_c-create.patch
 
+# tmig_task
+# functions for performing common operations on tasks, and their supporting functions. 
+linuxpmi/clean/050-hpc_task_c-create.patch
+
 # remainder of first git tree
 linuxpmi/openmosix-git.patch
 
