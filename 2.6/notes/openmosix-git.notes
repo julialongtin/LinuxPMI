@@ -1927,62 +1927,116 @@ hunk	class		file patched				description								noteworthy references
 								socket's sockaddr's family is AF_INET6, we cast the target sockaddr as
 			FIXME: does IPV6 not have INADDR_ANY?	a sockaddr_in6, and clear the sin6_addr member. Afterward, we return 0
 			       	    	     	  		for success.
-49			creates linux/hpc/syscalls.c		this file is callback points from where the current running process
-								calls a syscall, it gets directed here. om_sys_local dispatches a
-								syscall request to the local kernel (on the remote node). 
-								om_sys_remote calls remote_do_syscall to dispatch a syscall back to the
-								home node. om_sys_gettid and om_sys_getpid are broken, but should 
-								return the relevant values from curent->om.tgid and pid, respectively.
-								finally, om_sys_execve dispatches a request for the execve syscall to	
-								remote_do_execve.
-50			creates linux/hpc/task.c		this file contains functions that operate on tasks. that deliniation	
-								isn't clear to me, couldnt all this stuff be defined as operating on
-								tasks? task_set_comm sets the link associated with a task to the passed	
-								in value, returns the old value, and if the new link is flagged
-			ghosts?					SOCK_OOB_IN, we task_set_dreqs(DREQ_URGENT). so far as i can tell, both	
-								these flags are never used anywhere else. task_file_check_stay checks 
-								a given vma to make sure its file mappings dont prenvent being
-								migrated. it checks to see if the VM_NONLINEAR flag is set indicating
-								this vm page has a non-linear file mapping in it. if so, we check to
-								see if prio_tree_empty indicates the inode's i_mmap has no regions. if	
-								there is a single region of the file mmapped in, we add DSTAY_MONKEY
-								to the stay flags, because we're using a mmapped file access. next, we	
-								check vma->shared.vm_set.list hoping that its empty. if it has
-								contents, it indicates that we're using a shared memory mapping, and we	
-								add DSTAY_MONKEY to the stay flags. next, we check
-								vma->vm_file->f_dentry->d_inode->i_mode to see if it is S_ISCHR,
-								S_ISFIFO, or S_ISSOCK. if it is, we add DSTAY_DEV to the flags, as this	
-								is a fifo, socket, or character device file. we then return the stay
-								flags. task_request_checkstay dispatches requests for re-evaulation of
-								a process with reguards to its stay flags. we clear DREQ_CHECKSTAY,
-								printk a log message, then check to see if theres a reason we can
-			shouldnt this have DSTAY_MLOCK?		clear (DSTAY_PER_MM | DSTAY_CLONE). assuming there is, we lock the
-								task, clear its flags, and start the process of re-checking for these
-								two flags. if task->mm is null, we set DSTAY_CLONE. if mm_realusers is	
-								greater than 1, it means multiple processes are using this mm struct.	
-								in that case, we set stay reason DSTAY_CLONE. if mm->def_flags matches
-								VM_LOCKED, it means that someone has locked a memory page. we set stay
-								reason DSTAY_MLOCK. if we marked any flags, we propogate these marks
-								back to the task, unlock the task, and return. task_request_move
-								dispatches DREQ_MOVE move requests. it clears om->whereto, then calls
-								task_move_to_node with that value. it frees the previous om->whereto
-								string. openmosix_task_init initializes all openmosix related members
-								of a given task. if its pid 1(init), set DSTAY_SYSTEM. if it's parent	
-								is DREMOTEDAEMON, set DREMOTE. if it's parent is DDEPUTY, set DDEPUTY.	
-								init the head of list task->om.files, then return 0. 
-								openmosix_task_exit exits the current task. if its not DDEPUTY or
-								DREMOTE, its not our process, so return 0. if its our process, call
-								task_heldfiles_clear. if we're connected, call comm_close to
-								disconnect. assuming all went well, return 0. task_wait_contact creates	
-								a WAITQUEUE, sets the task to TASK_UNINTERUPTABLE, and calls schedule.
-								it stays in this loop until om.contact has contents, then removes the
-								WAITQUEUE entry, sets the task's current state to TASK_RUNNING, and 
-								ends. task_register_migration sets a process up for migration to a
-								given node. we convert from the sockaddr passed to a string, and stores	
-								this string as whereto send the process. we set the DREQ_MOVE flag, 
-								call wake_up_process(), mark the process as in need of rescheduling,
-								and return 0. task_do_request checks for DREQ_MOVE, or DREQ_CHECKSTAY,
-								and dispatches them to task_request_(move|checkstay).
+049			creates hpc/syscalls.c			This file contains functions called from the archetecture specific
+								system call handler code when the current running process calls a
+								syscall, and is a guest process for which this is a remote node. All
+								of the functions in this file are called on x86 via the
+								remote_sys_call_table entry by assembly code we add to 
+								arch/i386/kernel/entry.S's sysenter_entry entry, and system_call
+								entry. om_sys_local is called when a guest process calls a system call
+								deemed runable on the remote node. In it, we OMDEBUG_SYS a tracing
+								message, then call arch_exec_syscall, passing it the pt_regs passed
+								in, and the system call number to dispatch to, retrieved by the
+								SYSNB() macro, which points to include/asm-<arch>/om.h's
+								arch_get_sys_nb. We return the vaule arch_exec_syscall returns to us.
+								om_sys_remote Is called when a guess process calls a system call we've
+								decided we need to handle on the home node. In it, we simply call
+								remote_do_syscall, passing it the passed in pt_regs, and the system
+								call number to relay, retreived by the SYSNB macro. We return the value
+								remote_do_syscall returns to us. om_sys_gettid and om_sys_getpid are
+								called in cases where the gettid and getpid system calls have been
+								envoked. om_sys_gettid simply returns the TID we stored in the om
+								specific structure we add to each processes task structure, while
+								om_sys_getpid returns the PID stored in the same structure. Finally,
+								om_sys_execve dispatches an execve request to hpc/remote.c's
+								remote_do_execve, passing it the passed in pt_regs structure, along
+								with the first three arguments passed into the syscall retrieved using
+								include/asm-i386/om.h's arch_sys_get_arg via hpc/syscalls.h's SYSARG()
+								macro.
+050			creates linux/hpc/task.c		This file contains helper functions which operate on passed in tasks.
+								task_set_comm is called by hpc/deputy.c's deputy_do_fork,
+								hpc/migctrl.c's task_remote_expel, hpc/migrecv.c's task_remote_expel,
+								and hpc/remote.c's remote_do_fork. Its function is to set the link
+								associated with a given task to the passed in value, returning the old
+								link. In it, we set the link to the passed in value, then check if the
+			FIXME: remove SOCK_OOB_IN and		new link is flagged SOCK_OOB_IN. If so, we set the DREQ_URGENT flag.
+			DREQ_URGENT, as they are not used	Regardless of SOCK_OOB_IN, we return the old link. task_file_check_stay
+			elsewhere.     	     			is called by the following task_request_checkstay function to check if a
+								passed in vma's file mappings prevent the process mapping it from being
+								migrated. In it, we first check to see if the given vma's associated
+			FIXME: vm_file can be null!		inode is NULL. If it is, we return 0, as this vma has no associated
+			       	       	      			file. Next we check to see if the VM_NONLINEAR flag is set indicating
+								this vma contains a non-linear mapping to a file. If it does, we call
+								prio_tree_empty to see if this vma's inode has any pages mapped in yet.  http://www.penguin-soft.com/penguin/man/2/remap_file_pages.html
+								If there is a single region of the file mmapped in, we add DSTAY_MONKEY
+								to the stay flags we're returning, indicating that this vma belongs to a
+								memory mapped file. If there are no pages mapped in according to
+								prio_tree_empty, we check the vma's list of shared memory pages to make  
+								sure its empty. If it has contents, it indicates that we're using a
+			FIXME: shouldn't this be a seperate	shared memory mapping, so we add DSTAY_MONKEY to the returned stay flag.
+			flag?					Next, we check the mode on the inode belonging to the vma's file to see
+								if the file is a character device, fifo, or a socket. If it does, we add
+								DSTAY_DEV to the returned flags, as processes touching these must be
+								handled on the home node. We then return the stay flags we've
+								calculated. task_request_checkstay is called by the later defined
+								task_do_request to recalculate the reasons we should hold the passed in
+								task on the home node. In it, we first clear the DREQ_CHECKSTAY flag, 
+								which was previously raised by hpc/kernel.c's openmosix_no_longer_monkey
+			FIXME: printk!				or unstay_mm. We then printk a tracing message, and check to see if
+			       					there is a stay reason set that we have the ability to clear
+			shouldnt this have DSTAY_MLOCK?		(DSTAY_PER_MM and DSTAY_CLONE). If one of the clearable reasons is set,
+				      	   			we lock the task, clear the two stay flags, and begin the process of
+								re-checking for these two flags. To do this, we first check if theres
+								a MM structure associated with this task. If this task has no MM, we
+								set DSTAY_CLONE, unlock the task, and return. Otherwise, we check the
+								user count we added to the MM struct to see if there are multiple
+								processes using this mm struct. If there are, we set stay reason
+								DSTAY_CLONE. If the MM's default flags contain VM_LOCKED, it means this
+								process contains a locked memory page, so we set stay reason
+								DSTAY_MLOCK. Next, we check each of this task's VMAs, first to see if
+								they have a file associated with them, or if they have a VM_LOCKED flag.
+								If a VMA's vm_file is not null, we call task_file_check_stay to
+								re-calculate the file related stay reasons. If a VMA's vm_flags contains
+								VM_LOCKED, this vma uses a locked memory page, and we set stay reason
+								DSTAY_MLOCK. When we're done marking VMAs, we unlock the task, and
+								return. task_request_move is called by the later defined task_do_request
+								when the current task's DREQ_MOVE flag is set, indicating this task is
+								to be moved. In it, we first clear the DREQ_MOVE flag, then save the
+								destination stored in our migration related member of the task
+								structure, and clear it. we call task_move_to_node with the saved value,
+								then free it. openmosix_task_init is called by code we add to
+								kernel/fork.c's copy_process to initialize all of the migration related
+								members of a given task. Note that when we are called, current is our
+								parent task, and the passed in task is the new task. First, we zero the
+								migration related members of the new task, then if the new task is pid 1
+								(the init process), we mark it with the DSTAY_SYSTEM flag. If the new
+								task's parent is DREMOTEDAEMON, we set the new task with DREMOTE. If
+								it's parent is DDEPUTY, we set the new task DDEPUTY. Finally, we
+								initialize our remote file list, and return 0. openmosix_task_exit is
+								called by code we add to kernel/exit.c's do_exit when a task is exiting.
+								In it, we first check to see if the process is a deputy or remote
+								process by checking for DDEPUTY or DREMOTE flags. If the passed in task
+								is neither DDEPUTY or DREMOTE, we return 0. Otherwise, we call
+								task_heldfiles_clear to fput and deallocate any of the task's remote
+								files. If the task still has an open connection to a process on a
+								remote node, we call comm_close to close it. Finally, we return 0.
+			FIXME: dead code!			task_wait_contact is called to call schedule() until we're connected to
+			       	    				the remote node. In it, we first add the current task to a the kernel's
+								general driver WAITQUEUE. we then enter a loop, setting the task to
+								TASK_UNINTERUPTABLE, then calling schedule. We stay in this loop until
+								om.contact has contents. We then remove the WAITQUEUE entry we added,
+								and set the task's current state to TASK_RUNNING.
+								task_register_migration is called by proc_pid_set_where to register a
+								migration event for moving a given task to a given node. We First
+								check to see if we were passed a destination, and if we were, we convert
+								it from being a sockaddr to a string, and store	this string as where we
+								are going to send the process. We set the DREQ_MOVE flag, call
+								wake_up_process(), mark the process as in need of rescheduling, and
+								return 0. task_do_request is called by hpc/deputy.c's
+								deputy_process_misc, and hpc/kernel.c's openmosix_pre_usermode. Its
+								purpose is to dispatch migration related events. In it, we check for
+								DREQ_MOVE or DREQ_CHECKSTAY, and we dispatches them to
+								task_request_move and task_request_checkstay, respectively.
 51	i386		creates					This file forward declares ia32 specific cpu feature detection
 			linux/include/asm-i386/om.h		functions, declares a function returning argument N passed to a syscall
 								and a function returning the number of arguments passed to a syscall,
