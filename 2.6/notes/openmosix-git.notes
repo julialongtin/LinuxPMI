@@ -162,6 +162,7 @@ hunk	class		file patched				description								noteworthy references
 	rmem		missing comments on #endifs		the kernel on the home node is accessing memory in a deputy processes
 								userspace, we use deputy_strncpy_from_user. we also forward
 								__strlen_user and strlen_user to deputy_strlen_user for the same
+
 								reason.
 022	local,rmem	fs/namei.c				modify getname to use deputy_strncpy_from_user to get the filename
 			BUG! this function is supposed to	requested from userspace from the remote node when
@@ -2037,30 +2038,39 @@ hunk	class		file patched				description								noteworthy references
 								purpose is to dispatch migration related events. In it, we check for
 								DREQ_MOVE or DREQ_CHECKSTAY, and we dispatches them to
 								task_request_move and task_request_checkstay, respectively.
-51	i386		creates					This file forward declares ia32 specific cpu feature detection
-			linux/include/asm-i386/om.h		functions, declares a function returning argument N passed to a syscall
-								and a function returning the number of arguments passed to a syscall,
-								and defines the NR_MAX_SYSCALL_ARG, and a define for getting the user
-								registers of the current thread. cpu_has_feature_fxsr is implimented by
-								code we add to arch/i386/kernel/i387.c, and tells us whether FXSR
-								format floating point state save functionality is available or not.
-								arch_get_sys_arg is called directly by hpc/remote.c's
-								remote_do_syscall, as well as being wrapped as the SYSARG macro by
-								hpc/syscalls.h. its function is to return the N'th argument passed into
-								the syscall we're currently handling. Since arguments to syscalls are
-								stored in order in our pt_regs structure, arch_get_sys_arg simply
-								returns (as a long) the N'th long-sized value stored in the passed in
-								pt_regs. If we are asked for an argument index greater than or equal to
-								6 (our maximum system call argument index), we BUG_ON() about it.
-								arch_get_sys_nb just returns regs->eax. NR_MAX_SYSCALL_ARG is the
-								maximum number of arguments a system call on this archetecture can
-								receive. On i386, is set to 6. ARCH_TASK_GET_USER_REGS is a macro, used
-								to get the user space registers from the current running thread. In it,
-								we use current_thread to get the current running thread's thread
-								structure, add THREAD_SIZE to point to the next page in memory past it,
-								deduct 8 so that we skip over the space on the stack that is
-								*sometimes* updated with the SS/ESP registers, and deduct 1, returning
-								what we've calculated as a pt_regs pointer.
+51	i386		creates					This file contains i386 archetecture specific helper macros, constants,
+			linux/include/asm-i386/om.h		and forward declarations used by the system call subsystem. We first
+								forward declare cpu_feature_has_fxsr, which is implimented by code we
+								add to arch/i386/kernel/i387.c, and tells us whether FXSR format
+								floating point state save functionality is available or not. Its used
+								by hpc/arch/i386.c's arch_mig_recv_fp and arch_mig_send_fp.
+			FIXME: use the wrapper, OR the direct	Next we declare arch_get_sys_arg, which is called by hpc/remote.c's
+			call, not both.				remote_do_syscall, as well as being wrapped as the SYSARG macro by
+								hpc/syscalls.h. The SYSARG wrapper is called by hpc/syscalls.c's
+								om_sys_execve. arch_get_sys_arg's function is to return the N'th
+								argument passed into the syscall the kernel is currently handling.
+								Since arguments to syscalls are stored in order in our pt_regs
+								structure, arch_get_sys_arg simply returns (as a long) the N'th
+								long-sized value stored in the passed in pt_regs. If we are asked for
+			FIXME: use the below define instead of	an argument index greater than or equal to 6 (the maximum number of
+			defining our own constant.  	    	arguments a syscall can accept on ia32), we BUG_ON() about it.
+								arch_get_sys_nb is wrapped as the SYSNB macro, and is used by
+								hpc/syscall.c's om_sys_local and om_sys_remote functions. Its function
+								is to return the syscall number of the syscall the kernel is currently
+								handling. In it, we just return regs->eax, as the system call number is
+								stored in the eax register when the kernel is called. Next, we define
+								NR_MAX_SYSCALL_ARG, which is the maximum number of arguments a system
+								call on this archetecture can receive. NR_MAX_SYSCALL_ARG is used by
+								hpc/remote.c's remote_do_syscall, and include/hpc/syscalls.h's 
+								definition of syscall_parameter_t. On i386, we set this to 6.
+								ARCH_TASK_GET_USER_REGS is a macro used by hpc/arch-<ARCH>.c's
+								arch_mig_receive_proc_context arch_mig_send_proc_context and
+								arch_kickstart to get a pointer to the user space registers of the
+								current running thread. In it, we use current_thread to get the current
+								running thread's thread structure, add THREAD_SIZE to point to the next
+								page in memory past it, deduct 8 so that we skip over the space on the
+								stack that is *sometimes* updated with the SS/ESP registers, and deduct
+								1, returning what we've calculated as a pt_regs pointer.
 52	i386		creates					this file contains definitions for the architecture specific structures	
 			linux/include/asm-i386/om-protocol.h	used when transferring a process between ia32 machines. we define
 								MIG_ARCH_I386_LDT, which is a flag for arch-i386 telling it to transfer

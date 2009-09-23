@@ -197,6 +197,10 @@ linuxpmi/clean/049-hpc_syscall_c-create.patch
 # functions for performing common operations on tasks, and their supporting functions. 
 linuxpmi/clean/050-hpc_task_c-create.patch
 
+# architecture specific helper functions used by the system call subsystem.
+linuxpmi/clean/051-include_asm_i386_om_h-create.patch
+
+
 # remainder of first git tree
 linuxpmi/openmosix-git.patch
 
