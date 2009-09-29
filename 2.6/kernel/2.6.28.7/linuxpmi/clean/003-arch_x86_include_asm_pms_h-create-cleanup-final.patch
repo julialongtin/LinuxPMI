@@ -1,0 +1,9 @@
+diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/pms.h linux-2.6.28.7-pms/arch/x86/include/asm/pms.h
+--- linux-2.6.28.7/arch/x86/include/asm/pms.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-2.6.28.7-pms/arch/x86/include/asm/pms.h	2009-03-06 19:59:09.000000000 +0000
+@@ -0,0 +1,5 @@
++#ifdef CONFIG_X86_32
++# include "pms_32.h"
++#else
++# include "pms_64.h" // #ifdef CONFIG_X86_64
++#endif
