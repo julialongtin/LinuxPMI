@@ -1,0 +1,37 @@
+diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/tmig.h linux-2.6.28.7-lpmi/arch/x86/include/asm/tmig.h
+--- linux-2.6.28.7/arch/x86/include/asm/tmig.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-2.6.28.7-lpmi/arch/x86/include/asm/tmig.h	2009-03-06 19:59:09.000000000 +0000
+@@ -0,0 +1,33 @@
++ /*
++ *     Copyright (C) 2007-2009 G_remlin <g_remlin@rocketmail.com>
++ *     Copyright (C) 2007-2009 Julia Longtin <juri@solarnetone.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 or greater.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ * Changes for 2.6.28.7 by G_remlin <g_remlin@rocketmail.com>
++ * Additional changes by Julia Longtin <juri@solarnetone.org>
++ *
++ */
++
++#ifndef _TMIG_ARCH_TMIG_H
++#define _TMIG_ARCH_TMIG_H
++#ifdef CONFIG_X86_32
++#ifndef CONFIG_X86_64
++#error "neither CONFIG_X86_32 or CONFIG_X86_64 has been defined, yet the archetecture specific X86 preprocessor macros for task migration have been included!"
++#else
++# include "tmig32.h" // CONFIG_X86_32 is defined
++#endif /* CONFIG_X86_64 */
++#else
++# include "tmig64.h" // CONFIG_X86_64 is defined
++#endif /* CONFIG_X86_32 */
++#endif /* _TMIG_ARGH_TMIG_H */

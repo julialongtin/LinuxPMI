@@ -1,0 +1,7 @@
+= arch/x86/include/asm/tmig.h =
+
+== Summary ==
+This file contains logic for including either tmig32.h or tmig64.h, depending on whether we are compiling for an I386, or an AMD64.
+
+== Details ==
+This header includes either tmig64.h or tmig32.h, depending on whether we're compiling for an I386, or an AMD64. If this header is included without defining either CONFIG_X86_64 or CONFIG_X86_32, we generate an error.

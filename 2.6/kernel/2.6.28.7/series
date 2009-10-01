@@ -3,13 +3,16 @@
 #######################
 
 # arch_X86_32, tmig_syscall, tmig_task
-# inline functions and macros included by pms.h, used by system call handling routines, and task migration routines.
-# linuxpmi/clean/001-arch_x86_include_asm_pms_32_h-create-broken-final.patch
+# inline functions and macros included by tmig.h, used by system call handling routines, and task migration routines.
 linuxpmi/silver/001-arch_x86_include_asm_tmig32_h-create-broken-final.patch
 
 # arch_X86_64, tmig_syscall, tmig_task
-# inline functions and macros included by pms.h, used by system call handling routines, and task migration routines.
-linuxpmi/clean/002-arch_x86_include_asm_pms_64_h.patch
+# inline functions and macros included by tmig.h, used by system call handling routines, and task migration routines.
+linuxpmi/silver/002-arch_x86_include_asm_tmig64_h-create-final.patch
+
+# arch_X86_64, arch_X86_32, tmig_syscall, tmig_task
+# includes one of the above headers depending on archetecture, X86_32 or X86_64.
+linuxpmi/silver/003-arch_x86_include_asm_tmig_h-create-final.patch
 
 # monolythic patch from g_remlin
 g_remlin/linux-2.6.28.7-pms-200903062029.pat
