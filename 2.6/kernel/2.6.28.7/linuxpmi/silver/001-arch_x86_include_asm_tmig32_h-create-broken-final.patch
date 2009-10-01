@@ -1,6 +1,6 @@
 diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/tmig32.h linux-2.6.28.7-lpmi/arch/x86/include/asm/tmig32.h
 --- linux-2.6.28.7/arch/x86/include/asm/tmig32.h	1970-01-01 01:00:00.000000000 +0100
-+++ linux-2.6.28.7-pms/arch/x86/include/asm/tmig32.h	2009-03-06 19:59:09.000000000 +0000
++++ linux-2.6.28.7-lpmi/arch/x86/include/asm/tmig32.h	2009-03-06 19:59:09.000000000 +0000
 @@ -0,0 +1,66 @@
 +/*
 + *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
