@@ -2071,18 +2071,27 @@ hunk	class		file patched				description								noteworthy references
 								page in memory past it, deduct 8 so that we skip over the space on the
 								stack that is *sometimes* updated with the SS/ESP registers, and deduct
 								1, returning what we've calculated as a pt_regs pointer.
-52	i386		creates					this file contains definitions for the architecture specific structures	
-			linux/include/asm-i386/om-protocol.h	used when transferring a process between ia32 machines. we define
-								MIG_ARCH_I386_LDT, which is a flag for arch-i386 telling it to transfer
-								the local descriptor table (which is not commonly changed by a process)
-								along with migrated processes. the LDT is changed by programs such as
-								wine and qemu. omp_mig_fp contains the floating point context of a
-								process. it includes a flag for which format of register save function
-								was used. omp_mig_arch is supposed to be for architecture specific
-								process functionality, but such functionality is still a stub. 
-								omp_mig_arch_task is the structure containing architecture specific
-								members of the process context. 
-53	i386		linux/include/asm-i386/uaccess.h	this header handles simple reads and writes to/from userspace. we	hpc/uaccess.h
+52	i386		creates					This file contains the definitions of the architecture specific
+			linux/include/asm-i386/om-protocol.h	structures used when transferring the components of a thread between
+								I386 machines. Its included by include/hpc/protocol.h. First, we define
+								MIG_ARCH_I386_LDT, which is a flag meant for telling a node during
+								migration that we're sending the local descriptor table(which is not
+								commonly changed by a process) over the communication link. For
+								reference, the LDT of a process is changed by programs such as wine and
+								qemu. We next define omp_mig_fp to be a container for the floating
+								point state of a process. In it, we include a flag for which form of
+								register save instruction was used to save the floating point
+								registers, and a union containing the saved registers. Next we define
+								omp_mig_arch to use as a container for architecture specific process
+								components other than memory pages, integer state, and floating point
+								state. in it, we only store a required type flag. We declare it without
+								other members, as we haven't written code for transfering a LDT yet.
+								Finally, we declare omp_mig_arch_task, which is the structure for
+								containing architecture specific components of the task context of the
+								thread being transfered. In it, we declare members for holding the
+								cpu features a thread is using, the debug registers, the two stack
+								pointers, and an array for storing the task's descriptor tables.
+53	i386		linux/include/asm-i386/uaccess.h	this header handles simple reads and writes to/from userspace. we
 	remote-memory						modify it so that we use openmosix's deputy_put and deputy_get
 								functions. the first hunk just includes our header. the second hunk
 								modifies get_user calls so that deputy_get_user is called if
