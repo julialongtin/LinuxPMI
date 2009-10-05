@@ -1,0 +1,53 @@
+diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/pms-protocol_32.h linux-2.6.28.7-pms/arch/x86/include/asm/pms-protocol_32.h
+--- linux-2.6.28.7/arch/x86/include/asm/pms-protocol_32.h	1970-01-01 01:00:00.000000000 +0100
++++ linux-2.6.28.7-pms/arch/x86/include/asm/pms-protocol_32.h	2009-03-06 19:59:09.000000000 +0000
+@@ -0,0 +1,49 @@
++/*
++ *	Copyright (C) 2002-2004 Moshe Bar <moshe@moshebar.com>
++ *	Copyright (C) 2005-2006 Vincent Hanquez <vincent@snarc.org>
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published
++ * by the Free Software Foundation; version 2 only.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ * 
++ * Original Mosix code Copyright (C) Amnon Barak, Amnon Shiloh
++ *
++ * Changes for 2.6 by Vincent Hanquez and Alexander Nyberg
++ *
++ */
++
++#ifdef CONFIG_X86
++#ifndef _HPC_ARCHPROTOCOL_H
++#define _HPC_ARCHPROTOCOL_H
++
++#include <asm/i387.h>
++
++#define MIG_ARCH_I386_LDT	1
++
++struct pmsp_mig_fp
++{
++	int has_fxsr;
++	union thread_xstate xstate;
++};
++
++struct pmsp_mig_arch
++{
++	int type;
++};
++
++struct pmsp_mig_arch_task
++{
++	u32 features[NCAPINTS];
++	long debugreg[8];
++	long fs;
++	long gs;
++	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
++};
++
++#endif /*  _HPC_ARCHPROTOCOL_H */
++#endif /* CONFIG_X86 */
