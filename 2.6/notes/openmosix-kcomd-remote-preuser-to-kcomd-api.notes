@@ -1,5 +1,11 @@
-001	om		hpc/kernel.c				the first hunk just includes two headers. the second changes		<hpc/kcom.h>
-								remote_pre_usermode to dispatch packets containing requests for signals
-			remote_do_signal returns ?		to remote_do_signal and delete them before returning 0. the last hunk
-								removes the code kicking off the openmosix_mig_daemon, making
-								openmosix_init into a stub returning 0.
+= 001 om - hpc/kernel.c =
+
+the first hunk just includes two headers. the second changes 
+<hpc/kcom.h>
+
+remote_pre_usermode to dispatch packets containing requests for signals
+
+remote_do_signal returns ?		to remote_do_signal and delete 
+them before returning 0. the last hunk removes the code kicking off the openmosix_mig_daemon, making 
+openmosix_init into a stub returning 0.
+
