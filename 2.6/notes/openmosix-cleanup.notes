@@ -1,15 +1,28 @@
-1	kcomd		hpc/kcomd.c			the first hunk corrects error handling in socket_listen	so that
-							received datastructures are properly destroyed. the second hunk
-							corrects error handling, and adds error messages in each error
-			one missing error		condition. it also adds code to inherit the ops and type of our
-			message				passed socket into the sock dedicated to this connection, and
-							code to retreive the address of the peer we're talking to.
-					 		we're still not checking the peer's address.
-2	om-rmem		include/hpc/hpc.h		prototype remote_handle_user, declared in copyuser.c.
-3	kcore		include/hpc/mig.h		prototype reparent_to_init, which is part of kernel/exit.c		
-4	om-remote	include/hpc/migrecv.c		prevent gcc warning.
-5	kcore		include/net/socket.h		prototype sock_alloc so we can use it elsewhere.
-6	kcore-DROP	include/linux/compiler.h	include linux/config.h. what was the purpose of this?
-7	kcore		linux/net/socket.c		change sock_alloc's declaration so it is no longer static,
-							period.
+= 1 kcomd - hpc/kcomd.c = 
+
+the first hunk corrects error handling in socket_listen so that received datastructures are properly destroyed. the second hunk corrects error handling, and adds error messages in each error one missing error condition. it also adds code to inherit the ops and type of our message passed socket into the sock dedicated to this connection, and code to retreive the address of the peer we're talking to. we're still not checking the peer's address.
+
+= 2 om-rmem - include/hpc/hpc.h =
+
+prototype remote_handle_user, declared in copyuser.c.
+
+= 3 kcore - include/hpc/mig.h =
+
+prototype reparent_to_init, which is part of kernel/exit.c
+
+= 4 om-remote - include/hpc/migrecv.c =
+
+prevent gcc warning.
+
+= 5 kcore - include/net/socket.h = 
+
+prototype sock_alloc so we can use it elsewhere.
+
+= 6 kcore-DROP - include/linux/compiler.h =
+
+include linux/config.h. what was the purpose of this?
+
+= 7 kcore - linux/net/socket.c =
+
+change sock_alloc's declaration so it is no longer static, period.
  						
