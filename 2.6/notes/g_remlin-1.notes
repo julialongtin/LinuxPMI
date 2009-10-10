@@ -34,14 +34,26 @@ This file contains logic for including either pms_32.h or pms_64.h, depending on
 == Details ==
 This header includes either pms_64.h or pms_32.h, depending on whether we're compiling for an i386, or an amd64.
 
-footnoteref[fixme1,FIXME: extra whitespace here.]
-footnoteref[fixme2,FIXME: unused argument!]
-footnoteref[fixme3,FIXME: replace code using this with a task* with processor.h's task_pt_regs.]
-footnoteref[fixme4,FIXME: why BUG on x86_64, and BUG_ON on i386?]
-footnoteref[fixme5,FIXME: we screw this up, and are using RCX instead of r10. RCX is userspace, r10 is kernelspace.]
-footnoteref[fixme6,FIXME: wrapper define is wrong.]
-footnoteref[fixme7,FIXME: rename tmig, not pms.]
-footnoteref[fixme8,FIXME: re-sequence these two files so that the code sequence matches, for comparitive purposes.]
-footnoteref[fixme9,FIXME: this is *completely* wrong for x86_64. examine asm-x86_64/procesor.h's task_pt_regs macro.]
-footnoteref[fixme10,FIXME: we forget to deduct 8 here!]
-footnoteref[note1,http://www.x86-64.org/documentation/abi.pdf version 0.99.]
+== Notes and Comments ==
+[[fixme1]]
+^[fixme1]^extra whitespace here.
+[[fixme2]]
+^[fixme2]^unused argument.
+[[fixme3]]
+^[fixme3]^replace code using this with a task* with processor.h's task_pt_regs.
+[[fixme4]]
+^[fixme4]^why BUG on x86_64, and BUG_ON on i386?
+[[fixme5]]
+^[fixme5]^we screw this up, and are using RCX instead of r10. RCX is userspace, r10 is kernelspace.
+[[fixme6]]
+^[fixme6]^wrapper define is wrong.
+[[fixme7]]
+^[fixme7]^rename tmig, not pms.
+[[fixme8]]
+^[fixme8]^re-sequence these two files so that the code sequence matches, for comparitive purposes.
+[[fixme9]]
+^[fixme9]^this is *completely* wrong for x86_64. examine asm-x86_64/procesor.h's task_pt_regs macro.]
+[[fixme10]]
+^[fixme10]^we forget to deduct 8 here!
+[[note1]]
+^[note1]^http://www.x86-64.org/documentation/abi.pdf version 0.99.
