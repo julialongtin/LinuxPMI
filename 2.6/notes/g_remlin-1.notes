@@ -31,7 +31,7 @@ Finally, we create ARCH_TASK_GET_USER_REGS^<<fixme2>><<fixme3>>^, which is a mac
 == patch 003 - arch/x86/include/asm/pms.h ==
 
 === Summary ===
-This file contains logic for including either pms_32.h or pms_64.h, depending on whether we are compiling for an i386, or an AMD64. ^[fixme6][fixme7]^
+This file contains logic for including either pms_32.h or pms_64.h, depending on whether we are compiling for an i386, or an AMD64. ^<<fixme6>><<fixme7>>^
 
 === Details ===
 This header includes either pms_64.h or pms_32.h, depending on whether we're compiling for an i386, or an amd64.
