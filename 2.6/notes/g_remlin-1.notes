@@ -20,34 +20,34 @@ arch_get_sys_nb is defined as an inline function. It is wrapped by include/hpc/s
 This file contains architecture specific helper functions used by the system call redirection subsystem, as well as a helper for the process teardown/buildup code. It is included by arch/x86/include/asm/pms.h. ^<<fixme6>><<fixme7>><<fixme8>>^
 
 === Details ===
-First we define arch_get_sys_arg, an inline function. It is called by hpc/remote.c's remote_do_syscall directly, and wrapped by include/hpc/syscalls.h's SYSARG macro, which is used by hpc/syscalls.c's pms_sys_execve. Its purpose is to return the N'th argument passed into the syscall that inlines us. In it, we pull the appropriate argument from the passed in pt_regs structure, ^<<fixme5>>^confirming to the order in ^<<note1>>^the AMD64 ABI, and the kernel's entry.S. If we are asked for an argument index greater than the sixth, we ^<<fixme4>>^BUG() about it.
+First we define 'arch_get_sys_arg', an inline function. It is called by hpc/remote.c's 'remote_do_syscall' directly, and wrapped by include/hpc/syscalls.h's 'SYSARG' macro, which is used by hpc/syscalls.c's 'pms_sys_execve'. Its purpose is to return the N'th argument passed into the syscall that inlines us. In it, we pull the appropriate argument from the passed in 'pt_regs' structure, ^<<fixme5>>^confirming to the order in ^<<note1>>^the AMD64 ABI, and the kernel's 'entry.S'. If we are asked for an argument index greater than the sixth, we ^<<fixme4>>^BUG() about it.
 
-arch_get_sys_nb is defined as an inline function. It is wrapped by include/hpc/syscall.h's SYSNB macro, and called by pms_sys_remote to return the system call number of the system call request we're currently handling. On x86_64, this is stored in the 'rax' register, so we simply return the lower 32bits of the 'rax' member of the passed in pt_regs structure.
+'arch_get_sys_nb' is defined as an inline function. It is wrapped by include/hpc/syscall.h's 'SYSNB' macro, and called by 'pms_sys_remote' to return the system call number of the system call request we're currently handling. On x86_64, this is stored in the 'rax' register, so we simply return the lower 32bits of the 'rax' member of the passed in 'pt_regs' structure.
 
-Next, we define the maximum number of arguments a system call can be passed on this architecture, which is 6, per entry.S.
+Next, we define 'NR_MAX_SYSCALL_ARG' as the maximum number of arguments a system call can be passed on this architecture, which is 6, per entry.S. this macro is used when defining hpc/syscall.h's syscall_parameter structure, as well as hpc/remote.c's remote_do_syscall and while defining the pmsp_syscall_req structure.
 
-Finally, we create ARCH_TASK_GET_USER_REGS^<<fixme2>><<fixme3>>^, which is a macro to get the user registers of the current task. Its called by hpc/arch-x86_64.c's arch_mig_receive_proc_context, arch_mig_send_proc_context, arch_kickstart, and arch_do_signal, along with hpc/debug-x86_64.c's pms_debug_regs, and show_user_registers. It functions similarly to include/asm-i386/processor.h's task_pt_regs^<<fixme9>>^, returning the current processes registers, instead of the one of the task passed in. In it, we use current_thread to get the current task's thread structure address, add THREAD_SIZE to point to the next page in memory past it^<<fixme10>>^, and deduct 1, returning what we've calculated as a pt_regs pointer.
+Finally, we create 'ARCH_TASK_GET_USER_REGS'^<<fixme2>><<fixme3>>^, which is a macro to get the user registers of the current task. Its called by hpc/arch-x86_64.c's 'arch_mig_receive_proc_context', 'arch_mig_send_proc_context', 'arch_kickstart', and 'arch_do_signal', along with hpc/debug-x86_64.c's 'pms_debug_regs', and 'show_user_registers'. It functions similarly to include/asm-i386/processor.h's 'task_pt_regs'^<<fixme9>>^, returning the current processes registers, instead of the one of the task passed in. In it, we use 'current_thread' to get the current task's 'thread' structure address, add 'THREAD_SIZE' to point to the next page in memory past it^<<fixme10>>^, and deduct 1, returning what we've calculated as a 'pt_regs' pointer.
 
 == patch 003 - arch/x86/include/asm/pms.h ==
 
 === Summary ===
-This file contains logic for including either pms_32.h or pms_64.h, depending on whether we are compiling for an i386, or an AMD64. ^<<fixme6>><<fixme7>>^
+This file contains logic for including either 'pms_32.h' or 'pms_64.h', depending on whether we are compiling for an i386, or an AMD64. ^<<fixme6>><<fixme7>>^
 
 === Details ===
-This header includes either pms_64.h or pms_32.h, depending on whether we're compiling for an i386, or an amd64.
+This header includes either 'pms_64.h' if CONFIG_X86_64 has been set, or pms_32.h otherwise.
 
 == patch 004 - arch/x86/include/asm/pms_protocol_32.h ==
 
-== Summary ===
+=== Summary ===
 
 === Details ===
-First we define the MIG_ARCH_I386_LDT flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's arch_mig_receive_specific to check if a remote node is trying to send an LDT as a component during a migration, and if it is, fail.
+First we define the 'MIG_ARCH_I386_LDT' flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's 'arch_mig_receive_specific' to check if a remote node is trying to send an 'LDT' as a component during a migration, and if it is, fail.
 
-Next, we define the structure pmsp_mig_fp, which is a structure used by hpc/arch-i386.c's arch_mig_receive_fp and arch_mig_send_fp to store the entire floating point state of a process.
+Next, we define the structure 'pmsp_mig_fp', which is a structure used by hpc/arch-i386.c's 'arch_mig_receive_fp' and 'arch_mig_send_fp' to store the floating point state of a process during migration. In it, we define 'has_fxsr' as a flag indicating whether we used FXSR to save floating point contents, and 'xstate' as a thread_xstate union for holding the floating point contents.
 
-pmsp_mig_arch^<<fixme12>>^ is the structure we define to hold archetecture-specific parts of a process that we migrate. As there are no archetecture specific process components on x86 other than the LDT (which does not yet have migration support), this structure only contains a required type variable.
+'pmsp_mig_arch'^<<fixme12>>^ is the structure we define to hold ''archetecture-specific'' parts of a process that we migrate. As there are no archetecture specific process components on x86 other than the 'LDT' (which does not yet have migration support), this structure only contains a required 'type' variable.
 
-'''pmsp_mig_arch_task''' is the structure for holding the integer, stack, mmu, and debug flag state of a process. Its used once in include/hpc/protocol.h's pmsp_mig_task structure. We first declare the '''features''' member to hold the cpu features of the boot cpu. Next we declare debugreg to store the eight debug registers. Following that we declare fs and gs to store the two stack pointers, and finally declare tls_array to store the tls entries this task requires.
+We next define 'pmsp_mig_arch_task', which is the structure for holding the integer, stack, mmu, and debug flag state of a process. Its used once in include/hpc/protocol.h's 'pmsp_mig_task' structure. We first declare 'features' to hold the cpu features of the boot cpu. Next we declare 'debugreg' to store the eight debug registers. Following that we declare 'fs' and 'gs' to store the two stack pointers, and finally declare 'tls_array' to store the tls entries this task requires.
 
 == Notes and Comments ==
 [[fixme1]]
