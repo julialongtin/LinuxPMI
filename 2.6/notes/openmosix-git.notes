@@ -2038,7 +2038,7 @@ hunk	class		file patched				description								noteworthy references
 								purpose is to dispatch migration related events. In it, we check for
 								DREQ_MOVE or DREQ_CHECKSTAY, and we dispatches them to
 								task_request_move and task_request_checkstay, respectively.
-51	i386		creates					This file contains i386 archetecture specific helper macros, constants,
+051	i386		creates					This file contains i386 archetecture specific helper macros, constants,
 			linux/include/asm-i386/om.h		and forward declarations used by the system call subsystem. We first
 								forward declare cpu_feature_has_fxsr, which is implimented by code we
 								add to arch/i386/kernel/i387.c, and tells us whether FXSR format
@@ -2071,7 +2071,7 @@ hunk	class		file patched				description								noteworthy references
 								page in memory past it, deduct 8 so that we skip over the space on the
 								stack that is *sometimes* updated with the SS/ESP registers, and deduct
 								1, returning what we've calculated as a pt_regs pointer.
-52	i386		creates					This file contains the definitions of the architecture specific
+052	i386		creates					This file contains the definitions of the architecture specific
 			linux/include/asm-i386/om-protocol.h	structures used when transferring the components of a thread between
 								I386 machines. Its included by include/hpc/protocol.h. First, we define
 								MIG_ARCH_I386_LDT, which is a flag meant for telling a node during
