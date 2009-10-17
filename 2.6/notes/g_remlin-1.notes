@@ -36,10 +36,10 @@ This file contains logic for including either 'pms_32.h' or 'pms_64.h', dependin
 === Details ===
 This header includes either 'pms_64.h' if CONFIG_X86_64 has been set, or 'pms_32.h' otherwise.
 
-== patch 004 - arch/x86/include/asm/pms_protocol_32.h ==
+== patch 004 - arch/x86/include/asm/pms-protocol_32.h ==
 
 === Summary ===
-This header contains the structures used to store the CPU state of a task, be it floating point, integer, or machine state. a notable omission is the register states.
+This header contains the structures used to store the CPU state of a task, be it floating point, integer, or machine state. a notable omission is the register states. It is included by arch/x86/include/asm/pms-protocol.h
 
 === Details ===
 First we define the 'MIG_ARCH_I386_LDT' flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's 'arch_mig_receive_specific' to check if a remote node is trying to send an 'LDT' as a component during a migration, and if it is, fail.
