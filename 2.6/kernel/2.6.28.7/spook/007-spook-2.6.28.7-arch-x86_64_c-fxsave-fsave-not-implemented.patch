@@ -1,0 +1,19 @@
+Index: linux-2.6.28.7/hpc/arch-x86_64.c
+===================================================================
+--- linux-2.6.28.7.orig/hpc/arch-x86_64.c
++++ linux-2.6.28.7/hpc/arch-x86_64.c
+@@ -78,10 +78,12 @@ void arch_mig_receive_fp(struct task_str
+ 		return 0;
+ 	}
+ 
++	/* FIXME: work out what needs to be done here - spook */
+ 	if (fp->has_fxsr)
+-		fxsave_to_fsave(p->thread.xstate, &fp->xstate);
++		PMSERR("Migration between different CPUs not implemented!\n");
++	/*	fxsave_to_fsave(p->thread.xstate, &fp->xstate);
+ 	else
+-		fsave_to_fxsave(p->thread.xstate, &fp->xstate);
++		fsave_to_fxsave(p->thread.xstate, &fp->xstate);*/
+ 
+ }
+ 

@@ -1,0 +1,48 @@
+Index: linux-2.6.28.7/hpc/arch-x86_64.c
+===================================================================
+--- linux-2.6.28.7.orig/hpc/arch-x86_64.c
++++ linux-2.6.28.7/hpc/arch-x86_64.c
+@@ -54,7 +54,7 @@ int arch_mig_receive_proc_context(struct
+ 	p->thread.gs = m->arch.gs;
+ 	p->thread.fsindex = m->arch.fsindex;
+ 	p->thread.gsindex = m->arch.gsindex;
+-	p->thread.userrsp = m->arch.userrsp;
++	p->thread.usersp = m->arch.userrsp;
+ 	write_pda(oldrsp, m->arch.userrsp);
+ 
+ 	return 0;
+@@ -69,8 +69,8 @@ void arch_mig_receive_fp(struct task_str
+ 
+ 	unlazy_fpu(p);
+ 
+-	if ((cpu_feature_has_fxsr() && fp->has_fxsr)
+-	|| (!cpu_feature_has_fxsr() && !fp->has_fxsr))
++	if ((cpu_has_fxsr && fp->has_fxsr)
++	|| (!cpu_has_fxsr && !fp->has_fxsr))
+ 	{
+ 		/* same kind of cpu, just memcpy the structure */
+ 		WARN_ON((unsigned long)p->thread.xstate & 15);
+@@ -110,7 +110,7 @@ int arch_mig_send_specific(struct task_s
+ int arch_mig_send_fp(struct task_struct *p, struct pmsp_mig_fp *fp)
+ {
+ 	unlazy_fpu(p);
+-	memcpy(&fp->data, &p->thread.i387, sizeof(p->thread.i387));
++	memcpy(&fp->xstate, &p->thread.xstate, xstate_size);
+ 	return 0;
+ }
+ 
+@@ -212,10 +212,12 @@ long arch_exec_syscall(int n, struct sys
+ 
+ asmlinkage long pms_sys_fork(struct pt_regs regs)
+ {
+-	return remote_do_fork(SIGCHLD, regs.rsp, &regs, 0, NULL, NULL);
++	return remote_do_fork(SIGCHLD, regs.sp, &regs, 0, NULL, NULL);
+ }
+ 
+-extern PMS_NSTATIC void fastcall do_signal(struct pt_regs *regs);
++/* extern PMS_NSTATIC void fastcall do_signal(struct pt_regs *regs); */
++/* g_remlin: not here! spook: copied from g_remlin */
++extern void do_signal(struct pt_regs *regs);
+ 
+ /*****************************************************************************/
+ void arch_do_signal(struct task_struct *p)

@@ -1,0 +1,14 @@
+= hpc/kcom.c =
+
+== Summary ==
+
+This patch fixes a few pointer warnings that result from casting an architecture dependant variable size, to a fixed size int.
+
+== Details ==
+
+Changes the process id offsets to be stored in uintptr_t instead of just int.
+when compiling for x86_64 there is a compiler warning about the cast
+that is done, because the offset is size=8 and the int * cast is
+size=4
+I'm sure that this will likely affect other architectures too.
+

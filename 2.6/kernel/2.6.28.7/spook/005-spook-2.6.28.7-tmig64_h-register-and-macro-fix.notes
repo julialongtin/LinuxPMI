@@ -1,0 +1,15 @@
+= arch/x86/include/asm/tmig64.h =
+
+== Summary ==
+
+Fixes the register names for x86_64 and switches a macro at the end of the file
+
+== Details ==
+
+In arch_get_sys_arg we change the rdi, rsi and rdx members of regs, a pt_regs struct, to be di, si and dx respectively, as these are the correct names of the struct members.
+
+In arch_get_sys_nb we change rax to ax, the correct name for the intended register.
+
+The macro ARCH_TASK_GET_USER_REGS uses a member of the struct thread_info called rsp0, which does not exist.
+However the line above there is a commented-out version of this macro that appears to do things the correct way, so this is uncommented and the original macro commented out.
+

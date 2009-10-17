@@ -1,0 +1,10 @@
+= arch/x86/kernel/pmssyscall_table_64.S =
+
+== Summary ==
+
+Fixes the system call table file
+
+== Details ==
+
+Removes what i *think* is junk at the start of the file, as the i386 call table doesn't have it.  this also renames pms_stub_rt_suspend to sys_rt_suspend, as pms_stub_rt_suspend is labeled not_implemented in hpc/proc.h and fails link for some reason.
+

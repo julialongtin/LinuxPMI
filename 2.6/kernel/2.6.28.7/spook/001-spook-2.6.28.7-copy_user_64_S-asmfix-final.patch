@@ -1,0 +1,28 @@
+Index: linux-2.6.28.7/arch/x86/lib/copy_user_64.S
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/lib/copy_user_64.S
++++ linux-2.6.28.7/arch/x86/lib/copy_user_64.S
+@@ -75,9 +75,9 @@ ENTRY(copy_to_user)
+ 	jae bad_to_user
+ #ifdef CONFIG_PMS
+         /* pms_memory_away inlined */
+-        cmpq $0xffffffffffffffff,threadinfo_addr_limit(%rax) /* compare to kernel DS */
++        cmpq $0xffffffffffffffff,TI_addr_limit(%rax) /* compare to kernel DS */
+         je copy_to_user_orig
+-        movq threadinfo_task(%rax), %rax
++        GET_THREAD_INFO(%rax)
+         testq $DDEPUTY, TASK_pms+PMS_dflags(%rax) # is this a DDEPUTY task ?
+         jz copy_to_user_orig
+         jmp deputy_copy_to_user
+@@ -97,9 +97,9 @@ ENTRY(copy_from_user)
+ 	jae bad_from_user
+ #ifdef CONFIG_PMS
+         /* pms_memory_away inlined */
+-        cmpq $0xffffffffffffffff,threadinfo_addr_limit(%rax) /* compare to kernel DS */
++        cmpq $0xffffffffffffffff,TI_addr_limit(%rax) /* compare to kernel DS */
+         je copy_from_user_orig
+-        movq threadinfo_task(%rax), %rax
++        GET_THREAD_INFO(%rax)
+         testq $DDEPUTY, TASK_pms+PMS_dflags(%rax) # is this a DDEPUTY task ?
+         jz copy_from_user_orig
+         jmp deputy_copy_from_user

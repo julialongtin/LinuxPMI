@@ -1,0 +1,22 @@
+Index: linux-2.6.28.7/arch/x86/kernel/entry_64.S
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/kernel/entry_64.S
++++ linux-2.6.28.7/arch/x86/kernel/entry_64.S
+@@ -349,7 +349,7 @@ system_call_fastpath:
+ 	cmpq $__NR_syscall_max,%rax
+ 	ja badsys
+ #ifdef CONFIG_PMS
+-	movq threadinfo_task(%rcx), %rcx
++	GET_THREAD_INFO(%rcx)
+ 	testq $DREMOTE, TASK_pms+PMS_dflags(%rcx) # is this a DREMOTE task ?
+ 	jz syscall_call
+ 	movq %r10,%rcx
+@@ -413,7 +413,7 @@ sysret_signal:
+ 	/* Once here, the current task struct may have moved */
+ 	cli
+ 	GET_THREAD_INFO(%rcx)
+-	bt $TIF_PMS_PENDING,threadinfo_flags(%rcx)
++	bt $TIF_PMS_PENDING,TI_flags(%rcx)
+ 	jnc sysret_careful_no_pms
+ 	SAVE_REST
+ 	call pms_pre_usermode

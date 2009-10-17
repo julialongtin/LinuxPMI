@@ -1,0 +1,23 @@
+= arch/x86/kernel/process.c =
+
+== Summary ==
+
+This patch adds the x86_64 'way of doing things' to what is essentially an i386 specific file.
+
+== Details ==
+
+In user_thread we add some #ifdef to seperate the i386 and x86_64 way of doing things, as well as actually adding the x86_64 method for doing them.
+That is;
+1) registers ds, es, fs are called dx, si, di on x86_64
+2) __KERNEL_PERCPU <<fixme1>> is __PER_CPU_SEG on x86_64
+
+For some reason we use fs/di, __KERNEL_PERCPU/__PER_CPU_SEG twice. <<fixme2>>
+
+== Notes and Comments ==
+
+[[fixme1]]
+^[fixme1]^FIXME: in processor.h where __KERNEL_PERCPU is declared, i got the impression that it is only declared #ifdef CONFIG_SMP
+
+[[fixme2]]
+^[fixme2]^FIXME: This definately warrants further investigation.
+

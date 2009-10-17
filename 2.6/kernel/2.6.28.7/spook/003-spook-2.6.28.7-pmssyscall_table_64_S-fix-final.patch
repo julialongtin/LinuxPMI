@@ -1,0 +1,24 @@
+Index: linux-2.6.28.7/arch/x86/kernel/pmssyscall_table_64.S
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/kernel/pmssyscall_table_64.S
++++ linux-2.6.28.7/arch/x86/kernel/pmssyscall_table_64.S
+@@ -1,5 +1,3 @@
+-.data
+-
+ ENTRY(remote_sys_call_table)
+ 	.quad pms_sys_remote		/* 0 sys_read */
+ 	.quad pms_sys_remote		/* 1 sys_write */
+@@ -131,7 +129,7 @@ ENTRY(remote_sys_call_table)
+ 	.quad sys_rt_sigpending		/* 127 sys_rt_sigpending */
+ 	.quad sys_rt_sigtimedwait	/* 128 sys_rt_sigtimedwait */
+ 	.quad sys_rt_sigqueueinfo	/* 129 sys_rt_sigqueueinfo */
+-	.quad pms_stub_rt_sigsuspend	/* 130 stub_rt_sigsuspend */
++	.quad sys_rt_sigsuspend		/* 130 stub_rt_sigsuspend FIXME:spook */
+ 	.quad pms_stub_sigaltstack	/* 131 stub_sigaltstack */
+ 	.quad pms_sys_remote		/* 132 sys_utime */
+ 	.quad pms_sys_remote		/* 133 sys_mknod */
+@@ -260,4 +258,3 @@ ENTRY(remote_sys_call_table)
+ 	.quad pms_sys_remote		/* 255 sys_inotify_rm_watch */
+ 
+ remote_syscall_table_size=(.-remote_sys_call_table)
+-.text

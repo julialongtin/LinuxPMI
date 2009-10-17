@@ -1,0 +1,21 @@
+Index: linux-2.6.28.7/arch/x86/include/asm/pms-protocol_64.h
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/include/asm/pms-protocol_64.h
++++ linux-2.6.28.7/arch/x86/include/asm/pms-protocol_64.h
+@@ -25,6 +25,7 @@
+ 
+ struct pmsp_mig_fp
+ {
++	int has_fxsr;
+ 	union thread_xstate xstate;
+ };
+ 
+@@ -39,7 +40,7 @@ struct pmsp_mig_arch_task
+ 	unsigned long fs;
+ 	unsigned long gs;
+ 	unsigned int es, ds, fsindex, gsindex;
+-	u64 tls_array[GDT_ENTRY_TLS_ENTRIES];
++	struct desc_struct tls_array[GDT_ENTRY_TLS_ENTRIES];
+ };
+ 
+ #endif /*  _HPC_ARCHPROTOCOL_H */

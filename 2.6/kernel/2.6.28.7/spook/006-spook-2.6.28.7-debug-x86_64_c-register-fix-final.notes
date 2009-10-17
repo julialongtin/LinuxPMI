@@ -1,0 +1,11 @@
+= hpc/debug-x86_64.c = 
+
+== Summary ==
+
+This patch fixes the register names used.
+
+== Details ==
+
+Once again, we see incorrect use of register names for the members of the pt_regs struct on x86_64.
+We change rXX to the appropriate XX equivalents, along with orig_rax -> orig_ax and eflags -> flags
+

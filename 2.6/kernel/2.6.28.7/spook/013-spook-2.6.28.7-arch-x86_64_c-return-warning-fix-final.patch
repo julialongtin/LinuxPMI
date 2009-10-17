@@ -1,0 +1,32 @@
+Index: linux-2.6.28.7/hpc/arch-x86_64.c
+===================================================================
+--- linux-2.6.28.7.orig/hpc/arch-x86_64.c
++++ linux-2.6.28.7/hpc/arch-x86_64.c
+@@ -65,7 +65,12 @@ void arch_mig_receive_fp(struct task_str
+ 	if (!p->thread.xstate)
+ 		p->thread.xstate = kmem_cache_alloc(task_xstate_cachep, GFP_KERNEL);
+ 	if (!p->thread.xstate)
+-		return -ENOMEM;
++		return;
++                /* previously returned -ENOMEM
++                 * however this is a void function, and the only place that 
++		 * calls this, hpc/migrecv.c:362 doesn't check any
++                 * return values. -- spook
++                 * FIXME: this should probably printk or BUG or something. */
+ 
+ 	unlazy_fpu(p);
+ 
+@@ -75,7 +80,12 @@ void arch_mig_receive_fp(struct task_str
+ 		/* same kind of cpu, just memcpy the structure */
+ 		WARN_ON((unsigned long)p->thread.xstate & 15);
+ 		memcpy(p->thread.xstate, &fp->xstate, xstate_size);
+-		return 0;
++		return;
++                /* previously returned 0
++                 * however this is a void function, and the only place that
++                 * calls this, hpc/migrecv.c:362 doesn't check any
++                 * return values. -- spook
++                 * FIXME: this should probably printk or BUG or something. */
+ 	}
+ 
+ 	/* FIXME: work out what needs to be done here - spook */

@@ -1,0 +1,14 @@
+Index: linux-2.6.28.7/arch/x86/include/asm/tmig64.h
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/include/asm/tmig64.h
++++ linux-2.6.28.7/arch/x86/include/asm/tmig64.h
+@@ -50,7 +50,8 @@ static inline long arch_get_sys_arg(unsi
+  		case 4: return regs->r8;
+  		case 5: return regs->r9;
+  	}
+- }
++	return 0; /* spook: shouldnt be reached. quietens warning */
++}
+  
+ /**
+  * arch_get_sys_nb - return the number of the current syscall

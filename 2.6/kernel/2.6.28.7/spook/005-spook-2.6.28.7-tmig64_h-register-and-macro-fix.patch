@@ -1,0 +1,34 @@
+Index: linux-2.6.28.7/arch/x86/include/asm/tmig64.h
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/include/asm/tmig64.h
++++ linux-2.6.28.7/arch/x86/include/asm/tmig64.h
+@@ -43,9 +43,9 @@ static inline long arch_get_sys_arg(unsi
+ {
+ 	BUG_ON(n >= NR_MAX_SYSCALL_ARG);
+  	switch (n) {
+- 		case 0: return regs->rdi;
+- 		case 1: return regs->rsi;
+- 		case 2: return regs->rdx;
++ 		case 0: return regs->di;
++ 		case 1: return regs->si;
++ 		case 2: return regs->dx;
+  		case 3: return regs->r10;
+  		case 4: return regs->r8;
+  		case 5: return regs->r9;
+@@ -64,13 +64,13 @@ static inline long arch_get_sys_arg(unsi
+  **/
+ static inline int arch_get_sys_nb(struct pt_regs *regs)
+ {
+- 	return (int) (regs->rax & 0xffffffff);
++ 	return (int) (regs->ax & 0xffffffff);
+ }
+  
+ /* ARCH_TASK_GET_USER_REGS: evaluates to the pt_regs of the currently
+    executing thread */
+-/* #define ARCH_TASK_GET_USER_REGS(p) (((struct pt_regs *) (THREAD_SIZE +(unsigned long) current_thread_info())) - 1) */
+-#define ARCH_TASK_GET_USER_REGS(p) ((struct pt_regs *)(p)->thread.rsp0 - 1)
++#define ARCH_TASK_GET_USER_REGS(p) (((struct pt_regs *) (THREAD_SIZE +(unsigned long) current_thread_info())) - 1)
++/*#define ARCH_TASK_GET_USER_REGS(p) ((struct pt_regs *)(p)->thread.rsp0 - 1)*/
+ 
+ #endif /* _TMIG_ARCH_TMIG64_H */
+ #endif /* CONFIG_X86_64 */

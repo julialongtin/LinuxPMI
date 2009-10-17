@@ -1,0 +1,10 @@
+= arch/x86/lib/copy_user_64.S =
+
+== Summary ==
+
+This fixes a few assembler errors.
+
+== Details ==
+
+i dont know what this does, but the surrounding assembler users 
+TI_addr_limit instead of threadinfo_addr_limit

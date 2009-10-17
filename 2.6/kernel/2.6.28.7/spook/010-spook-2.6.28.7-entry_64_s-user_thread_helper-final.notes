@@ -1,0 +1,6 @@
+= arch/x86/kernel/entry_64.S =
+
+== Summary and Details ==
+
+This patch renames the entry from user_thread to user_thread_helper, to mirror the way the i386 does this, and to give actual purpose to the extern function prototype user_thread_helper defined in arch/x86/kernel/process.c
+

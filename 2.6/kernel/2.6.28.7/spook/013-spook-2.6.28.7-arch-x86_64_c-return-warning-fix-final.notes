@@ -1,0 +1,18 @@
+= hpc/arch-x86_64.c =
+
+== Summary ==
+
+This removes the value that is returned in two functions, adds my
+comment on how this should likely be fixed, and labels it FIXME
+
+== Details ==
+
+In arch_mig_receive_fp there are two returns that have values in a void function.
+My comment in the code itself explains it well.
+ /* previously returned -ENOMEM
+  * however this is a void function, and the only place that
+  * calls this, hpc/migrecv.c:362 doesn't check any
+  * return values. -- spook
+  * FIXME: this should probably printk or BUG or something. */
+
+

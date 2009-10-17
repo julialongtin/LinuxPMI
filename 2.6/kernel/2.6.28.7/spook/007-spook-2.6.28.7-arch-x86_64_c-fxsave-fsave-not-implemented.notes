@@ -1,0 +1,15 @@
+= hpc/arch-x86_64.c =
+
+== Summary ==
+
+This disables the broken migration between different cpu types for x86_64
+
+== Details ==
+
+disables migration between different cpu types, because;
+a) this is the only code i've seen for doing it on x86_64
+b) this code doesn't work
+c) its not important right now to have this working.
+
+As there is likely only one specific way to do this on x86_64 this will need to be rewritten
+

@@ -1,0 +1,13 @@
+= arch/x86/include/asm/pms-protocol_64.h =
+
+== Summary ==
+
+Fixes two structs to match the current code in hpc/arch-x86_64.c
+
+== Details ==
+
+Adds a missing member, has_fxsr to struct pmsp_mig_fp
+Changes struct pmsp_mig_arch_task->tls_array to be the type required
+by hpc/arch-x86_64.c
+Both of these fixes are copied from/already in the 32bit header.
+

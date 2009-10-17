@@ -1,0 +1,11 @@
+= arch/x86/kernel/entry_64.S =
+
+== Summary ==
+
+This fixes a few assembler errors.
+
+== Details ==
+
+i dont know what this does, but the surrounding assembler users
+GET_THREAD_INFO instead of threadinfo_task 
+

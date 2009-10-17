@@ -1,0 +1,13 @@
+Index: linux-2.6.28.7/arch/x86/kernel/entry_64.S
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/kernel/entry_64.S
++++ linux-2.6.28.7/arch/x86/kernel/entry_64.S
+@@ -1103,7 +1103,7 @@ paranoid_schedule\trace:
+ 	.endm
+ 
+ #ifdef CONFIG_PMS
+-ENTRY(user_thread)
++ENTRY(user_thread_helper)
+ 	CFI_STARTPROC
+ 	FAKE_STACK_FRAME $user_child_rip
+ 	SAVE_ALL

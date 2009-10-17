@@ -1,0 +1,34 @@
+Index: linux-2.6.28.7/hpc/kcomd.c
+===================================================================
+--- linux-2.6.28.7.orig/hpc/kcomd.c
++++ linux-2.6.28.7/hpc/kcomd.c
+@@ -36,6 +36,9 @@
+ #include <hpc/deputy.h>
+ #include <hpc/remote.h>
+ 
++/* spook: needed for intptr_t which i substituted in a few places to
++ * let this compile without warning */
++#include <linux/types.h>
+ 
+ /*******************************************************************************
+  * Socket handling                                                             *
+@@ -362,16 +365,16 @@ struct kcom_task * __find_task_for_packe
+ 				         ,pid_t *dpid)
+ {
+ 	struct kcom_task* tsk, *tskret=NULL;
+-	int offset;
++	uintptr_t offset;
+ 	pid_t pid;
+ 
+ 	if (KCOM_PKT_DEP_FLG == __kcom_pkt_node_flags(pkt)) {
+ 		/* command from dep to remote? */
+ 		pid = pkt->rpid;
+-		offset = (int) &(((struct kcom_task*) 0)->rpid);
++		offset = (uintptr_t) &(((struct kcom_task*) 0)->rpid);
+ 	} else {
+ 		pid = pkt->hpid;
+-		offset = (int) &(((struct kcom_task*) 0)->hpid);
++		offset = (uintptr_t) &(((struct kcom_task*) 0)->hpid);
+ 	}
+ 
+ 	read_lock(&node->tasks_lock);

@@ -1,0 +1,10 @@
+= arch/x86/include/asm/tmig64.h =
+
+== Details ==
+
+This adds a return 0; to the end of long arch_get_sys_arg to silence a warning.
+in theory, the return should never be reached but all the return 
+statements in the function are inside a switch, with no default case.  
+and before the switch there is a BUGON assertion if the int is outside 
+the bounds dealt with in the switch statement.
+

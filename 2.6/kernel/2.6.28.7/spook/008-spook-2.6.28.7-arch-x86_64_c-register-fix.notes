@@ -1,0 +1,20 @@
+= hpc/arch-x86_64.c =
+
+== Summary ==
+
+This fixes some careless mistakes made that would have been very quickly picked up on if someone had gotten this far in compiling the kernel for x86_64
+
+== Details ==
+
+In arch_mig_receive_proc_context we fix the member name of p->thread (struct thread_info) from userrsp to usersp.  This is another register name fix (rsp -> sp)
+
+In arch_mig_receive_fp we fix the name cpu_feature_has_fxsr() to cpu_has_fxsr
+This was copied from arch-i386.c
+
+In arch_mig_send_fp we fix the memcpy to use the correct members. This again was copied from arch-i386.c
+
+In pms_sys_fork we fix another register name, rsp -> sp
+
+We change the function prototype for do_signal to the correct type.
+This was copied from g_remlin's fix in arch-i386.c
+

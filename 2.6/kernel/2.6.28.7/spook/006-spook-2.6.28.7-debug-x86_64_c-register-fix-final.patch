@@ -1,0 +1,22 @@
+Index: linux-2.6.28.7/hpc/debug-x86_64.c
+===================================================================
+--- linux-2.6.28.7.orig/hpc/debug-x86_64.c
++++ linux-2.6.28.7/hpc/debug-x86_64.c
+@@ -36,12 +36,12 @@ void pms_debug_regs(struct pt_regs *myre
+ 
+ 	printk("pt_regs:\n");
+ 	printk("r15: 0x%lx, r14: 0x%lx, r13: 0x%lx\n", reg->r15, reg->r14, reg->r13);
+-	printk("r12: 0x%lx, rbp: 0x%lx, rbx: 0x%lx\n", reg->r12, reg->rbp, reg->rbx);
++	printk("r12: 0x%lx, bp: 0x%lx, bx: 0x%lx\n", reg->r12, reg->bp, reg->bx);
+ 	printk("r11: 0x%lx, r10: 0x%lx, r09: 0x%lx\n", reg->r11, reg->r10, reg->r9);
+-	printk("r08: 0x%lx, rax: 0x%lx, rcx: 0x%lx\n", reg->r8, reg->rax, reg->rcx);
+-	printk("rdx: 0x%lx, rsi: 0x%lx, rdi: 0x%lx\n", reg->rdx, reg->rsi, reg->rdi);
+-	printk("orig_rax: 0x%lx, rip: 0x%lx,  cs: 0x%lx\n", reg->orig_rax, reg->rip, reg->cs);
+-        printk("eflags: 0x%lx, rsp: 0x%lx,  ss: 0x%lx\n", reg->eflags, reg->rsp, reg->ss);
++	printk("r08: 0x%lx, ax: 0x%lx, cx: 0x%lx\n", reg->r8, reg->ax, reg->cx);
++	printk("dx: 0x%lx, si: 0x%lx, di: 0x%lx\n", reg->dx, reg->si, reg->di);
++	printk("orig_ax: 0x%lx, ip: 0x%lx,  cs: 0x%lx\n", reg->orig_ax, reg->ip, reg->cs);
++        printk("flags: 0x%lx, sp: 0x%lx,  ss: 0x%lx\n", reg->flags, reg->sp, reg->ss);
+ }
+ 
+ 

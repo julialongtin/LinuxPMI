@@ -1,0 +1,51 @@
+Index: linux-2.6.28.7/hpc/kcom.c
+===================================================================
+--- linux-2.6.28.7.orig/hpc/kcom.c
++++ linux-2.6.28.7/hpc/kcom.c
+@@ -31,6 +31,9 @@
+ #include <hpc/debug.h>
+ #include <hpc/kcom.h>
+ 
++/* spook: needed for intptr_t which i substituted in a few places to
++ * let this compile without warning */
++#include <linux/types.h>
+ 
+ /**
+  * kcom_add_packet
+@@ -905,12 +908,12 @@ int kcom_task_delete(pid_t pid)
+ {
+ 	struct kcom_node *tmp;
+ 	struct kcom_task *tmp2;
+-	int offset;
++	uintptr_t offset;
+ 
+ 	if (task_test_dflags(current, DREMOTE))
+-		offset = (int) &(((struct kcom_task*) 0)->rpid);
++		offset = (uintptr_t) &(((struct kcom_task*) 0)->rpid);
+ 	else
+-		offset = (int) &(((struct kcom_task*) 0)->hpid);
++		offset = (uintptr_t) &(((struct kcom_task*) 0)->hpid);
+ 
+ 	read_lock(&kcom_nodes_lock);
+ 	list_for_each_entry(tmp, &kcom_nodes, list) {
+@@ -947,7 +950,7 @@ struct kcom_task *__kcom_task_find(pid_t
+ 	struct kcom_node *tmp;
+ 	struct kcom_task *tmp2;
+ 	struct kcom_task *tsk_ret = NULL;
+-	int pidoff = 0;
++	uintptr_t pidoff = 0;
+ 	int look_for_remote = where - 1;
+ 
+ 	if (0 == pid) {
+@@ -978,9 +981,9 @@ struct kcom_task *__kcom_task_find(pid_t
+ 	/* Get the address of the field we are looking for */
+ 
+ 	if (look_for_remote) {
+-		pidoff = (int) &(((struct kcom_task*) 0)->rpid);
++		pidoff = (uintptr_t) &(((struct kcom_task*) 0)->rpid);
+ 	} else {
+-		pidoff = (int) &(((struct kcom_task*) 0)->hpid);
++		pidoff = (uintptr_t) &(((struct kcom_task*) 0)->hpid);
+ 	}
+ 
+ 	/* Parse all the list! */
