@@ -1,0 +1,11 @@
+
+You must have extracted the busybox tarball in this directory.
+Use 1.15.2 as that is the version the .config file is for.
+
+TODO:
+Usermode loopback mounting:
+http://lwn.net/Articles/132625/
+http://linux.derkeiler.com/Mailing-Lists/Kernel/2006-02/msg09545.html
+
+Get it working, currently just recursively starts make, sort of like a linear fork bomb.
+
