@@ -31,7 +31,7 @@ Finally, we create 'ARCH_TASK_GET_USER_REGS'^<<fixme2>><<fixme3>>^, which is a m
 == patch 003 - arch/x86/include/asm/pms.h ==
 
 === Summary ===
-This file contains logic for including either 'pms_32.h' or 'pms_64.h', depending on whether we are compiling for an i386, or an AMD64. ^<<fixme6>><<fixme7>>^
+This file contains logic for including either 'pms_32.h' or 'pms_64.h', depending on whether we are compiling for an i386, or an AMD64. ^<<fixme6>><<fixme7>>^It is included by hpc/debug-i386.c, include/hpc/arch.h, and include/hpc/protocol.h.
 
 === Details ===
 This header includes either 'pms_64.h' if CONFIG_X86_64 has been set, or pms_32.h otherwise.
@@ -39,6 +39,7 @@ This header includes either 'pms_64.h' if CONFIG_X86_64 has been set, or pms_32.
 == patch 004 - arch/x86/include/asm/pms_protocol_32.h ==
 
 === Summary ===
+This header contains the structures used to store the CPU state of a task, be it floating point, integer, or machine state. a notable omission is the register states.
 
 === Details ===
 First we define the 'MIG_ARCH_I386_LDT' flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's 'arch_mig_receive_specific' to check if a remote node is trying to send an 'LDT' as a component during a migration, and if it is, fail.
