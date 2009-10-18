@@ -2,10 +2,15 @@
 You must have extracted the busybox tarball in this directory.
 Use 1.15.2 as that is the version the .config file is for.
 
-TODO:
-Usermode loopback mounting:
-http://lwn.net/Articles/132625/
-http://linux.derkeiler.com/Mailing-Lists/Kernel/2006-02/msg09545.html
+To start this initrd, you have to append at least ramdisk_size=34000 or so.
+Also, don't forget to append root=/dev/ram0 too.
 
-Get it working, currently just recursively starts make, sort of like a linear fork bomb.
+You need a kernel with ext2 support built-in.
+
+Problems:
+Please let me, spook, know of any;
+ - nickname "spook" #linuxpmi on irc.freenode.net
+ - ash@spooksoftware.com
+
+Happy testing.
 
