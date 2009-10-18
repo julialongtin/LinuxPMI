@@ -38,8 +38,11 @@ setupinitrd() {
 
 	echo "*** Making directories in our new /"
 	mkdir -p bin etc sbin lib${LIBDIRSUFFIX} proc \
-	sys tmp migtorture usr/bin var/lock var/log dev \
+	sys tmp usr/bin var/lock var/log dev \
 	usr/sbin
+	cp -a /sbin/ldconfig sbin/
+	cp -a /bin/bash /bin/which bin/
+	cp -a /usr/bin/mktemp usr/bin/
 	cd ${OURPWD}
 }
 
@@ -49,7 +52,7 @@ finishinitrd() {
 	echo "*** Copying device files"
 	cp -a files/dev/* mountpoint/dev/
 	cp -a /dev/console /dev/kmem /dev/mem /dev/null /dev/ram0 \
-	/dev/tty1 /dev/tty2 /dev/tty5  mountpoint/dev/
+	/dev/tty1 /dev/tty2 /dev/tty5 mountpoint/dev/
 
 	cd mountpoint
 	echo "*** Chowning all files to root"
@@ -85,7 +88,7 @@ busybox() {
 libs() {
 	#ldd the binaries?
 	echo "*** Getting ldd of binaries"
-	lddlibs=`ldd mountpoint/migtorture/eatcpu | grep -oE /lib[A-Za-z0-9./\-]+` 
+	lddlibs=`ldd mountpoint/bin/bash | grep -oE /lib[A-Za-z0-9./\-]+` 
 	#copy libraries to staging area
 	echo "*** Copying libraries to initrd"
 	for each in $lddlibs; do {
@@ -103,7 +106,11 @@ migtort() {
 	make 1> /dev/null
 	#copy to staging area
 	echo "*** Copying migtorture to initrd"
-	cp -a . ${OURPWD}/mountpoint/migtorture
+	
+	files=`find . | xargs file | grep "executable" | cut -f 1 -d :`
+	for each in $files; do {
+		cp -a $each ${OURPWD}/mountpoint/usr/bin
+	} done;
 	cd ${OURPWD}
 }
 
