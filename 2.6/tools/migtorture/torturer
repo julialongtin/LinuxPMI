@@ -8,7 +8,7 @@
 # back then again, and again till the timeout end or the process dies ...      
 
 PIDFILE=$( mktemp )
-
+TMIGDIR=${TMIGDIR:-om}
 
 
 # Starts a process and outputs its pid ... 
@@ -47,10 +47,10 @@ function MigrateProcess()
 
     if [ -f /proc/$1/om/where ]; then 
 	echo "PID $1: Asking process to migrate to $2 "
-	echo $2 > /proc/$1/om/where
+	echo $2 > /proc/$1/${TMIGDIR}/where
 
 	x=0
-	until [  "$( cat /proc/$1/om/where )" == $2  -o $3 -le $x -o ! -d /proc/$1 ]
+	until [  "$( cat /proc/$1/${TMIGDIR}/where )" == $2  -o $3 -le $x -o ! -d /proc/$1 ]
 	do 
 	    sleep 1
 	    echo "PID $1: Checking process *did* migrate ($x) ... [$( cat /proc/$1/om/where)]"
@@ -64,7 +64,7 @@ function MigrateProcess()
 	    echo "PID $1: process died T_T ?  ... "
 	    return 1
 
-	elif [ "$(cat /proc/$1/om/where )" == $2  ]; then
+	elif [ "$(cat /proc/$1/${TMIGDIR}/where )" == $2  ]; then
 
 	    echo "PID $1: Migration Succeeded ^_^ ... "    
 	    return 0
@@ -72,9 +72,9 @@ function MigrateProcess()
 	else
 	    echo "PID $1: Migration Failed x_x ... "
 
-	    if [ -f /proc/$1/om/stay ]; then
+	    if [ -f /proc/$1/${TMIGDIR}/stay ]; then
 		echo "PID $1: Stay reason : "
-		cat /proc/$1/om/stay
+		cat /proc/$1/${TMIGDIR}/stay
 	    fi
 	    return 1
 
