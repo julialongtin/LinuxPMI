@@ -45,7 +45,7 @@ function MigrateProcess()
 {
     local x
 
-    if [ -f /proc/$1/om/where ]; then 
+    if [ -f /proc/$1/${TMIGDIR}/where ]; then 
 	echo "PID $1: Asking process to migrate to $2 "
 	echo $2 > /proc/$1/${TMIGDIR}/where
 
@@ -53,7 +53,7 @@ function MigrateProcess()
 	until [  "$( cat /proc/$1/${TMIGDIR}/where )" == $2  -o $3 -le $x -o ! -d /proc/$1 ]
 	do 
 	    sleep 1
-	    echo "PID $1: Checking process *did* migrate ($x) ... [$( cat /proc/$1/om/where)]"
+	    echo "PID $1: Checking process *did* migrate ($x) ... [$( cat /proc/$1/${TMIGDIR}/where)]"
 	    x=$( expr $x + 1 )
 	done
 
