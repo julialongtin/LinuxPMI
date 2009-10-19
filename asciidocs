@@ -1,6 +1,8 @@
 2.6/kernel/2.6.28.7/linuxpmi/silver/001-arch_x86_include_asm_tmig32_h-create-broken-final.notes
 2.6/kernel/2.6.28.7/linuxpmi/silver/002-arch_x86_include_asm_tmig64_h-create-final.notes
-2.6/kernel/2.6.28.7/linuxpmi/silver/003-arch_x86_include_asm_pms_h-create-final.notes
+2.6/kernel/2.6.28.7/linuxpmi/bronze/003-arch_x86_include_asm_pms_h-create-final.notes
+2.6/kernel/2.6.28.7/linuxpmi/bronze/004-arch_x86_include_asm_pms_protocol_32_h-create.notes
+2.6/kernel/2.6.28.7/linuxpmi/bronze/005-arch_x86_include_asm_pms_protocol_32_h-ldt_support.notes
 2.6/notes/g_remlin-1.notes
 2.6/notes/openmosix-cleanup.notes
 2.6/notes/openmosix-documentation.notes
