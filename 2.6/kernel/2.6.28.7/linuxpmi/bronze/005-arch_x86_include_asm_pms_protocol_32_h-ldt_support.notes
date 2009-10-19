@@ -1,0 +1,10 @@
+= arch/x86/include/asm/pms-protocol_32.h =
+
+== Summary ==
+This patch contains the stub version of LDT support. mainly, enough support to tell a node while migration is occuring that this node does not support LDT migration.
+
+== Details ==
+First we define the 'MIG_ARCH_I386_LDT' flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's 'arch_mig_receive_specific' to check if a remote node is trying to send an 'LDT' as a component during a migration, and if it is, fail.
+
+'pmsp_mig_arch'^<<fixme12>>^ is the structure we define to hold ''archetecture-specific'' parts of a process that we migrate. As there are no archetecture specific process components on x86 other than the 'LDT' (which does not yet have migration support), this structure only contains a required 'type' variable.
+

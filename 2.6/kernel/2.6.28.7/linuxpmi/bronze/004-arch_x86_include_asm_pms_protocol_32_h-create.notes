@@ -1,0 +1,11 @@
+== arch/x86/include/asm/pms-protocol_32.h ==
+
+=== Summary ===
+This header contains the structures used to store the CPU state of a task, be it floating point, integer, or machine state. Notable omissions are the register states, and the LDT. It is included by arch/x86/include/asm/pms-protocol.h
+
+=== Details ===
+First we define the structure 'pmsp_mig_fp', which is a structure used by hpc/arch-i386.c's 'arch_mig_receive_fp' and 'arch_mig_send_fp' to store the floating point state of a process during migration. In it, we define 'has_fxsr' as a flag indicating whether we used FXSR to save floating point contents, and 'xstate' as a thread_xstate union for holding the floating point contents.
+
+We next define 'pmsp_mig_arch_task', which is the structure for holding the integer, stack, mmu, and debug flag state of a process. Its used once in include/hpc/protocol.h's 'pmsp_mig_task' structure. We first declare 'features' to hold the cpu features of the boot cpu. Next we declare 'debugreg' to store the eight debug registers. Following that we declare 'fs' and 'gs' to store the two stack pointers, and finally declare 'tls_array' to store the tls entries this task requires.
+
+== Notes and Comments ==

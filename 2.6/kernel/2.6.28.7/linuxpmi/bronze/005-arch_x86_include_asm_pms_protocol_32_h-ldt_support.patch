@@ -1,0 +1,22 @@
+--- linux-2.6.28.7/arch/x86/include/asm/pms-protocol_32.h	2009-10-19 02:58:28.000000000 +0000
++++ linux-2.6.28.7-lpmi/arch/x86/include/asm/pms-protocol_32.h	2009-10-19 03:00:29.000000000 +0000
+@@ -23,12 +23,19 @@
+ 
+ #include <asm/i387.h>
+ 
++#define MIG_ARCH_I386_LDT	1
++
+ struct pmsp_mig_fp
+ {
+ 	int has_fxsr;
+ 	union thread_xstate xstate;
+ };
+ 
++struct pmsp_mig_arch
++{
++	int type;
++};
++
+ struct pmsp_mig_arch_task
+ {
+ 	u32 features[NCAPINTS];
