@@ -42,7 +42,7 @@ This header includes either 'pms_64.h' if CONFIG_X86_64 has been set, or 'pms_32
 This header contains the structures used to store the CPU state of a task, be it floating point, integer, or machine state. a notable omission is the register states. It is included by arch/x86/include/asm/pms-protocol.h
 
 === Details ===
-First we define the 'MIG_ARCH_I386_LDT' flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's 'arch_mig_receive_specific' to check if a remote node is trying to send an 'LDT' as a component during a migration, and if it is, fail.
+^<<fixme13>>^First we define the 'MIG_ARCH_I386_LDT' flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's 'arch_mig_receive_specific' to check if a remote node is trying to send an 'LDT' as a component during a migration, and if it is, fail.
 
 Next, we define the structure 'pmsp_mig_fp', which is a structure used by hpc/arch-i386.c's 'arch_mig_receive_fp' and 'arch_mig_send_fp' to store the floating point state of a process during migration. In it, we define 'has_fxsr' as a flag indicating whether we used FXSR to save floating point contents, and 'xstate' as a thread_xstate union for holding the floating point contents.
 
@@ -75,5 +75,7 @@ We next define 'pmsp_mig_arch_task', which is the structure for holding the inte
 ^[fixme11]^split this flag and the code that uses it into two seperate patches, one for a LDT migration support stub, the other as LDT migration support prototype.
 [[fixme12]]
 ^[fixme12]^move this into a LDT migration support stub patch.
+[[fixme13]]
+^[fixme13]^wrapper ifdef is incorrect.
 [[note1]]
 ^[note1]^http://www.x86-64.org/documentation/abi.pdf version 0.99.
