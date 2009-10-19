@@ -25,13 +25,13 @@ diff --exclude=.git -Nru linux-2.6.28.7/arch/x86/include/asm/pms.h linux-2.6.28.
 +
 +#ifndef _TMIG_ARCH_TMIG_H
 +#define _TMIG_ARCH_TMIG_H
-+#ifdef CONFIG_X86_32
++#ifndef CONFIG_X86_32
 +#ifndef CONFIG_X86_64
 +#error "neither CONFIG_X86_32 or CONFIG_X86_64 has been defined, yet the archetecture specific X86 preprocessor macros for task migration have been included!"
 +#else
-+# include "tmig32.h" // CONFIG_X86_32 is defined
++# include "tmig64.h" // CONFIG_X86_64 is defined
 +#endif /* CONFIG_X86_64 */
 +#else
-+# include "tmig64.h" // CONFIG_X86_64 is defined
++# include "tmig32.h" // CONFIG_X86_32 is defined
 +#endif /* CONFIG_X86_32 */
 +#endif /* _TMIG_ARGH_TMIG_H */
