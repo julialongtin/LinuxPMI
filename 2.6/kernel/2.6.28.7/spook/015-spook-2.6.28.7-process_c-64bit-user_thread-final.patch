@@ -1,0 +1,64 @@
+Index: linux-2.6.28.7/arch/x86/kernel/process.c
+===================================================================
+--- linux-2.6.28.7.orig/arch/x86/kernel/process.c
++++ linux-2.6.28.7/arch/x86/kernel/process.c
+@@ -257,9 +257,10 @@ void c1e_remove_cpu(int cpu)
+ }
+ 
+ #ifdef CONFIG_PMS
++#ifdef CONFIG_X86_32
+ extern void user_thread_helper(void);
+ /*
+- * Create an user thread
++ * Create a user thread
+  * difference from kernel_thread are: no CLONE_VM, SIGCHLD, and leave space
+  * on the stack for user registers pt_regs.
+  */
+@@ -272,37 +273,29 @@ int user_thread(int (*fn)(void *), void 
+ 	regs.bx = (unsigned long) fn; // mig_handle_migration()
+ 	regs.dx = (unsigned long) arg; // rpid
+ 
+-#ifdef CONFIG_X86_32
+ 	regs.ds = __USER_DS;
+ 	regs.es = __USER_DS;
+ 	regs.fs = __KERNEL_PERCPU;
+-#else
+-/*
+- * #ifdef CONFIG_X86_64
+- * I think the following two lines need to be fixed for 64bit GDT
+- * - See arch/x86/include/asm/segment.h
+- * -- FIXME: spook
+- */
+-        regs.dx = __USER_DS;
+-        regs.si = __USER_DS;
+-        regs.di = __PER_CPU_SEG;
+-#endif
++
+ 	regs.orig_ax = -1;
+ 	regs.ip = (unsigned long) user_thread_helper;
+ 	regs.cs = __KERNEL_CS | get_kernel_rpl();
+ 	regs.flags = X86_EFLAGS_IF | X86_EFLAGS_SF | X86_EFLAGS_PF | 0x2;
+ 
+-/* FIXME: spook: not sure that this needs to be done a second time */
+-#ifdef CONFIG_X86_32	
+ 	regs.fs = __KERNEL_PERCPU;
+-#else
+-        regs.di = __PER_CPU_SEG;
+-#endif
++
+ 	regs.cs = __KERNEL_CS | get_kernel_rpl();
+ 	/* Ok, create the new process.. */
+ 	return do_fork(flags | SIGCHLD | CLONE_UNTRACED, 0, &regs, 0, NULL, NULL);
+ }
+-#endif
++#else /* CONFIG_X86_32 */
++/*
++ * Create a user thread?
++ * This is for the entry in entry_64.S
++ */
++extern void user_thread(void);
++#endif /* CONFIG_X86_64 */
++#endif /* CONFIG_PMS */
+ 
+ /*
+  * C1E aware idle routine. We check for C1E active in the interrupt

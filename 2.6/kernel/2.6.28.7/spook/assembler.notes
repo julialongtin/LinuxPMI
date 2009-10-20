@@ -2,3 +2,36 @@ http://www.amd.com/us-en/assets/content_type/white_papers_and_tech_docs/24593.pd
 Page 305
 Table 11-1 Deriving FSAVE Tag Field from FXSAVE Tag Field
 
+arch/x86/kernel/entry_64.S:168
+C code is not supposed to know about undefined top of stack. Every time 
+ a C function with an pt_regs argument is called from the SYSCALL based 
+ fast path FIXUP_TOP_OF_STACK is needed.
+ RESTORE_TOP_OF_STACK syncs the syscall state after any possible ptregs
+ manipulation.
+
+ * Some macro usage:
+ * - CFI macros are used to generate dwarf2 unwind information for better
+ * backtraces. They don't change any code.
+ * - SAVE_ALL/RESTORE_ALL - Save/restore all registers
+ * - SAVE_ARGS/RESTORE_ARGS - Save/restore registers that C functions modify.
+ * There are unfortunately lots of special cases where some registers
+ * not touched. The macro is a big mess that should be cleaned up.
+ * - SAVE_REST/RESTORE_REST - Handle the registers not saved by SAVE_ARGS.
+ * Gives a full stack frame.
+ * - ENTRY/END Define functions in the symbol table.
+ * - FIXUP_TOP_OF_STACK/RESTORE_TOP_OF_STACK - Fix up the hardware stack
+ * frame that is otherwise undefined after a SYSCALL
+ * - TRACE_IRQ_* - Trace hard interrupt state for lock debugging.
+ * - errorentry/paranoidentry/zeroentry - Define exception entry points.
+
+/* how to get the thread information struct from ASM */
+#define GET_THREAD_INFO(reg) \
+	movq %gs:pda_kernelstack,reg ; \
+	subq $(THREAD_SIZE-PDA_STACKOFFSET),reg
+
+swapgs
+http://docs.google.com/gview?a=v&q=cache:9gObmS_9qgMJ:www.kernel.org/doc/ols/2006/ols2006v2-pages-181-192.pdf+swapgs+instruction+x86&hl=pl&gl=pl&sig=AFQjCNH1zKxsN57WgJCCBZknul6IFDsblA
+http://www.x86-64.org/pipermail/discuss/2000-October/001027.html
+
+
+

@@ -1,0 +1,5 @@
+this patch undoes patch 009, fixes the user_thread definition for x86_64.
+patch 010 will break this patch.
+
+FIXME: merge this with patch 009 and remove 010 from the series 
+
