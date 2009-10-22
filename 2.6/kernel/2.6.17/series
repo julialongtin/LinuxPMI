@@ -204,6 +204,8 @@ linuxpmi/clean/051-include_asm_i386_om_h-create.patch
 # architecture specific structures used during migration.
 linuxpmi/clean/052-include_asm_i386_om_protocol_h-create-broken-final.patch
 
+linuxpmi/clean/053-include_asm_i386_uaccess_h-create-final.patch
+
 
 # remainder of first git tree
 linuxpmi/openmosix-git.patch
