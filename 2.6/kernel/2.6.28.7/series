@@ -9,7 +9,7 @@ linuxpmi/bronze/001-arch_x86_include_asm_tmig32_h-create-broken-final.patch
 
 # ARCH_X86_64, tmig_syscall, tmig_task
 # inline functions and macros included by tmig.h, used by system call handling routines, and task migration routines.
-linuxpmi/silver/002-arch_x86_include_asm_tmig64_h-create-broken-final.patch
+linuxpmi/silver/002-arch_x86_include_asm_tmig64_h-create-final.patch
 
 # ARCH_X86_64, ARCH_X86_32, tmig_syscall, tmig_task
 # includes one of the above headers depending on archetecture, X86_32 or X86_64.
