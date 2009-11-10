@@ -2091,29 +2091,47 @@ hunk	class		file patched				description								noteworthy references
 								thread being transfered. In it, we declare members for holding the
 								cpu features a thread is using, the debug registers, the two stack
 								pointers, and an array for storing the task's descriptor tables.
-53	i386		linux/include/asm-i386/uaccess.h	this header handles simple reads and writes to/from userspace. we
-	remote-memory						modify it so that we use openmosix's deputy_put and deputy_get
-								functions. the first hunk just includes our header. the second hunk
-								modifies get_user calls so that deputy_get_user is called if
-			cleanup line endings, make code blend	openmosix_memory_away(). the third hunk modifies the first of the 
-			in better				put_user definitions so that deputy_put_user is called if 
-								openmosix_memory_away(). both the second and third hunks use the trick
-								of just putting an if{}else in front of the current switch statement.
-								the fourth hunk just modifies the second put_user definition so that
-								we just return the result of deputy_put_user if openmosix_memory_away.
-								the fifth hunk defines deputy_put_user64_helper, which is a wrapper for	
-								calling deputy_put_user64 from the following assembly. we then add
-								logic to this definition of __put_user_size to call deputy_put_user or
-								deputy_put_user64_helper in cases where we want to copy 8 bytes. we use	
-								the if{}else switch method discussed earlier. the next patch modifies
-								the second declaration of __put_user_size, with the same if{}else trick	
-								only with an if following. the seventh modifies __get_user_size. the	
-			#ifdef CONFIG_OPENMOSIX elsewhere?	eighth patch adds code surrounded in #ifdef CONFIG_OPENMOSIX. it returns
-			CONFIG_OPENMOSIX policy?		the result of deputy_copy_to_user. the ninth adds a 
-								deputy_copy_from_user call surrounded by #ifdef CONFIG_OPENMOSIX. 
-			reorg this code.			the last hunk is surrounded bt #ifdef CONFIG_OPENMOSIX, and re-defines	
-								strlen_user to check openmosix_memory_away, and call deputy_strlen_user
-								when necessary.
+053	ARCH_X86_32	linux/include/asm-i386/uaccess.h	This file contains modifications to the header which handles simple
+	TMIG_REMOTEMEM	FIXME: makes permanent changes		reads and writes to/from userspace, on behalf of the kernel. We modify
+			regardless of CONFIG_OPENMOSIX in MOST	it to use our deputy_put and deputy_get functions to retreive memory
+			places.	   				from the home node on behalf of a guest process. First, we add a
+								#include statement including our hpc/uaccess.h. Next, we modify 
+								get_user() so that it returns the result of deputy_get_user() if
+			FIXME: cleanup __ret_pu?		hpc/uaccess.h's openmosix_memory_away() returns true. Our third change
+			           				is to modify the first of the two put_user() definitions so that we
+								return the result of deputy_put_user() if openmosix_memory_away(). Both
+								our second and third changes use the trick of just putting an if{}else
+			FIXME: cleanup this trick?		block in front of the currently existing switch statement. Our fourth
+			       	       	    			change modifies the second definition of put_user() so that it returns
+								the result of deputy_put_user() if openmosix_memory_away(). The fifth
+								change we make is to define deputy_put_user64_helper(), which is a
+								macro for calling deputy_put_user64() with some special assembly
+								wrappers. These wrappers push the data to be put, and the address to
+								place it on top of the stack, call deputy_put_64, save its return value,
+								and restore the top of the stack. this macro is used in the following
+								modification to __put_user_size(). In the first definition of
+								__put_user_size(), we add code to return the result of deputy_put_user()
+								in cases where openmosix_memory_away(), and we want to write 4 bytes or
+								less, and code to call deputy_put_user64_helper() in cases where 
+			FIXME: size greater than 8?		openmosix_memory_away() returns true, and we want to write 8 bytes. We
+			FIXME: cleanup this trick?		use the same if{}else switch method as our second and third changes
+			       	       	    			earlier. In the next change, we modify the second declaration of
+			FIXME: cleanup this trick?		__put_user_size, using a similar if{}else method as we did earlier,
+			       	       	    			only preceeding an if statement, instead of a switch. We modify this
+								declaration of __put_user_size such that it also calls deputy_put_user()
+								when openmosix_memory_away() and asking for 4 or less bytes, and calls
+			FIXME: size greater than 8?		deputy_put_user64_helper() when asking for 8 bytes. Our seventh change
+			       	    	    	 		modifies __get_user_size so that it returns the value returned by
+								deputy_get_user() when openmosix_memory_away() returns true. The eigth
+								change is made to __copy_to_user_atomic, and adds code surrounded in
+			FIXME: possible inatomic access when 	#ifdef CONFIG_OPENMOSIX. the added code returns the result of
+			atomic requested?			deputy_copy_to_user() when openmosix_memory_away(). Our ninth
+								modification is to __copy_from_user_inatomic(), and changes it to return
+								the result of deputy_copy_from_user() when openmosix_memory_away().
+								the code added is surrounded by an #ifdef CONFIG_OPENMOSIX. The last
+								change is made to strlen_user. we surround it with #ifdef
+								CONFIG_OPENMOSIX, and change strlen_user such that it returns the result
+								of deputy_strlen_user() when openmosix_memory_away.
 54	ppc		creates include/asm-ppc/om.h		this file contains architecture specific code for returning a single
 								passed in argument in a syscall, or finding the number of arguments
 								passed to a syscall, the maximum number of arguments passable to a
