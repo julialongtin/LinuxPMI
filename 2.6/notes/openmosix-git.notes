@@ -2105,7 +2105,7 @@ hunk	class		file patched				description								noteworthy references
 			       	       	    			change modifies the second definition of put_user() so that it returns
 								the result of deputy_put_user() if openmosix_memory_away(). The fifth
 								change we make is to define deputy_put_user64_helper(), which is a
-								macro for calling deputy_put_user64() with some special assembly
+								macro for calling deputy_put_user64() with some special assembly         http://www.ibiblio.org/gferg/ldp/GCC-Inline-Assembly-HOWTO.html
 								wrappers. These wrappers push the data to be put, and the address to
 								place it on top of the stack, call deputy_put_64, save its return value,
 								and restore the top of the stack. this macro is used in the following
