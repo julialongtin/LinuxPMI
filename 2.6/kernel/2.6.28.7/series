@@ -24,6 +24,8 @@ linuxpmi/bronze/004-arch_x86_include_asm_pms_protocol_32_h-create.patch
 # ARCH_X86_32, TMIG_LDT_STUB
 linuxpmi/bronze/005-arch_x86_include_asm_pms_protocol_32_h-ldt_support.patch
 
+# ARCH_X86_64
+linuxpmi/clean/005-arch_x86_include_asm_pms_protocol_32_h-create.patch
 
 # monolythic patch from g_remlin
 g_remlin/linux-2.6.28.7-pms-200903062029.pat
