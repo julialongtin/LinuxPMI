@@ -4,6 +4,8 @@ BUSYBOXVERSION=1.15.2
 GITROOT=/array/linuxpmi/linuxPMI
 OURPWD=${GITROOT}/2.6/tools/initrd_builder
 
+TYPE=$1
+
 ARCH=${ARCH:-i386}
 
 if [ "$ARCH" = "i486" ]; then
@@ -39,7 +41,7 @@ setupinitrd() {
 	echo "*** Making directories in our new /"
 	mkdir -p bin etc sbin lib${LIBDIRSUFFIX} proc \
 	sys tmp usr/bin var/lock var/log dev \
-	usr/sbin
+	usr/sbin var/lib var/run
 	cp -a /sbin/ldconfig sbin/
 	cp -a /bin/bash /bin/which bin/
 	cp -a /usr/bin/mktemp usr/bin/
@@ -49,6 +51,10 @@ setupinitrd() {
 finishinitrd() {
 	echo "*** Copying etc files"
 	cp -a files/etc/* mountpoint/etc/
+	if [ ${TYPE} = "server" ]; then
+		echo "*** Doing server specific things"
+		mv mountpoint/etc/rc-server mountpoint/etc/rc
+	fi;
 	echo "*** Copying device files"
 	cp -a files/dev/* mountpoint/dev/
 	cp -a /dev/console /dev/kmem /dev/mem /dev/null /dev/ram0 \
