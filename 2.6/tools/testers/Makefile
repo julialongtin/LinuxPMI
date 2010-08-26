@@ -1,9 +1,18 @@
+TARGETS=forker harness
 
-all: forker harness
+CC=gcc
+CFLAGS=-Wall
+
+
+
+all: $(TARGETS)
 
 forker: forker.c
-	gcc forker.c -o forker
+	$(CC) $(CFLAGS) forker.c -o forker
 
 harness: harness.c
-	gcc harness.c -o harness
+	$(CC) $(CFLAGS) harness.c -o harness
 
+
+clean: 
+	rm -f $(TARGETS)
