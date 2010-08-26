@@ -9,6 +9,7 @@ copyright 2010 Ashley 'spook' Wiren
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* waiting for the child */
@@ -19,6 +20,16 @@ void
 message (char *msg)
 {
   printf("harness %d: %s\n", (int) getpid (), msg);
+}
+
+/* check if we're running on a pmi enabled kernel */
+int
+pmikernel (void)
+{
+  char filename[30];
+  struct stat *discard;
+  sprintf(filename,"/proc/%d/pms/where", (int) getpid());
+  return stat(filename,discard);
 }
 
 /* read process location */
@@ -81,6 +92,12 @@ main (int argc, char **argv)
 
   printf("harness %d: signalling forker PID %d\n", (int) getpid (),child_id);
   kill (child_id, SIGUSR1);
+
+  if (pmikernel() != 0)
+  {
+    message("not a pmi kernel, exiting");
+    exit;
+  }
 
   return 0;
 }
