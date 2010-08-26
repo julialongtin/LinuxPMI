@@ -50,6 +50,20 @@ Next, we define the structure 'pmsp_mig_fp', which is a structure used by hpc/ar
 
 We next define 'pmsp_mig_arch_task', which is the structure for holding the integer, stack, mmu, and debug flag state of a process. Its used once in include/hpc/protocol.h's 'pmsp_mig_task' structure. We first declare 'features' to hold the cpu features of the boot cpu. Next we declare 'debugreg' to store the eight debug registers. Following that we declare 'fs' and 'gs' to store the two stack pointers, and finally declare 'tls_array' to store the tls entries this task requires.
 
+== patch 005 - arch/x86/include/asm/pms-protocol_64.h ==
+
+=== Summary ===
+This header contains the structures used to store the CPU state of a task, be it floating point, integer, or machine state. a notable omission is the register states. It is included by arch/x86/include/asm/pms-protocol.h
+
+=== Details ===
+^<<fixme13>>^First we include asm/i387.h, define the 'MIG_ARCH_I386_LDT' flag^<<fixme11>>^, which is a flag used only once, by hpc/arch-i386.c's 'arch_mig_receive_specific' to check if a remote node is trying to send an 'LDT' as a component during a migration, and if it is, fail.
+
+Next, we define the structure 'pmsp_mig_fp', which is a structure used by hpc/arch-i386.c's 'arch_mig_receive_fp' and 'arch_mig_send_fp' to store the floating point state of a process during migration. In it, we define 'has_fxsr' as a flag indicating whether we used FXSR to save floating point contents, and 'xstate' as a thread_xstate union for holding the floating point contents.
+
+'pmsp_mig_arch'^<<fixme12>>^ is the structure we define to hold ''archetecture-specific'' parts of a process that we migrate. As there are no archetecture specific process components on x86 other than the 'LDT' (which does not yet have migration support), this structure only contains a required 'type' variable.
+
+We next define 'pmsp_mig_arch_task', which is the structure for holding the integer, stack, mmu, and debug flag state of a process. Its used once in include/hpc/protocol.h's 'pmsp_mig_task' structure. We first declare 'features' to hold the cpu features of the boot cpu. Next we declare 'debugreg' to store the eight debug registers. Following that we declare 'fs' and 'gs' to store the two stack pointers, and finally declare 'tls_array' to store the tls entries this task requires.
+
 == Notes and Comments ==
 [[fixme1]]
 ^[fixme1]^extra whitespace here.
