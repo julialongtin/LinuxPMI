@@ -21,10 +21,10 @@
 
 #include "tester.h"    /* our own constants */
 
-/* waiting for the child */
-volatile sig_atomic_t waiting = 1;
-/* binary name */
-char *binary = "harness";
+
+volatile sig_atomic_t waiting = 1; /* wait for the child */
+char *binary = "harness"; /* binary name */
+char *remoteip = "192.168.168.12"; /* default remote ip */
 
 /* forker signalling us when it's started */
 void
@@ -34,6 +34,10 @@ child_started (int signum)
   waiting = 0;
 }
 
+/*
+ * harness <remoteip>
+ * default ip = 192.168.168.12
+ */
 int
 main (int argc, char **argv)
 {
@@ -42,39 +46,77 @@ main (int argc, char **argv)
   char msg[20]; /* for complex messages */
   
   message(binary, "started");
-
+  if (argc != 2)
+  {
+    message(binary, "using the default remote ip of 192.168.168.12");
+  } else
+  {
+    /* 
+	 * Baaaaad, we should check the ip is valid and is responding
+	 * purely for the sanity of people who use these tools to test -spook 
+	 */
+    remoteip = argv[1];
+	sprintf(msg, "using the provided remote ip of %s", remoteip);
+	message(binary, msg);
+  }
+	
   child_id = fork ();
   if (child_id == 0) /* if we are the child process */
   {
     char *const childargv[1]; /* single null pointer, as per man page */
     execv("forker",childargv); /* replace ourselves with forker */
+	/* this if never closes as the exec call replaces the process image */
   }
 
-  message(binary, "child started");
-
-  message(binary, "waiting");
-  while (waiting); /* waiting for forker to signal us */
-  message(binary, "finished waiting");
-
-  sprintf(msg, "SIGUSR1 forker PID %d", child_id);
-  message(binary, msg);
+  /* forker has started, wait for it to signal us */
+  message(binary, "forker started");
+  message(binary, "waiting for signal");
+  while (waiting); 
+  
+  /* forker is alive, tell it to fork */
+  message(binary, "SIGUSR1 <-- forker parent @ home");
+  message(binary, "forker is alive");
+  message(binary, "SIGUSR1 --> forker parent @ home");
   kill (child_id, SIGUSR1);
 
+  /* wait for forker to fork and reply */
+  message(binary, "waiting for forker to fork");
   waiting = 1;
-  message(binary, "waiting for forker");
   while(waiting);
-  message(binary, "finished waiting for forker");
+  message(binary, "SIGUSR1 <-- forker parent @ home");
+  message(binary, "forker has forked, continuing...");
   
+  /* check if we can migrate */
   if (pmikernel() != 0)
   {
     message(binary, "not a pmi kernel, exiting and terminating forkers");
-	kill (child_id, SIGUSR2);
+	message(binary, "SIGUSR2 --> forker parent @ home");
+	kill (child_id, SIGUSR2); /* trigger exit_handler in forker */
     return 1;
   }
   
   /* begin migration tests */
   message(binary, "migrating the parent forker");
-
+  migrate(child_id, remoteip);
+  
+  /*
+   * we should probably wait for the process to migrate before continuing
+   * however I think this might not be the best way of doing so -spook 
+   *
+   * where() will return 'migrating' while it is in the process is migrating
+   * and the remote ip when it is finished.
+   */
+  message(binary, "waiting for migration to complete");
+  while (where (child_id) != remoteip);
+  message(binary, "migration is complete, continuing with tests");
+  
+  /* signal forker to let it know migration has finished */
+  message(binary, "signalling forker");
+  kill (child_id, SIGUSR1);
+  message(binary, "waiting for reply");
+  waiting = 1;
+  while (waiting);
+  
   return 0;
 }
 
