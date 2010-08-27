@@ -13,11 +13,11 @@
  */
 
 /* location of where proc file inside of /proc/$PID/ */
-char *whereloc = "pms/where";
+char *const whereloc = "pms/where";
 /* max length of /proc/$PID/whereloc */
-int pathlength = 30;
+#define PATHLENGTH 30
 /* max length of text contained in /proc/$PID/whereloc */
-int wherelength = 20;
+#define WHERELENGTH 20
 
 /* tedious number of messages */
 void
@@ -30,7 +30,7 @@ message (char* binary, char *msg)
 int
 pmikernel (void)
 {
-  char filename[pathlength];
+  char filename[PATHLENGTH];
   int returnvalue;
   struct stat *discard = malloc(sizeof(stat));
   sprintf(filename,"/proc/%d/%s", (int) getpid(), whereloc);
@@ -47,11 +47,11 @@ where (pid_t pid)
   FILE *fd;  /* this code block is horrible -spook */
   char *buffer;
   int length;
-  buffer = malloc(sizeof(char)*wherelength+2); /* \0 and \n */
-  char filename[pathlength];
+  buffer = malloc(sizeof(char)*WHERELENGTH+2); /* \0 and \n */
+  char filename[PATHLENGTH];
   sprintf(filename,"/proc/%d/%s", (int) pid, whereloc);
   fd = fopen(filename,"r");
-  length = (int) fread(buffer, sizeof(char), wherelength, fd);
+  length = (int) fread(buffer, sizeof(char), WHERELENGTH, fd);
   fclose(fd);
   return buffer;
 }
@@ -61,9 +61,9 @@ void
 migrate (pid_t pid, char *location)
 {
   FILE *fd;  /* this code block is also horrible -spook */
-  char filename[pathlength];
+  char filename[PATHLENGTH];
   sprintf(filename,"/proc/%d/%s", (int) pid, whereloc);
   fd = fopen(filename,"w");
-  fwrite(location,sizeof(char),wherelength,fd);
+  fwrite(location,sizeof(char),WHERELENGTH,fd);
   fclose(fd);
 }

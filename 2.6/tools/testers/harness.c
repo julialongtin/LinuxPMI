@@ -30,14 +30,14 @@ char *binary = "harness";
 void
 child_started (int signum)
 {
-  message(binary, "I was signalled");
+  message(binary, "I got a SIGUSR1");
   waiting = 0;
 }
 
 int
 main (int argc, char **argv)
 {
-  pid_t child_id;
+  pid_t child_id; /* for the first forker */
   signal(SIGUSR1, child_started);
   char msg[20]; /* for complex messages */
   
@@ -46,8 +46,8 @@ main (int argc, char **argv)
   child_id = fork ();
   if (child_id == 0) /* if we are the child process */
   {
-    char *const childargv[1];
-    execv("forker",childargv);
+    char *const childargv[1]; /* single null pointer, as per man page */
+    execv("forker",childargv); /* replace ourselves with forker */
   }
 
   message(binary, "child started");
@@ -56,15 +56,24 @@ main (int argc, char **argv)
   while (waiting); /* waiting for forker to signal us */
   message(binary, "finished waiting");
 
-  sprintf(msg, "signalling forker PID %d", child_id);
+  sprintf(msg, "SIGUSR1 forker PID %d", child_id);
   message(binary, msg);
   kill (child_id, SIGUSR1);
 
+  waiting = 1;
+  message(binary, "waiting for forker");
+  while(waiting);
+  message(binary, "finished waiting for forker");
+  
   if (pmikernel() != 0)
   {
-    message(binary, "not a pmi kernel, exiting");
+    message(binary, "not a pmi kernel, exiting and terminating forkers");
+	kill (child_id, SIGUSR2);
     return 1;
   }
+  
+  /* begin migration tests */
+  message(binary, "migrating the parent forker");
 
   return 0;
 }
