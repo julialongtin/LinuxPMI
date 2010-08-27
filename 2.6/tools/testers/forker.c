@@ -49,12 +49,15 @@ int
 main (int argc, char **argv)
 {
   signal(SIGUSR1, signal_handler);  /* register the signal handler */
-  signal(SIGUSR2, exit_handler); /* for terminating */
+  signal(SIGUSR2, exit_handler);    /* for terminating */
 
+  /* Test 1 +++ */
   message (binary, "started");
   message (binary, "SIGUSR1 --> harness");
   kill(getppid (), SIGUSR1);
-
+  /* Test 1 --- */
+  
+  /* Test 2 +++ */
   message (binary, "waiting.");
   while (waiting); /* loop while waiting for signals */
   message (binary, "SIGUSR1 <-- harness");
@@ -63,6 +66,9 @@ main (int argc, char **argv)
   child_id = fork ();
   if (child_id == 0) /* if we are the child */
   {
+    /*
+	 *  *** Child forker ***
+	 */
     binary = "forker child"; /* we're now called the child */
     /* we just got forked, say hello to parent */
     message(binary, "hello, i'm alive");
@@ -71,10 +77,15 @@ main (int argc, char **argv)
 
 	/* wait for next section of testing */
 	message(binary, "waiting for instruction from parent forker");
+	/* is this next call needed? FIXME -spook */
 	signal(SIGUSR1, signal_handler); /* prepare to be signalled */
 	waiting = 1;
 	while (waiting);
+    /* Test 2 --- */
 	
+	/* Test 3 +++--- */
+	
+	/* Test 4 +++ */
 	/* the parent has been migrated, reply */
 	message(binary, "got signal from remote parent forker, replying");
 	message(binary, "SIGUSR1 --> forker parent @ remote");
@@ -84,11 +95,27 @@ main (int argc, char **argv)
 	message(binary, "waiting for instruction from parent forker");
 	waiting = 1;
 	while (waiting);
+	/* Test 4 --- */
+	
+	/* Test 5 +++ */
+	/* we were migrated, reply to our parent */
+	message(binary, "SIGUSR1 <-- forker parent @ remote");
+	message(binary, "we were migrated, saying hello to our parent");
+	message(binary, "SIGUSR1 --> forker parent @ remote");
+	kill(getppid (), SIGUSR1);
+	message(binary, "waiting for next test");
+	waiting = 1;
+	while (waiting);
+	/* Test 5 --- */
 	
 	message(binary, "end of tests, terminating");
 	return 0;
   } else /* parent forker */
   {
+    /*
+	 *  *** Parent forker ***
+	 */
+	/* Test 2 ... */
     /* child is started, wait for it to signal us */
     message(binary, "started my child, waiting for signal");
 	signal(SIGUSR1, signal_handler);
@@ -106,12 +133,16 @@ main (int argc, char **argv)
 	signal(SIGUSR1, signal_handler);
 	waiting = 1;
 	while (waiting);
+	/* Test 2 --- */
 	
+	/* Test 3 +++ */
 	/* 
 	 * if we arent running on a pmi kernel, harness wants to terminate us at 
 	 * this point.
 	 */
+	/* Test 3 --- */
 
+	/* Test 4 +++ */
 	/* we have been migrated */
 	message(binary, "SIGUSR1 <-- harness");
 	message(binary, "we have migrated, continuing...");
@@ -130,8 +161,45 @@ main (int argc, char **argv)
 	message(binary, "waiting for next instruction");
 	waiting = 1;
 	while (waiting);
+	message(binary, "SIGUSR1 <-- harness");
+	/* Test 4 --- */
+	
+	/* Test 5 +++ */
+	/* harness wishes us to migrate our child */
+    message(binary, "begin migrating our child");
+	migrate(child_id, where(getpid())); /* migrate child to our node, FIXME */
+  
+    /*
+	 * FIXME
+     * we should probably wait for the process to migrate before continuing
+     * however I think this might not be the best way of doing so -spook 
+     *
+     * where() will return 'migrating' while it is in the process is migrating
+     * and the remote ip when it is finished.
+     */
+    message(binary, "waiting for migration to complete");
+    while (where (child_id) != where(getpid())); /* FIXME -spook */
+    message(binary, "migration is complete, continuing with tests");
+
+    /* tell child it is migrated and wait for reply */
+	message(binary, "SIGUSR1 --> forker child @ remote");
+	kill (child_id, SIGUSR1);
+	message(binary, "waiting for reply");
+	waiting = 1;
+	while (waiting);
+	
+	/* child replied, tell harness and wait for next test */
+	message(binary, "SIGUSR1 <-- forker child @ remote");
+	message(binary, "child replied, tell harness");
+	message(binary, "SIGUSR1 --> harness");
+	kill (getppid(), SIGUSR1);
+	message(binary, "waiting for next test");
+	waiting = 1;
+	while (waiting);
+	/* Test 5 --- */
 	
 	message(binary, "end of tests, terminating");
+	kill(child_id, SIGTERM);
 	return 0;
   }
 

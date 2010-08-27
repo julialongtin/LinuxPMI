@@ -52,6 +52,7 @@ main (int argc, char **argv)
   } else
   {
     /* 
+	 * FIXME
 	 * Baaaaad, we should check the ip is valid and is responding
 	 * purely for the sanity of people who use these tools to test -spook 
 	 */
@@ -59,7 +60,10 @@ main (int argc, char **argv)
 	sprintf(msg, "using the provided remote ip of %s", remoteip);
 	message(binary, msg);
   }
-	
+  
+  /* Test 1, forking and signalling locally */
+  message(binary, "Test 1 start +++++++++++++++++++++++++++++++++++++++");
+  
   child_id = fork ();
   if (child_id == 0) /* if we are the child process */
   {
@@ -73,9 +77,15 @@ main (int argc, char **argv)
   message(binary, "waiting for signal");
   while (waiting); 
   
-  /* forker is alive, tell it to fork */
+  /* forker is alive */
   message(binary, "SIGUSR1 <-- forker parent @ home");
   message(binary, "forker is alive");
+  
+  message(binary, "Test 1 end ---------------------------------------");
+  /* Test 2, forker forks and signals child */
+  message(binary, "Test 2 start +++++++++++++++++++++++++++++++++++++++");
+  
+  /* tell it to fork */
   message(binary, "SIGUSR1 --> forker parent @ home");
   kill (child_id, SIGUSR1);
 
@@ -86,20 +96,30 @@ main (int argc, char **argv)
   message(binary, "SIGUSR1 <-- forker parent @ home");
   message(binary, "forker has forked, continuing...");
   
+  message(binary, "Test 2 end ---------------------------------------");
+  /* Test 3, test for pmi enabled kernel */
+  message(binary, "Test 3 start +++++++++++++++++++++++++++++++++++++++");
+  
   /* check if we can migrate */
   if (pmikernel() != 0)
   {
     message(binary, "not a pmi kernel, exiting and terminating forkers");
+	message(binary, "Test 3 failed ---+++---+++---+++---+++---+++---+++---");
 	message(binary, "SIGUSR2 --> forker parent @ home");
 	kill (child_id, SIGUSR2); /* trigger exit_handler in forker */
     return 1;
   }
+  
+  message(binary, "Test 3 end ---------------------------------------");
+  /* Test 4, migrate parent forker and signal */
+  message(binary, "Test 4 start +++++++++++++++++++++++++++++++++++++++");
   
   /* begin migration tests */
   message(binary, "migrating the parent forker");
   migrate(child_id, remoteip);
   
   /*
+   * FIXME
    * we should probably wait for the process to migrate before continuing
    * however I think this might not be the best way of doing so -spook 
    *
@@ -116,7 +136,29 @@ main (int argc, char **argv)
   message(binary, "waiting for reply");
   waiting = 1;
   while (waiting);
+  message(binary, "SIGUSR1 <-- forker parent @ remote");
   
+  message(binary, "Test 4 end ---------------------------------------");
+  /* Test 5, migrate child forker and signal */
+  message(binary, "Test 5 start +++++++++++++++++++++++++++++++++++++++");
+  
+  /* remote forker was able to signal, migrate the other forker */
+  message(binary, "asking forker to migrate its child");
+  message(binary, "SIGUSR1 --> forker parent @ remote");
+  kill (child_id, SIGUSR1);
+  message(binary, "wait for reply");
+  waiting = 1;
+  while (waiting);
+  
+  /* remote forker parent replied, test successful */
+  message(binary, "SIGUSR1 <-- forker parent @ remote");
+  message(binary, "both forkers are remote and working");
+  
+  message(binary, "Test 5 end ---------------------------------------");
+  
+  message(binary, "end of tests, terminating all processes");
+  message(binary, "SIGUSR2 --> forker parent");
+  kill (child_id, SIGUSR2);
   return 0;
 }
 
