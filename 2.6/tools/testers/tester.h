@@ -18,6 +18,8 @@ char *const whereloc = "pms/where";
 #define PATHLENGTH 30
 /* max length of text contained in /proc/$PID/whereloc */
 #define WHERELENGTH 20
+/* global where, FIXME could be done better -spook */
+char buffer[WHERELENGTH];
 
 /* tedious number of messages */
 void
@@ -45,9 +47,7 @@ char *
 where (pid_t pid)
 {
   FILE *fd;  /* this code block is horrible -spook */
-  char *buffer;
   int length;
-  buffer = malloc(sizeof(char)*WHERELENGTH+2); /* \0 and \n */
   char filename[PATHLENGTH];
   sprintf(filename,"/proc/%d/%s", (int) pid, whereloc);
   fd = fopen(filename,"r");

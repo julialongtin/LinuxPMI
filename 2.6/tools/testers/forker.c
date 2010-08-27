@@ -63,6 +63,8 @@ main (int argc, char **argv)
   while (waiting); /* loop while waiting for signals */
   message (binary, "SIGUSR1 <-- harness");
   
+  waiting = 1; /* needs to be set here because of parallelism -spook */
+  
   message (binary, "forking...");
   child_id = fork ();
   if (child_id == 0) /* if we are the child */
@@ -80,7 +82,6 @@ main (int argc, char **argv)
 	message(binary, "waiting for instruction from parent forker");
 	/* is this next call needed? FIXME -spook */
 	signal(SIGUSR1, signal_handler); /* prepare to be signalled */
-	waiting = 1;
 	while (waiting);
     /* Test 2 --- */
 	
@@ -141,8 +142,6 @@ main (int argc, char **argv)
 	/* Test 2 ... */
     /* child is started, wait for it to signal us */
     message(binary, "started my child, waiting for signal");
-	signal(SIGUSR1, signal_handler);
-	waiting = 1;
 	while (waiting);
 	
 	/* child is alive, tell the harness to continue */
