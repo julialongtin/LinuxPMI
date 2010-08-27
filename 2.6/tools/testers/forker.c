@@ -18,6 +18,7 @@
 #include <sys/types.h> /* kill getpid stat */
 #include <sys/stat.h>  /* stat */
 #include <unistd.h>    /* stat fork getpid */
+#include <string.h>    /* strcmp */
 
 #include "tester.h"    /* our own constants */
 
@@ -108,6 +109,28 @@ main (int argc, char **argv)
 	while (waiting);
 	/* Test 5 --- */
 	
+	/* Test 6 +++ */
+	/* parent signalled us, reply to it */
+	message(binary, "SIGUSR1 <-- forker parent @ home");
+	message(binary, "parent was migrated, reply to the signal it sent us");
+	message(binary, "SIGUSR1 --> forker parent @ home");
+	kill(getppid (), SIGUSR1);
+	message(binary, "waiting for next test");
+	waiting = 1;
+	while (waiting);
+	/* Test 6 --- */
+	
+	/* Test 7 +++ */
+	/* we were migrated home, let parent know we are alive */
+	message(binary, "SIGUSR1 <-- forker parent @ home");
+	message(binary, "we were migrated home and seem to be alive");
+	message(binary, "SIGUSR1 --> forker parent @ home");
+	kill(getppid (), SIGUSR1);
+	message(binary, "waiting");
+	waiting = 1;
+	while (waiting);
+	/* Test 7 --- */
+	
 	message(binary, "end of tests, terminating");
 	return 0;
   } else /* parent forker */
@@ -161,12 +184,13 @@ main (int argc, char **argv)
 	message(binary, "waiting for next instruction");
 	waiting = 1;
 	while (waiting);
-	message(binary, "SIGUSR1 <-- harness");
 	/* Test 4 --- */
 	
 	/* Test 5 +++ */
 	/* harness wishes us to migrate our child */
+	message(binary, "SIGUSR1 <-- harness");
     message(binary, "begin migrating our child");
+    message(binary, "migration: forker child @ home -> remoteip started");
 	migrate(child_id, where(getpid())); /* migrate child to our node, FIXME */
   
     /*
@@ -178,7 +202,8 @@ main (int argc, char **argv)
      * and the remote ip when it is finished.
      */
     message(binary, "waiting for migration to complete");
-    while (where (child_id) != where(getpid())); /* FIXME -spook */
+    while (strcmp (where(child_id), where(getpid())) != 0 ); /* FIXME -spook */
+	message(binary, "migration: forker child @ home -> remoteip finished");
     message(binary, "migration is complete, continuing with tests");
 
     /* tell child it is migrated and wait for reply */
@@ -197,6 +222,63 @@ main (int argc, char **argv)
 	waiting = 1;
 	while (waiting);
 	/* Test 5 --- */
+	
+	/* Test 6 +++ */
+	/* we have been migrated home */
+	message(binary, "SIGUSR1 <-- harness");
+	message(binary, "we are now at home, signal child");
+	message(binary, "SIGUSR1 --> forker child @ remote");
+	kill (child_id, SIGUSR1);
+	message(binary, "waiting for reply");
+	waiting = 1;
+	while (waiting);
+	
+	/* child replied */
+	message(binary, "SIGUSR1 <-- forker child @ remote");
+	message(binary, "child replied, signalling harness");
+	message(binary, "SIGUSR1 --> harness");
+	kill (getppid(), SIGUSR1);
+	message(binary, "waiting for next test");
+	waiting = 1;
+	while (waiting);
+	/* Test 6 --- */
+	
+	/* Test 7 +++ */
+	/* migrate forker child to home */
+	/* harness wishes us to migrate our child */
+	message(binary, "SIGUSR1 <-- harness");
+    message(binary, "begin migrating our child");
+	message(binary, "migration: forker child @ remoteip -> home started");
+	migrate(child_id, "home"); /* migrate child to home */
+  
+    /*
+	 * FIXME
+     * we should probably wait for the process to migrate before continuing
+     * however I think this might not be the best way of doing so -spook 
+     *
+     * where() will return 'migrating' while it is in the process is migrating
+     * and 'home' when it is finished.
+     */
+    message(binary, "waiting for migration to complete");
+    while (strcmp (where(child_id), "home") != 0); /* FIXME -spook */
+    message(binary, "migration: forker child @ remoteip -> home finished");
+    message(binary, "migration is complete, continuing with tests");
+
+    /* tell child it is migrated and wait for reply */
+	message(binary, "SIGUSR1 --> forker child @ home");
+	kill (child_id, SIGUSR1);
+	message(binary, "waiting for reply");
+	waiting = 1;
+	while (waiting);
+	
+	/* child replied, tell harness */
+	message(binary, "SIGUSR1 <-- forker child @ home");
+	message(binary, "SIGUSR1 --> harness");
+	kill (getppid(), SIGUSR1);
+    message(binary, "waiting...");
+	waiting = 1;
+	while (waiting);
+	/* Test 7 --- */
 	
 	message(binary, "end of tests, terminating");
 	kill(child_id, SIGTERM);

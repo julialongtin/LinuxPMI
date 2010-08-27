@@ -18,6 +18,7 @@
 #include <sys/types.h> /* kill stat getpid */
 #include <sys/stat.h>  /* stat */
 #include <unistd.h>    /* execv stat fork getpid */
+#include <string.h>    /* strcmp */
 
 #include "tester.h"    /* our own constants */
 
@@ -116,6 +117,7 @@ main (int argc, char **argv)
   
   /* begin migration tests */
   message(binary, "migrating the parent forker");
+  message(binary, "migration: forker parent @ home -> remoteip started");
   migrate(child_id, remoteip);
   
   /*
@@ -127,8 +129,9 @@ main (int argc, char **argv)
    * and the remote ip when it is finished.
    */
   message(binary, "waiting for migration to complete");
-  while (where (child_id) != remoteip);
-  message(binary, "migration is complete, continuing with tests");
+  while (strcmp (where(child_id), remoteip) != 0);
+  message(binary, "migration: forker parent @ home -> remoteip finished");
+  message(binary, "migration is complete, continuing with test");
   
   /* signal forker to let it know migration has finished */
   message(binary, "signalling forker");
@@ -155,6 +158,54 @@ main (int argc, char **argv)
   message(binary, "both forkers are remote and working");
   
   message(binary, "Test 5 end ---------------------------------------");
+  /* Test 6, migrate parent forker to home */
+  message(binary, "Test 6 start +++++++++++++++++++++++++++++++++++++++");
+  
+  /* migrate parent forker to home */
+  message(binary, "migrating forker parent to home node");
+  message(binary, "migration: forker parent @ remoteip -> home started");
+  migrate(child_id, "home");
+
+  /*
+   * FIXME
+   * we should probably wait for the process to migrate before continuing
+   * however I think this might not be the best way of doing so -spook 
+   *
+   * where() will return 'migrating' while it is in the process is migrating
+   * and 'home' when it is finished.
+   */  
+  message(binary, "waiting for migration to complete");
+  while (strcmp (where(child_id), "home") != 0);
+  message(binary, "migration: forker parent @ remoteip -> home finished");
+  message(binary, "migration is complete, continuing with test");
+  
+  /* migration done, signal forker parent then wait */
+  message(binary, "SIGUSR1 --> forker parent @ home");
+  kill (child_id, SIGUSR1);
+  message(binary, "wait for reply");
+  waiting = 1;
+  while (waiting);
+  
+  /* forker parent replied, test is complete */
+  message(binary, "SIGUSR1 <-- forker parent @ home");
+  message(binary, "forker parent is home and signals working");
+  
+  message(binary, "Test 6 end ---------------------------------------");
+  /* Test 7, migrate child forker to home */
+  message(binary, "Test 7 start +++++++++++++++++++++++++++++++++++++++");
+  
+  /* signal forker parent, so that it migrates forker child home */
+  message(binary, "SIGUSR1 --> forker parent @ home");
+  kill (child_id, SIGUSR1);
+  message(binary, "wait for reply");
+  waiting = 1;
+  while (waiting);
+  
+  /* got a reply from forker parent, test succeeded */
+  message(binary, "SIGUSR1 <-- forker parent @ home");
+  message(binary, "both forkers are home and working");
+  
+  message(binary, "Test 7 end ---------------------------------------");
   
   message(binary, "end of tests, terminating all processes");
   message(binary, "SIGUSR2 --> forker parent");
