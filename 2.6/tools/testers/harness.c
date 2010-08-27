@@ -1,71 +1,36 @@
-/* 
-GNU GPL license stuff
+/*
+ *	Copyright (C) 2010 Ashley 'spook' Wiren <ash@spooksoftware.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published
+ * by the Free Software Foundation; version 2 only.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ */
 
-copyright 2010 Ashley 'spook' Wiren
-*/
+#include <signal.h>    /* signal kill */
+#include <stdio.h>     /* fopen fclose fread fwrite printf sprintf */
+#include <stdlib.h>    /* malloc free */
+#include <sys/types.h> /* kill stat getpid */
+#include <sys/stat.h>  /* stat */
+#include <unistd.h>    /* execv stat fork getpid */
 
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include "tester.h"    /* our own constants */
 
 /* waiting for the child */
 volatile sig_atomic_t waiting = 1;
-
-/* tedious number of messages */
-void
-message (char *msg)
-{
-  printf("harness %d: %s\n", (int) getpid (), msg);
-}
-
-/* check if we're running on a pmi enabled kernel */
-int
-pmikernel (void)
-{
-  char filename[30];
-  struct stat *discard;
-  sprintf(filename,"/proc/%d/pms/where", (int) getpid());
-  return stat(filename,discard);
-}
-
-/* read process location */
-/* returns the current location */
-char *
-where (pid_t pid)
-{
-  FILE *fd;  /* this code block is horrible -spook */
-  char *buffer;
-  int length;
-  buffer = malloc(sizeof(char)*80);
-  char filename[30];
-  sprintf(filename,"/proc/%d/pms/where", (int) pid);
-  fd = fopen(filename,"r");
-  length = (int) fread(buffer, sizeof(char), 78, fd);
-  fclose(fd);
-  return buffer;
-}
-
-/* migrates a process */
-void
-migrate (pid_t pid, char *location)
-{
-  FILE *fd;  /* this code block is also horrible -spook */
-  char filename[30];
-  sprintf(filename,"/proc/%d/pms/where", (int) pid);
-  fd = fopen(filename,"w");
-  fwrite(location,sizeof(char),15,fd);
-  fclose(fd);
-}
+/* binary name */
+char *binary = "harness";
 
 /* forker signalling us when it's started */
 void
 child_started (int signum)
 {
-  message("I was signalled");
+  message(binary, "I was signalled");
   waiting = 0;
 }
 
@@ -74,29 +39,31 @@ main (int argc, char **argv)
 {
   pid_t child_id;
   signal(SIGUSR1, child_started);
-
-  message("started");
+  char msg[20]; /* for complex messages */
+  
+  message(binary, "started");
 
   child_id = fork ();
-  if (child_id == 0) // if we are the child process
+  if (child_id == 0) /* if we are the child process */
   {
     char *const childargv[1];
     execv("forker",childargv);
   }
 
-  message("child started");
+  message(binary, "child started");
 
-  message("waiting");
-  while (waiting); // waiting for forker to signal us
-  message("finished waiting");
+  message(binary, "waiting");
+  while (waiting); /* waiting for forker to signal us */
+  message(binary, "finished waiting");
 
-  printf("harness %d: signalling forker PID %d\n", (int) getpid (),child_id);
+  sprintf(msg, "signalling forker PID %d", child_id);
+  message(binary, msg);
   kill (child_id, SIGUSR1);
 
   if (pmikernel() != 0)
   {
-    message("not a pmi kernel, exiting");
-    exit;
+    message(binary, "not a pmi kernel, exiting");
+    return 1;
   }
 
   return 0;
